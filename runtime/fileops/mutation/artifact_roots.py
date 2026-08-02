@@ -38,7 +38,7 @@ from mote.contracts.file.transactions import HunkRecord, ReviewStatus, validate_
 from mote.contracts.file.views import ReadCursorKind, TextViewMode
 from mote.runtime.fileops.edit_plans import AbsentEditPlanSource, EditPlanStore, ExistingEditPlanSource
 from mote.runtime.fileops.journal import DurableFileOperationsJournal
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository
+from mote.runtime.fileops.mutation.artifacts import FileMutationArtifactRepository
 
 _READ_MANIFEST_FORMAT = 1
 _READ_MANIFEST_MAXIMUM = 64 * 1_024
@@ -109,12 +109,12 @@ class ArtifactReachabilityProjector:
     def __init__(
         self,
         *,
-        repository: ArtifactRepository,
+        repository: FileMutationArtifactRepository,
         edit_plans: EditPlanStore,
         journal: DurableFileOperationsJournal,
     ) -> None:
-        if type(repository) is not ArtifactRepository:
-            raise TypeError("artifact reachability requires an ArtifactRepository")
+        if type(repository) is not FileMutationArtifactRepository:
+            raise TypeError("artifact reachability requires a FileMutationArtifactRepository")
         self.repository = repository
         self.edit_plans = edit_plans
         self.journal = journal

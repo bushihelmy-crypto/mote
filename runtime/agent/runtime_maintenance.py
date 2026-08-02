@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Protocol
 
-from mote.runtime.code_map.indexer import RepoIndexer
+from mote.contracts.ports.code_intelligence.code_map import CodeMapIndexer
 from mote.runtime.code_map.scan_gate import CodeMapScanGate
 from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.session.workspace import SessionWorkspace, WorkspaceCleanupGate, run_cleanup_if_due_async
@@ -16,11 +16,12 @@ from mote.runtime.tools.tool_executor import ToolExecutor
 
 
 class ArtifactCollector(Protocol):
-    async def collect(self) -> object: ...
+    def collect(self) -> int: ...
 
 
 class ArtifactRepositoryBundleView(Protocol):
-    collector: ArtifactCollector
+    @property
+    def collector(self) -> ArtifactCollector: ...
 
 
 class ReloadableSkillService(Protocol):
@@ -32,7 +33,7 @@ class RuntimeMaintenance:
         self,
         role,
         *,
-        get_repo_index: Callable[[], RepoIndexer | None],
+        get_repo_index: Callable[[], CodeMapIndexer | None],
         get_workspace_store: Callable[[], SessionWorkspace],
         get_artifact_repository_bundle: Callable[[], ArtifactRepositoryBundleView],
         peek_skill_manager: Callable[[], ReloadableSkillService | None],
@@ -51,7 +52,7 @@ class RuntimeMaintenance:
         self._owned_code_map_scan_gate: CodeMapScanGate | None = None
         self._owned_workspace_cleanup_gate: WorkspaceCleanupGate | None = None
         self._repo_scan_task: asyncio.Task | None = None
-        self._repo_scan_indexer: RepoIndexer | None = None
+        self._repo_scan_indexer: CodeMapIndexer | None = None
         self._repo_scan_key: str | None = None
         self._workspace_cleanup_task: asyncio.Task | None = None
         self._workspace_cleanup_key: str | None = None
@@ -177,19 +178,30 @@ class RuntimeMaintenance:
         )
 
     def kickoff_artifact_gc(self) -> None:
+        if self._workspace_cleanup_task is not None and not self._workspace_cleanup_task.done():
+            return
         if self._artifact_gc_task is None or self._artifact_gc_task.done():
+            store = self._get_workspace_store()
+            cleanup_key = str(store.root.resolve())
+            if not self._workspace_coordination().try_acquire(cleanup_key):
+                return
+            self._workspace_cleanup_key = cleanup_key
             collector = self._get_artifact_repository_bundle().collector
             self._artifact_gc_task = asyncio.create_task(
-                self._run_artifact_gc(collector),
+                self._run_artifact_gc(collector, cleanup_key),
                 name="mote-artifact-gc",
             )
 
-    @staticmethod
-    async def _run_artifact_gc(collector) -> None:
+    async def _run_artifact_gc(self, collector, cleanup_key: str) -> None:
         try:
+            self._workspace_coordination().assert_current(cleanup_key)
             await run_disk_io(collector.collect)
         except Exception as exc:
             logger.warning(f"RuntimeMaintenance: Artifact GC failed: {exc}")
+        finally:
+            self._workspace_coordination().release(cleanup_key)
+            if self._workspace_cleanup_key == cleanup_key:
+                self._workspace_cleanup_key = None
 
     async def _run_workspace_cleanup(self, store: SessionWorkspace, config) -> None:
         try:
@@ -200,7 +212,10 @@ class RuntimeMaintenance:
                 artifact_ttl_days=config.artifact_ttl_days,
                 exclude_session_id=self._role.state.session_id,
                 legal_hold_session_ids=config.legal_hold_session_ids,
+                mutation_guard=lambda: self._workspace_coordination().assert_current(str(store.root.resolve())),
             )
+            self._workspace_coordination().assert_current(str(store.root.resolve()))
+            await run_disk_io(self._get_artifact_repository_bundle().collector.collect)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -238,7 +253,10 @@ class RuntimeMaintenance:
             self._workspace_cleanup_key = None
 
     def config_source_roots(self) -> list[str]:
-        return [str(path) for path in self._role.wiring.dependencies.watched_config_files]
+        projection = self._role.wiring.dependencies.component_projection
+        if projection is None:
+            raise RuntimeError("Agent composition requires a Product component projection")
+        return projection.watched_config_paths()
 
     async def reload_skills_on_change(self, hook_input) -> None:
         manager = self._peek_skill_manager()

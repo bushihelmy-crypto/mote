@@ -9,12 +9,13 @@ from mote.contracts.inference.events import SessionEventType
 from mote.contracts.inference.executions import BoundExecutionRequest, SessionApplicationMessage
 from mote.contracts.inference.identity import InferencePrincipal, TrustedSchedulingClass
 from mote.contracts.inference.transport import ProviderWireResult
-from mote.contracts.inference.wire_permit import WirePermit
+from mote.contracts.inference.wire_permit import ExecutionTaxonomy, WirePermit
 from mote.product.inference.backends.sqlite import (
     SQLiteAttemptReceiptStore,
     SQLiteSessionReceiptStore,
     SQLiteUsageLedger,
 )
+from mote.runtime.clock import SystemClock
 from mote.runtime.inference.governance import CredentialHealthAuthority, ProviderQuotaAuthority
 from mote.runtime.inference.session_runtime import EmbeddedSessionRuntime
 
@@ -139,7 +140,7 @@ def _permit(wire_id, wire_unit, ordinal):
     now = datetime.now(timezone.utc)
     return WirePermit(
         attempt_id=wire_id,
-        execution_taxonomy="long_lived_session",
+        execution_taxonomy=ExecutionTaxonomy.LONG_LIVED_SESSION,
         owner_journal_id="session-journal",
         wire_unit=wire_unit,
         generation_id="generation",
@@ -162,7 +163,7 @@ def test_session_runtime_authorizes_open_and_each_application_message(tmp_path):
     async def scenario():
         authority = SQLiteAttemptReceiptStore(tmp_path / "gateway.sqlite3")
         await authority.initialize()
-        ledger = SQLiteUsageLedger(authority)
+        ledger = SQLiteUsageLedger(authority, clock_source=SystemClock())
         await ledger.configure_budget("tenant", "project", 100)
         transport = _Transport()
         generations = _Generations()
@@ -219,7 +220,7 @@ def test_session_runtime_drain_rejects_new_sessions_and_waits_for_terminal(tmp_p
     async def scenario():
         authority = SQLiteAttemptReceiptStore(tmp_path / "gateway.sqlite3")
         await authority.initialize()
-        ledger = SQLiteUsageLedger(authority)
+        ledger = SQLiteUsageLedger(authority, clock_source=SystemClock())
         await ledger.configure_budget("tenant", "project", 100)
         transport = _Transport()
         runtime = EmbeddedSessionRuntime(

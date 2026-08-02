@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for Runtime message-repair recovery handlers."""
+
 from __future__ import annotations
 
 import base64
@@ -8,11 +9,11 @@ import io
 
 import pytest
 
-from mote.runtime.errors import (
+from mote.contracts.foundation.errors.codes import RecoveryAction
+from mote.contracts.model.provider_errors import (
     LLMImageTooLargeError,
     LLMInvalidRequestStateError,
     LLMMultimodalToolContentError,
-    RecoveryAction,
 )
 from mote.runtime.models.clients.transformers import (
     _IMAGE_TARGET_BYTES,

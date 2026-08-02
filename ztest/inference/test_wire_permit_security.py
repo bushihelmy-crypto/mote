@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from mote.contracts.inference.wire_permit import WirePermit
+from mote.contracts.inference.wire_permit import ExecutionTaxonomy, WirePermit
 from mote.product.inference.security.wire_permit import (
     Ed25519WirePermitSigner,
     Ed25519WirePermitVerifier,
@@ -15,7 +15,7 @@ def _permit():
     now = datetime.now(timezone.utc)
     return WirePermit(
         attempt_id="attempt",
-        execution_taxonomy="unary_finite_attempt",
+        execution_taxonomy=ExecutionTaxonomy.UNARY_FINITE_ATTEMPT,
         owner_journal_id="journal",
         wire_unit="generate",
         generation_id="generation",

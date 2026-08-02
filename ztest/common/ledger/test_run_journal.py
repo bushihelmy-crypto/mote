@@ -8,6 +8,7 @@ think ``seq`` that stays stable across a journal rebuild (and never collides wit
 an already-committed round), reap-on-durable, legacy ``EffectRecord`` line
 folding in (fail-closed EXTERNAL), the torn-line skip, and per-session isolation.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,9 +21,9 @@ from mote.runtime.ledger import (
     KIND_THINK,
     KIND_TOOL,
     STARTED,
+    LedgerCorruptionError,
     RunJournal,
     StepRecord,
-    UnsupportedRunJournalRecord,
 )
 from mote.runtime.ledger.run_journal import JOURNAL_FILE_NAME
 from mote.runtime.session.workspace import SessionSpace, SessionWorkspace
@@ -121,13 +122,45 @@ class TestDurability:
         path = store.space("sess-a", SessionSpace.LEDGER) / JOURNAL_FILE_NAME
         path.parent.mkdir(parents=True, exist_ok=True)
         good = StepRecord(step_id="a", kind=KIND_TOOL, effect="external", status=STARTED).to_json()
-        path.write_text(good + "\n" + "{garbled" + "\n", encoding="utf-8")
+        path.write_text(good + "\n" + "{garbled", encoding="utf-8")
         journal = RunJournal("sess-a", store=store)
         assert journal.replay("a") is not None
         assert len(journal.records()) == 1
 
+    def test_committed_garbled_line_fails_closed(self, store):
+        path = store.space("sess-a", SessionSpace.LEDGER) / JOURNAL_FILE_NAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        good = StepRecord(step_id="a", kind=KIND_TOOL, effect="external", status=STARTED).to_json()
+        path.write_text(good + "\n" + "{garbled\n", encoding="utf-8")
+        with pytest.raises(LedgerCorruptionError, match="line=2"):
+            RunJournal("sess-a", store=store)
+
 
 class TestStrictSchema:
+    @pytest.mark.parametrize("field,value", [("started_at", float("nan")), ("ended_at", float("inf"))])
+    def test_non_finite_committed_time_fails_closed(self, store, field, value):
+        path = store.space("sess-a", SessionSpace.LEDGER) / JOURNAL_FILE_NAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "step_id": "tc",
+            "kind": KIND_TOOL,
+            "effect": "external",
+            "status": STARTED,
+            "seq": 0,
+            "name": "",
+            "tool_call_id": None,
+            "started_at": 0.0,
+            "ended_at": None,
+            "payload": None,
+            "success": True,
+            "invocation_identity": None,
+        }
+        payload[field] = value
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+        with pytest.raises(LedgerCorruptionError, match="finite"):
+            RunJournal("sess-a", store=store)
+
     def test_legacy_effect_record_line_is_rejected(self, store):
         path = store.space("sess-a", SessionSpace.LEDGER) / JOURNAL_FILE_NAME
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +176,7 @@ class TestStrictSchema:
             }
         )
         path.write_text(legacy + "\n", encoding="utf-8")
-        with pytest.raises(UnsupportedRunJournalRecord):
+        with pytest.raises(LedgerCorruptionError, match="unsupported_run_journal_record"):
             RunJournal("sess-a", store=store)
 
     def test_to_json_only_carries_canonical_fields(self):
@@ -161,6 +194,7 @@ class TestStrictSchema:
             "ended_at",
             "payload",
             "success",
+            "invocation_identity",
         }
 
 

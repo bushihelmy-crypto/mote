@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from mote.contracts.artifact import ArtifactContentRef
-from mote.runtime.artifacts.repository import ArtifactRepository
+from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
 from mote.runtime.fileops import FileOperations
 from mote.runtime.session.codec import iter_file_operations_events
 from mote.runtime.session.log import SessionLog
@@ -18,7 +18,7 @@ class SessionFileOpsArtifactRoots:
     def __init__(
         self,
         sessions_root: Path,
-        repository: ArtifactRepository,
+        repository: ContentAddressedArtifactStore,
         *,
         excluded_session_ids: frozenset[str] = frozenset(),
     ) -> None:

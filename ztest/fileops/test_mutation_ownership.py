@@ -14,11 +14,11 @@ from mote.runtime.fileops.publisher import AtomicPublisher
 from mote.runtime.fileops.review import ReviewService
 from mote.runtime.fileops.snapshots import SealedSnapshotReader
 from mote.runtime.fileops.transactions import DurableEditPlanArtifacts, MutationCoordinator, ScopedMutationArtifacts
-from mote.ztest.fileops_factory import ArtifactRepository
+from mote.ztest.fileops_factory import FileMutationArtifactRepository
 
 
 def _components(tmp_path):
-    repository = ArtifactRepository(
+    repository = FileMutationArtifactRepository(
         tmp_path / "artifacts",
         hard_limit_bytes=4 * 1_024 * 1_024,
     )

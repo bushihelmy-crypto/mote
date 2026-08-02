@@ -25,11 +25,15 @@ of each host's choke:
 
 from __future__ import annotations
 
+import json
 from typing import Any, List, Optional, Set, Tuple
 
+from mote.contracts.async_work.codec import decode_async_work_observation
+from mote.contracts.async_work.observation import DurableWorkflowRunObservation, LocalBackgroundTaskObservation
 from mote.product.presentation.events import (
     ACTIVITY_COMPLETED,
     ACTIVITY_STARTED,
+    ASYNC_WORK_OBSERVED,
     ATTEMPT_STREAM_COMMITTED,
     ATTEMPT_STREAM_DISCARDED,
     ATTEMPT_STREAM_INTERRUPTED,
@@ -46,6 +50,7 @@ from mote.product.presentation.events import (
     ActivityStarted,
     ApprovalRequested,
     ArtifactBlock,
+    AsyncWorkObserved,
     ConversationCompacted,
     ErrorRaised,
     FileDiffBlock,
@@ -106,6 +111,27 @@ from mote.product.presentation.state.ops import (
     UpdateUsage,
 )
 
+
+def _render_async_work_detail(observation) -> str:
+    actions = ",".join(action.value for action in observation.available_actions)
+    if isinstance(observation, LocalBackgroundTaskObservation):
+        reference = observation.reference.reference
+        return (
+            "local background task | "
+            f"agent_id={reference.owner.agent_id} "
+            f"task_id={reference.task_id} attempt_id={reference.attempt_id} | "
+            f"actions={actions or 'none'}"
+        )
+    if isinstance(observation, DurableWorkflowRunObservation):
+        reference = observation.reference.reference
+        return (
+            "durable workflow | "
+            f"run_id={reference.run_id} definition_id={reference.definition_id} "
+            f"revision={observation.revision} | actions={actions or 'none'}"
+        )
+    raise TypeError("Unknown async-work observation variant")
+
+
 # Events that DON'T break an open search/read group: the grouped tools' own
 # start/complete, and status-only events that mutate no transcript row. (A
 # non-grouping tool start IS a ``tool_call_started`` — transparent here — so the
@@ -125,6 +151,7 @@ _GROUP_TRANSPARENT = frozenset(
         ACTIVITY_STARTED,
         ACTIVITY_COMPLETED,
         TASK_PROGRESS,
+        ASYNC_WORK_OBSERVED,
     }
 )
 
@@ -141,6 +168,7 @@ _THINKING_TRANSPARENT = frozenset(
         ACTIVITY_STARTED,
         ACTIVITY_COMPLETED,
         TASK_PROGRESS,
+        ASYNC_WORK_OBSERVED,
     }
 )
 
@@ -151,7 +179,7 @@ class TranscriptReducer:
     def __init__(self) -> None:
         self._block_open = False
         self._group_open = False
-        # tool_use_ids that were folded into *a* group and are still awaiting
+        # Invocation ids that were folded into *a* group and are still awaiting
         # their completion. Retained across a flush so a grouped tool that
         # completes *after* an interrupting event still folds into its group
         # (a tool is allowed to finish after its run was broken).
@@ -283,6 +311,17 @@ class TranscriptReducer:
                     )
                 ]
             return [RenderTaskProgress(ev=ev)]
+        if isinstance(ev, AsyncWorkObserved):
+            observation = decode_async_work_observation(json.loads(ev.observation_json))
+            return [
+                RenderTaskProgress(
+                    ev=TaskProgress(
+                        stage="async-work",
+                        status=observation.phase.value,
+                        detail=_render_async_work_detail(observation),
+                    )
+                )
+            ]
         if isinstance(ev, Notice):
             return [RenderNotice(ev=ev)]
         if isinstance(ev, SystemReminder):
@@ -322,7 +361,7 @@ class TranscriptReducer:
     def _fold_tool_started(self, ev: ToolCallStarted) -> List[TranscriptOp]:
         # Orphan fix: a tool dispatched *inside* an activity (its scope's head is
         # an open activity) folds under that activity instead of orphaning as a
-        # top-level row (graph-internal calls carry ``tool_use_id=None``). The op
+        # top-level row. Every Tool call has an execution-owner identity. The op
         # is keyed by the OWNING activity's scope (the matched prefix), not the
         # child's own longer scope — that is the surface's widget key.
         scope = self._scope_of(ev)
@@ -330,14 +369,13 @@ class TranscriptReducer:
         if owning is not None:
             return [AddActivityToolCall(scope=owning, ev=ev)]
         fold = fold_mode(ev.tool_name)
-        tid = ev.tool_use_id
+        tid = str(ev.identity.invocation_id)
         if fold is FoldMode.GROUP:
             ops: List[TranscriptOp] = []
             if not self._group_open:
                 self._group_open = True
                 ops.append(OpenGroup())
-            if tid:
-                self._grouped_ids.add(tid)
+            self._grouped_ids.add(tid)
             ops.append(AddToGroup(ev=ev))
             return ops
         # A non-grouping tool (NONE/DETAIL) breaks an open run, then stands alone.
@@ -355,8 +393,8 @@ class TranscriptReducer:
         owning = self._owning_activity(scope) if scope else None
         if owning is not None:
             return [CompleteActivityToolCall(scope=owning, ev=ev)]
-        tid = ev.tool_use_id
-        if tid and tid in self._grouped_ids:
+        tid = str(ev.identity.invocation_id)
+        if tid in self._grouped_ids:
             self._grouped_ids.discard(tid)
             return [CompleteInGroup(ev=ev)]
         fold = fold_mode(ev.tool_name)

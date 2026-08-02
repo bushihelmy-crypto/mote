@@ -4,8 +4,31 @@ from types import SimpleNamespace
 
 import pytest
 
+from mote.contracts.tool import ToolEffect
 from mote.contracts.tool.catalog import ToolDispatchRequest
+from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.definitions import native_definition
 from mote.runtime.tools.snapshots import RuntimeToolSnapshotManager
+from mote.runtime.tools.tool_binding import ExecutableToolBinding
+
+
+class ReadCapability(BaseTool):
+    name = "Read"
+    effect = ToolEffect.PURE
+
+    async def call(self, *, path: str = ""):
+        """Read one path.
+
+        Args:
+            path: path to read.
+        """
+
+        return path
+
+
+def binding():
+    capability = ReadCapability()
+    return ExecutableToolBinding(native_definition(ReadCapability), capability)
 
 
 class Catalog:
@@ -20,7 +43,7 @@ class Executor:
     command_protocol = SimpleNamespace(value="native")
 
     def __init__(self):
-        self.tool = SimpleNamespace(effect="pure", definition_version="1")
+        self.tool = binding()
         self._catalog = Catalog(self.tool)
         self.calls = []
 
@@ -36,6 +59,10 @@ class Executor:
     async def run_command(self, name, arguments, *, result_id=None):
         self.calls.append((name, arguments, result_id))
         return "ok"
+
+    async def run_pinned_command(self, binding, name, arguments, *, catalog_generation, result_id=None):
+        self.calls.append((name, arguments, result_id))
+        return await binding.call(**arguments)
 
 
 def target():
@@ -69,7 +96,7 @@ async def test_replaced_capability_does_not_rebind_old_snapshot_by_name():
     executor = Executor()
     manager = RuntimeToolSnapshotManager(executor)
     snapshot = manager.materialize(target(), include_hidden=False)
-    executor._catalog.tool = SimpleNamespace(effect="pure", definition_version="2")
+    executor._catalog.tool = binding()
 
     result = await manager.dispatch(
         ToolDispatchRequest(
@@ -80,7 +107,8 @@ async def test_replaced_capability_does_not_rebind_old_snapshot_by_name():
         )
     )
 
-    assert result.conflict == "unrecoverable_binding"
+    assert result.success is True
+    assert executor.calls == [("Read", {}, None)]
 
 
 @pytest.mark.asyncio

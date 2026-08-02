@@ -1,4 +1,5 @@
 """Tool hooks adapted through typed ToolCall and ToolResult policies."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -6,6 +7,7 @@ from typing import Any
 import pytest
 
 from mote.contracts.events.tool import ToolCallFinishedEvent
+from mote.contracts.tool.errors import ToolError
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.tools.base_tool import BaseTool
@@ -13,7 +15,6 @@ from mote.runtime.tools.definitions import native_definition
 from mote.runtime.tools.permission.config import PermissionConfig
 from mote.runtime.tools.policy import build_tool_call_policy, build_tool_result_policy
 from mote.runtime.tools.tool_executor import ToolExecutor
-from mote.runtime.tools.tool_result import ToolError
 from mote.ztest.telemetry import InlineTelemetry
 
 pytestmark = pytest.mark.asyncio

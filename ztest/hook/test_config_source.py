@@ -8,11 +8,15 @@ Everything is best-effort — missing / empty / malformed → ``None``, never ra
 
 Tests inject a Product-owned source provider rooted in a temporary directory.
 """
+
 from __future__ import annotations
 
 import json
 
+import pytest
+
 from mote.product.config.adapters.hooks import load_global_hooks, merge_hook_configs
+from mote.product.extensions.sources import ExtensionKind, ExtensionSourcePolicy
 from mote.product.paths import default_runtime_paths, mote_layered_files
 from mote.runtime.config.hook import HookConfig
 
@@ -24,11 +28,16 @@ def _write(path, obj):
 
 def _provider(home, cwd):
     paths = default_runtime_paths(user_config_root=home)
-    return mote_layered_files("hooks.json", cwd, user_config_root=paths.user_config_root)
+    candidates = mote_layered_files("hooks.json", cwd, user_config_root=paths.user_config_root)
+    policy = ExtensionSourcePolicy(
+        user_root=home,
+        builtin_roots=(home.parent,),
+    )
+    return policy.admitted_files(ExtensionKind.HOOK, candidates)
 
 
 def _pretooluse(matcher, command):
-    return {"matcher": matcher, "handlers": [{"type": "command", "command": command}]}
+    return {"matcher": matcher, "handlers": [{"type": "command", "id": command, "argv": [command]}]}
 
 
 class TestLoadGlobalHooks:
@@ -36,7 +45,7 @@ class TestLoadGlobalHooks:
         home = tmp_path / "home"
         _write(
             home / "hooks.json",
-            {"hooks": {"PreToolUse": [_pretooluse("Bash", "check.sh")]}},
+            {"hooks": {"PreToolUse": [_pretooluse("Bash", "/bin/check.sh")]}},
         )
 
         cfg = load_global_hooks(_provider(home, tmp_path / "proj"))
@@ -44,13 +53,13 @@ class TestLoadGlobalHooks:
         groups = cfg.events["PreToolUse"]
         assert len(groups) == 1
         assert groups[0].matcher == "Bash"
-        assert groups[0].handlers[0].command == "check.sh"
+        assert groups[0].handlers[0].argv == ("/bin/check.sh",)
 
     def test_user_and_project_concat_layering(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
         _write(
             home / "hooks.json",
-            {"hooks": {"PreToolUse": [_pretooluse("Bash", "user.sh")]}},
+            {"hooks": {"PreToolUse": [_pretooluse("Bash", "/bin/user.sh")]}},
         )
 
         # A project .mote/hooks.json inside a git repo so the walk includes it.
@@ -58,15 +67,15 @@ class TestLoadGlobalHooks:
         (proj / ".git").mkdir(parents=True)
         _write(
             proj / ".mote" / "hooks.json",
-            {"hooks": {"PreToolUse": [_pretooluse("Read", "proj.sh")]}},
+            {"hooks": {"PreToolUse": [_pretooluse("Read", "/bin/proj.sh")]}},
         )
 
         cfg = load_global_hooks(_provider(home, proj))
         assert cfg is not None
         groups = cfg.events["PreToolUse"]
         # Concatenated across layers (user first, project appended).
-        commands = [g.handlers[0].command for g in groups]
-        assert commands == ["user.sh", "proj.sh"]
+        commands = [g.handlers[0].argv for g in groups]
+        assert commands == [("/bin/user.sh",), ("/bin/proj.sh",)]
 
     def test_empty_map_is_none(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
@@ -80,8 +89,8 @@ class TestLoadGlobalHooks:
         home = tmp_path / "home"
         home.mkdir(parents=True)
         (home / "hooks.json").write_text("{not valid json", encoding="utf-8")
-        # Malformed file is swallowed (section → {}), so nothing configured.
-        assert load_global_hooks(_provider(home, tmp_path / "proj")) is None
+        with pytest.raises(ValueError):
+            load_global_hooks(_provider(home, tmp_path / "proj"))
 
     def test_invalid_shape_is_none(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
@@ -90,31 +99,32 @@ class TestLoadGlobalHooks:
             home / "hooks.json",
             {"hooks": {"PreToolUse": [{"matcher": 123, "handlers": "nope"}]}},
         )
-        assert load_global_hooks(_provider(home, tmp_path / "proj")) is None
+        with pytest.raises(ValueError):
+            load_global_hooks(_provider(home, tmp_path / "proj"))
 
 
 class TestMergeHookConfigs:
     def test_concats_per_event(self):
-        a = HookConfig(events={"PreToolUse": [_hmg("Bash", "a.sh")]})
-        b = HookConfig(events={"PreToolUse": [_hmg("Read", "b.sh")], "Stop": [_hmg(None, "s.sh")]})
+        a = HookConfig(events={"PreToolUse": [_hmg("Bash", "/bin/a.sh")]})
+        b = HookConfig(events={"PreToolUse": [_hmg("Read", "/bin/b.sh")], "Stop": [_hmg(None, "/bin/s.sh")]})
         merged = merge_hook_configs(a, b)
         assert merged is not None
-        commands = [g.handlers[0].command for g in merged.events["PreToolUse"]]
-        assert commands == ["a.sh", "b.sh"]
-        assert merged.events["Stop"][0].handlers[0].command == "s.sh"
+        commands = [g.handlers[0].argv for g in merged.events["PreToolUse"]]
+        assert commands == [("/bin/a.sh",), ("/bin/b.sh",)]
+        assert merged.events["Stop"][0].handlers[0].argv == ("/bin/s.sh",)
 
     def test_none_and_empty_yield_none(self):
         assert merge_hook_configs(None, None) is None
         assert merge_hook_configs() is None
 
     def test_skips_none_configs(self):
-        a = HookConfig(events={"PreToolUse": [_hmg("Bash", "a.sh")]})
+        a = HookConfig(events={"PreToolUse": [_hmg("Bash", "/bin/a.sh")]})
         merged = merge_hook_configs(None, a, None)
         assert merged is not None
-        assert merged.events["PreToolUse"][0].handlers[0].command == "a.sh"
+        assert merged.events["PreToolUse"][0].handlers[0].argv == ("/bin/a.sh",)
 
 
 def _hmg(matcher, command):
     from mote.runtime.config.hook import HookCommandHandler, HookMatcherGroup
 
-    return HookMatcherGroup(matcher=matcher, handlers=[HookCommandHandler(command=command)])
+    return HookMatcherGroup(matcher=matcher, handlers=[HookCommandHandler(id=command, argv=(command,))])

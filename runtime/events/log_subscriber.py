@@ -35,6 +35,7 @@ from mote.contracts.events.session import SessionEndEvent, SessionStartEvent, Tu
 from mote.contracts.events.task import TaskProgressEvent
 from mote.contracts.events.telemetry import DiagnosticsEvent, RecoveryEvent, ResourceReportEvent
 from mote.contracts.events.tool import ToolCallFinishedEvent, ToolInvocationStartedEvent
+from mote.contracts.task.progress import ActivityProgressEvent, BackgroundTaskProgressEvent, DurableWorkflowRunProgress
 from mote.runtime.telemetry.logging import logger
 from mote.runtime.tools.text_normalization import collapse_whitespace
 
@@ -53,6 +54,17 @@ def _fmt_message_appended(e) -> str:
 def _fmt_agent_lifecycle(e) -> str:
     detail = f" {e.detail}" if e.detail else ""
     return f"event agent_lifecycle phase={e.phase} id={e.session_id[:8] or '?'}{detail}"
+
+
+def _progress_identity(event: TaskProgressEvent) -> str:
+    progress = event.progress
+    if isinstance(progress, BackgroundTaskProgressEvent):
+        return f"local_task={progress.reference.task_id} attempt={progress.reference.attempt_id}"
+    if isinstance(progress, DurableWorkflowRunProgress):
+        return f"workflow_run={progress.reference.run_id}"
+    if isinstance(progress, ActivityProgressEvent):
+        return f"activity={progress.identity.execution_id}"
+    raise TypeError("Unknown progress variant")
 
 
 # Per-event-type log rendering: maps an event class to ``(level, format_fn)``.
@@ -145,7 +157,7 @@ class LogSubscriber:
         try:
             if isinstance(event, TaskProgressEvent):
                 logger.debug(
-                    f"event task_progress task={event.task_id} stage={event.stage} "
+                    f"event task_progress {_progress_identity(event)} stage={event.stage} "
                     f"status={event.status} '{_clip(event.detail)}'"
                 )
             elif isinstance(event, AgentLifecycleEvent):

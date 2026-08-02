@@ -1,218 +1,241 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""ResidencyStore — materialize/rehydrate evicted agents to/from disk.
-
-Port of codex ``rollout materialize`` + load-on-demand. When residency evicts an
-idle agent, the control plane must persist everything not already covered by the
-session's append-only ``rollout.jsonl`` — namely the parts that are runtime-only:
-the ``msg_buffer`` (``exclude=True`` on RoleState) and the per-runtime
-``Mailbox`` — plus the role's *configuration* (``role_schema``) and the residual
-``RoleState``. A :class:`ResidencyRecord` bundles the three pieces:
-
-    {role_dump, mailbox_dump, msg_buffer_dump}
-
-**Conversation history is NOT stored here.** The rollout log
-(``session/rollout.jsonl``) is the single truth source for history; it is written
-incrementally every turn. So materialize *strips* ``state.context.messages`` from
-``role_dump`` (when a rollout exists), and rehydrate validates the rollout
-identity before refilling it via :func:`mote.runtime.session.replay`. This keeps
-the full message history from being written twice (rollout + residency record)
-without creating a weaker second recovery boundary.
-
-``MessageQueue.dump()`` is **async**, so :meth:`materialize` is async.
-``ResidencyRecord`` is a plain JSON dict on disk (not a polymorphic model
-with ``extra="forbid"``) so it stays forgiving across schema tweaks.
-"""
+"""Fenced strict durable storage for evicted Agent incarnation state."""
 
 from __future__ import annotations
 
+import fcntl
 import json
-from dataclasses import asdict, dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Iterator, Mapping, cast
 
-from mote.contracts.conversation import MessageQueue
+from mote.contracts.events.envelope import JsonValue, freeze_json, thaw_json
+from mote.contracts.ports.agent.residency import ResidentAgentFactory, ResidentAgentStatePort
+from mote.contracts.ports.runtime.lease import LeaseCoordinator, LeaseEpoch
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime
 from mote.orchestration.agents.messaging.mailbox import Mailbox
-from mote.runtime.agent.base import BaseRole
+from mote.orchestration.agents.residency.codec import decode_residency_record, encode_residency_record
+from mote.orchestration.agents.residency.model import (
+    ResidencyFence,
+    ResidencyIdentity,
+    ResidencyLifecycle,
+    ResidencyRecord,
+)
 from mote.runtime.persistence import DiskWriter, atomic_write
 from mote.runtime.session.log import SessionLog
 from mote.runtime.session.replay import replay
-from mote.runtime.telemetry.logging import logger
 
 
-@dataclass
-class ResidencyRecord:
-    """The on-disk shape of an unloaded agent.
-
-    ``role_dump`` carries the role's config + residual state with the
-    conversation history stripped out (the rollout owns history). The other two
-    fields cover runtime-only state the rollout never records.
-    """
-
-    role_dump: dict
-    mailbox_dump: list
-    msg_buffer_dump: str
-
-    def to_json(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=False)
-
-    @staticmethod
-    def from_json(data: str) -> "ResidencyRecord":
-        raw = json.loads(data)
-        return ResidencyRecord(
-            role_dump=raw.get("role_dump", {}),
-            mailbox_dump=raw.get("mailbox_dump", []),
-            msg_buffer_dump=raw.get("msg_buffer_dump", "[]"),
-        )
+class ResidencyStoreError(RuntimeError):
+    """Residency state is corrupt, conflicting, or cannot be committed safely."""
 
 
-def _default_role_loader(role_dump: dict[str, object]) -> Any:
-    # Lazy import to keep environment -> roles dependency out of module load.
-
-    return BaseRole.load(role_dump)
-
-
-def _strip_history(role_dump: dict) -> dict:
-    """Return a copy of ``role_dump`` with ``state.context.messages`` emptied.
-
-    The rollout is the truth source for history, so the residency record drops
-    the (potentially large) message list to avoid a redundant second copy. Only
-    the messages are cleared; the rest of the context/state is preserved.
-    """
-    state = role_dump.get("state")
-    if not isinstance(state, dict):
-        return role_dump
-    context = state.get("context")
-    if not isinstance(context, dict) or "messages" not in context:
-        return role_dump
-    role_dump = dict(role_dump)
-    state = dict(state)
-    context = dict(context)
-    context["messages"] = []
-    state["context"] = context
-    role_dump["state"] = state
-    return role_dump
+@dataclass(frozen=True, slots=True)
+class RehydratedResidency:
+    agent: ResidentAgentStatePort
+    mailbox: Mailbox
+    install_record_revision: int
 
 
 class ResidencyStore:
-    """Reads/writes :class:`ResidencyRecord` files keyed by ``session_id``.
-
-    ``sessions_base_dir`` locates the rollout logs that own conversation history
-    (defaults to the standard ``.agent_sessions`` workspace root); injected in
-    tests to redirect both the residency records and the rollout logs.
-    """
-
     def __init__(
         self,
-        base_dir: Optional[str] = None,
+        base_dir: str,
         *,
-        sessions_base_dir: Optional[str] = None,
+        sessions_base_dir: str,
+        lease_coordinator: LeaseCoordinator,
         writer: DiskWriter | None = None,
-    ):
-        if base_dir is None or sessions_base_dir is None:
+    ) -> None:
+        if not base_dir or not sessions_base_dir:
             raise ValueError("ResidencyStore requires explicit residency and session directories")
         self._base = Path(base_dir)
         self._sessions_base_dir = sessions_base_dir
+        self._lease_coordinator = lease_coordinator
         self._writer = writer or DiskWriter()
 
     def _path(self, session_id: str) -> Path:
         return self._base / f"{session_id}.json"
 
+    def _lock_path(self, session_id: str) -> Path:
+        return self._base / f"{session_id}.lock"
+
     def _session_log(self, session_id: str) -> SessionLog:
         return SessionLog(session_id, base_dir=self._sessions_base_dir, writer=self._writer)
 
     def has(self, session_id: str) -> bool:
-        return self._path(session_id).exists()
+        return self._path(session_id).is_file()
 
-    # ------------------------------------------------------------------
-    # Materialize (write)
-    # ------------------------------------------------------------------
-    async def materialize(self, runtime: AgentRuntime) -> ResidencyRecord:
-        """Persist *runtime* to disk and return the written record.
+    async def materialize(
+        self,
+        runtime: AgentRuntime,
+        *,
+        identity: ResidencyIdentity,
+        lease: LeaseEpoch,
+    ) -> ResidencyRecord:
+        agent = runtime.role
+        if not isinstance(agent, ResidentAgentStatePort):
+            raise TypeError("Agent does not implement the Residency state Port")
+        self._validate_agent_identity(agent, identity)
+        session_log = self._session_log(identity.logical_agent_id)
+        if not session_log.exists() or session_log.committed_version < 1:
+            raise ResidencyStoreError("Residency requires a committed canonical Session stream")
+        state = agent.export_residency_state(session_history_is_durable=True)
+        mailbox = runtime.mailbox.dump()
+        frozen_mailbox = freeze_json(mailbox, path="residency.mailbox_snapshot")
+        if not isinstance(frozen_mailbox, Mapping):
+            raise ResidencyStoreError("Agent mailbox snapshot is not a JSON object")
+        try:
+            message_buffer = json.loads(await runtime.msg_buffer.dump())
+        except json.JSONDecodeError as exc:
+            raise ResidencyStoreError("Agent message buffer snapshot is invalid") from exc
+        with self._locked(identity.logical_agent_id):
+            self._lease_coordinator.assert_current(lease.subject, lease.fencing_token)
+            previous = self._read_unlocked(identity.logical_agent_id)
+            if previous is not None:
+                if previous.identity != identity:
+                    raise ResidencyStoreError("Residency identity changed across materialization")
+                if previous.materialization_fence.fencing_token > lease.fencing_token:
+                    raise ResidencyStoreError("Residency materialization fence moved backwards")
+                if previous.lifecycle is ResidencyLifecycle.INSTALLING:
+                    raise ResidencyStoreError("Residency install claim is not settled")
+            record = ResidencyRecord(
+                identity=identity,
+                source_session_revision=session_log.committed_version,
+                record_revision=1 if previous is None else previous.record_revision + 1,
+                materialization_fence=ResidencyFence(lease.subject, lease.owner_id, lease.fencing_token),
+                state_snapshot=state,
+                mailbox_snapshot=cast(Mapping[str, JsonValue], frozen_mailbox),
+                message_buffer_snapshot=freeze_json(message_buffer, path="residency.message_buffer_snapshot"),
+            )
+            data = encode_residency_record(record)
+            path = self._path(identity.logical_agent_id)
+            await self._writer.submit(str(path), lambda: atomic_write(path, data))
+            return record
 
-        Strips conversation history from the role dump when a rollout exists for
-        the session, since the rollout already holds it as the truth source.
-        """
-        role_dump = runtime.role.dump()
-        if self._session_log(runtime.session_id).exists():
-            role_dump = _strip_history(role_dump)
-        record = ResidencyRecord(
-            role_dump=role_dump,
-            mailbox_dump=runtime.mailbox.dump(),
-            msg_buffer_dump=await runtime.msg_buffer.dump(),
-        )
-        self._base.mkdir(parents=True, exist_ok=True)
-        # Atomic + ordered: a crash mid-write never leaves a half-written record
-        # (a non-atomic write_text could corrupt it), and awaiting submit
-        # guarantees the record is on disk before this returns.
-        path = self._path(runtime.session_id)
-        data = record.to_json().encode("utf-8")
-        await self._writer.submit(str(path), lambda: atomic_write(path, data))
-        return record
-
-    # ------------------------------------------------------------------
-    # Rehydrate (read + rebuild)
-    # ------------------------------------------------------------------
-    def read_record(self, session_id: str) -> Optional[ResidencyRecord]:
-        path = self._path(session_id)
-        if not path.exists():
-            return None
-        return ResidencyRecord.from_json(path.read_text(encoding="utf-8"))
+    def read_record(self, session_id: str) -> ResidencyRecord | None:
+        with self._locked(session_id):
+            return self._read_unlocked(session_id)
 
     def rehydrate(
         self,
+        expected_identity: ResidencyIdentity,
+        *,
+        factory: ResidentAgentFactory,
+        lease: LeaseEpoch,
+    ) -> RehydratedResidency | None:
+        session_id = expected_identity.logical_agent_id
+        with self._locked(session_id):
+            self._lease_coordinator.assert_current(lease.subject, lease.fencing_token)
+            record = self._read_unlocked(session_id)
+            if record is None:
+                return None
+            if record.identity != expected_identity:
+                raise ResidencyStoreError("Residency identity does not match trusted composition")
+            if factory.definition_id != record.identity.definition_id:
+                raise ResidencyStoreError("Residency definition identity mismatch")
+            if factory.config_digest != record.identity.config_digest:
+                raise ResidencyStoreError("Residency configuration identity mismatch")
+            if lease.subject != record.materialization_fence.subject:
+                raise ResidencyStoreError("Residency lease subject mismatch")
+            if lease.fencing_token < record.materialization_fence.fencing_token:
+                raise ResidencyStoreError("Residency rehydrate fence is stale")
+            agent = factory.build(record.state_snapshot)
+            self._validate_agent_identity(agent, expected_identity)
+            replayed = replay(self._session_log(session_id))
+            if replayed.meta is None:
+                raise ResidencyStoreError("Residency Session stream has no identity fact")
+            if self._session_log(session_id).committed_version < record.source_session_revision:
+                raise ResidencyStoreError("Residency source Session revision is unavailable")
+            agent.restore_residency_history(tuple(replayed.model_context_messages), replayed.meta)
+            agent.restore_residency_message_buffer(record.message_buffer_snapshot)
+            mailbox_payload = thaw_json(cast(JsonValue, record.mailbox_snapshot))
+            mailbox = Mailbox.load(mailbox_payload, expected_owner_agent_id=session_id)
+            install_fence = ResidencyFence(lease.subject, lease.owner_id, lease.fencing_token)
+            if record.lifecycle is ResidencyLifecycle.INSTALLING:
+                if record.install_fence is None:
+                    raise ResidencyStoreError("Residency install claim is invalid")
+                if record.install_fence.subject != lease.subject:
+                    raise ResidencyStoreError("Residency install claim subject mismatch")
+                if record.install_fence.fencing_token > lease.fencing_token:
+                    raise ResidencyStoreError("Residency install claim has a newer owner")
+            claimed = replace(
+                record,
+                record_revision=record.record_revision + 1,
+                lifecycle=ResidencyLifecycle.INSTALLING,
+                install_fence=install_fence,
+            )
+            claimed_data = encode_residency_record(claimed)
+            self._writer.flush_inline()
+            atomic_write(self._path(session_id), claimed_data)
+            return RehydratedResidency(agent, mailbox, claimed.record_revision)
+
+    def forget(
+        self,
         session_id: str,
         *,
-        role_loader: Callable[[dict[str, object]], Any] | None = None,
-    ) -> Optional[AgentRuntime]:
-        """Rebuild an :class:`AgentRuntime` from disk, or ``None`` if absent.
+        expected_record_revision: int,
+        lease: LeaseEpoch,
+    ) -> bool:
+        with self._locked(session_id):
+            self._lease_coordinator.assert_current(lease.subject, lease.fencing_token)
+            record = self._read_unlocked(session_id)
+            if record is None:
+                return False
+            if record.record_revision != expected_record_revision:
+                raise ResidencyStoreError("Residency forget revision conflict")
+            if record.materialization_fence.subject != lease.subject:
+                raise ResidencyStoreError("Residency forget lease subject mismatch")
+            if record.lifecycle is not ResidencyLifecycle.INSTALLING:
+                raise ResidencyStoreError("Residency forget requires an install claim")
+            if (
+                record.install_fence is None
+                or record.install_fence.owner_id != lease.owner_id
+                or record.install_fence.fencing_token != lease.fencing_token
+            ):
+                raise ResidencyStoreError("Residency forget install owner mismatch")
+            self._path(session_id).unlink()
+            return True
 
-        ``role_loader`` reconstructs a Role from ``role_dump`` (defaults to the
-        polymorphic ``BaseRole.load``); tests inject a fake loader. Conversation
-        model context is replayed from the rollout's durable projection and
-        written back onto ``role.state.context.messages``; the runtime-only
-        ``msg_buffer`` and ``Mailbox`` come from the record.
-        """
-        record = self.read_record(session_id)
-        if record is None:
-            return None
-        loader = role_loader or _default_role_loader
-        role = loader(record.role_dump)
-        self._refill_history(role, session_id)
-        # The msg_buffer is excluded from RoleState serialization, so restore it
-        # explicitly from the record (else unload = silent message loss).
-        role.state.msg_buffer = MessageQueue.load(record.msg_buffer_dump)
-        mailbox = Mailbox.load(record.mailbox_dump)
-        return AgentRuntime(role, mailbox)
-
-    def _refill_history(self, role: Any, session_id: str) -> None:
-        """Replay the rollout and install its model-context projection.
-
-        No-op when the rollout has no messages (nothing to restore) or the role
-        is duck-typed without a ``state.context.messages`` list — in which case
-        whatever the loader produced is left untouched.
-        """
-        # replay scans via iter_raw, whose drain flushes queued rollout writes first.
-        replayed = replay(self._session_log(session_id))
-        if isinstance(role, BaseRole):
-            role.validate_resume_identity(replayed.meta or {})
-        if not replayed.model_context_messages:
-            return
-        state_owner: Any = role
+    def _read_unlocked(self, session_id: str) -> ResidencyRecord | None:
         try:
-            state_owner.state.context.messages[:] = replayed.model_context_messages
-        except AttributeError:
-            logger.debug(f"ResidencyStore: role for {session_id} has no context.messages; skip refill")
+            data = self._path(session_id).read_bytes()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise ResidencyStoreError("Residency record cannot be read") from exc
+        try:
+            return decode_residency_record(data, expected_agent_id=session_id)
+        except (TypeError, ValueError) as exc:
+            raise ResidencyStoreError("Residency record is invalid") from exc
 
-    def forget(self, session_id: str) -> None:
-        """Delete a materialized record (e.g. after a successful rehydrate)."""
-        path = self._path(session_id)
-        if path.exists():
+    @staticmethod
+    def _validate_agent_identity(agent: ResidentAgentStatePort, identity: ResidencyIdentity) -> None:
+        if agent.session_id != identity.logical_agent_id:
+            raise ResidencyStoreError("Resident Agent logical identity mismatch")
+        if agent.residency_definition_id != identity.definition_id:
+            raise ResidencyStoreError("Resident Agent definition identity mismatch")
+        if agent.residency_config_digest != identity.config_digest:
+            raise ResidencyStoreError("Resident Agent configuration identity mismatch")
+
+    @contextmanager
+    def _locked(self, session_id: str) -> Iterator[None]:
+        lock_path = self._lock_path(session_id)
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = lock_path.open("a+b")
+        except OSError as exc:
+            raise ResidencyStoreError("Residency lock cannot be opened") from exc
+        with lock_file:
             try:
-                path.unlink()
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except ResidencyStoreError:
+                raise
             except OSError as exc:
-                logger.warning(f"ResidencyStore: failed to forget {session_id}: {exc}")
+                raise ResidencyStoreError("Residency lock operation failed") from exc
 
 
-__all__ = ["ResidencyRecord", "ResidencyStore"]
+__all__ = ["RehydratedResidency", "ResidencyStore", "ResidencyStoreError"]

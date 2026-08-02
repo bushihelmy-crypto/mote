@@ -11,8 +11,8 @@ from mote.contracts.runtime import RuntimeAccessMode, RuntimeRef, RuntimeState
 from mote.contracts.surface import CanvasDocument, CanvasElement, CanvasExportRepresentation, CanvasOperation
 from mote.product.toolsets.builtin.canvas import Canvas
 from mote.runtime.artifacts import DurableArtifactStore, ReliableArtifactPublisher
-from mote.runtime.interactive import RuntimeHost
 from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
+from mote.runtime.interactive.host import RuntimeHost
 from mote.runtime.tools.tool_result import ToolError
 from mote.ztest.fileops_factory import FileOperations
 

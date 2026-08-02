@@ -14,6 +14,7 @@ a notebook kernel), and the model drives it by issuing actions:
 - ``back`` — navigate back in history.
 - ``tabs`` / ``new_tab`` / ``switch_tab`` / ``close_tab`` — manage tabs.
 - ``close`` — shut the browser down.
+- ``save_profile`` — explicitly persist the current login after authorization.
 
 The open tabs, navigated URLs, and logged-in session (cookies / localStorage)
 persist across calls, so you build up browsing state step by step.
@@ -28,13 +29,16 @@ from __future__ import annotations
 from typing import Any, ClassVar, Optional
 
 from mote.contracts.authorization import PermissionDecision
+from mote.contracts.browser import BrowserProfileSnapshot
 from mote.contracts.model.capabilities import supports_vision
 from mote.contracts.runtime import RuntimeAccessMode
 from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
+from mote.contracts.tool.errors import ToolError, ToolNotConfiguredError
+from mote.contracts.tool.result import json_tool_payload
 from mote.product.toolsets.builtin.runtime_action import handoff_permission, is_handoff_action, run_handoff_action
 from mote.runtime.artifacts.media import publish_media_artifact
-from mote.runtime.errors import ToolError, ToolNotConfiguredError
 from mote.runtime.interactive.browser.driver import BrowserRuntimeDriver
+from mote.runtime.interactive.browser.profile import decode_storage_state
 from mote.runtime.interactive.browser.session import BrowserSession
 from mote.runtime.media.video import looks_like_video_path
 from mote.runtime.secrets.refs import SecretRefError, expand_secret_refs
@@ -46,6 +50,7 @@ from mote.runtime.tools.capability_types import (
     GetBrowserClientCerts,
     GetBrowserLocale,
     GetBrowserProfile,
+    GetBrowserProfileTarget,
     GetBrowserProxy,
     GetBrowserStealth,
     GetCwd,
@@ -148,6 +153,7 @@ class WebBrowser(BaseTool):
         "get_browser_profile",
         "load_browser_profile",
         "save_browser_profile",
+        "get_browser_profile_target",
         "get_browser_client_certs",
         "get_secret",
         "describe_image",
@@ -192,7 +198,8 @@ class WebBrowser(BaseTool):
     # tests) stays fully ephemeral.
     get_browser_profile: GetBrowserProfile = staticmethod(lambda: "")
     load_browser_profile: LoadBrowserProfile = staticmethod(lambda _name: None)
-    save_browser_profile: SaveBrowserProfile = staticmethod(lambda _name, _state: None)
+    save_browser_profile: SaveBrowserProfile = staticmethod(lambda _name, _state, _revision: None)
+    get_browser_profile_target: GetBrowserProfileTarget = staticmethod(lambda _name: "")
     # Client TLS certs (mutual-TLS logins): Playwright ``client_certificates``
     # entries; each ``passphrase`` may be a secret placeholder expanded at
     # launch. The managed Browser Runtime itself always remains private and
@@ -238,7 +245,8 @@ class WebBrowser(BaseTool):
         # A durable encrypted profile overrides storage from a same-session
         # logical checkpoint, which RuntimeHost supplies directly to the driver.
         profile = self.get_browser_profile()
-        storage_state = self.load_browser_profile(profile) if profile else None
+        profile_snapshot = self.load_browser_profile(profile) if profile else None
+        storage_state = profile_snapshot.storage_state.to_payload() if profile_snapshot else None
         driver = BrowserRuntimeDriver(
             session_key=self.session_id,
             cwd=cwd or None,
@@ -249,6 +257,7 @@ class WebBrowser(BaseTool):
             client_certs=client_certs,
             storage_state=storage_state,
             persist_storage_state=not bool(profile),
+            profile_snapshot=profile_snapshot,
         )
         await host.ensure(driver)
 
@@ -311,7 +320,7 @@ class WebBrowser(BaseTool):
             action: One of snapshot | navigate | click | type | read | read_image |
                 screenshot | eval | wait | detect_forms | fill_form | extract |
                 back | tabs | new_tab | switch_tab | close_tab |
-                handoff | close.
+                handoff | save_profile | close.
             url: Target URL for ``navigate`` / ``new_tab``.
             selector: Element for ``click`` / ``type`` / ``wait`` / ``read_image``
                 — an index from the latest ``snapshot`` (``"5"``/``"[5]"``) or a
@@ -367,25 +376,27 @@ class WebBrowser(BaseTool):
                 driver = access.driver
                 if not isinstance(driver, BrowserRuntimeDriver):
                     raise RuntimeError("browser runtime has an unexpected driver")
-                result = await self._dispatch(
-                    driver.session,
-                    action,
-                    url,
-                    selector,
-                    text,
-                    expression,
-                    index,
-                    clear,
-                    fields,
-                    schema,
-                    submit,
-                    prompt,
-                    extract_links,
-                    extract_images,
-                    interactive_only,
-                )
+                if action == "save_profile":
+                    result = await self._persist_profile(driver)
+                else:
+                    result = await self._dispatch(
+                        driver.session,
+                        action,
+                        url,
+                        selector,
+                        text,
+                        expression,
+                        index,
+                        clear,
+                        fields,
+                        schema,
+                        submit,
+                        prompt,
+                        extract_links,
+                        extract_images,
+                        interactive_only,
+                    )
                 driver.surface_changed()
-                await self._persist_profile(driver.session)
                 access.commit()
         except ToolError:
             raise
@@ -398,6 +409,15 @@ class WebBrowser(BaseTool):
         if is_handoff_action(args):
             return handoff_permission()
         return None
+
+    def mutates_filesystem_for(self, args: dict) -> bool:
+        return args.get("action") == "save_profile"
+
+    def permission_targets(self, args: dict) -> list[str]:
+        if args.get("action") != "save_profile":
+            return []
+        profile = self.get_browser_profile()
+        return [self.get_browser_profile_target(profile)] if profile else []
 
     async def _dispatch(
         self,
@@ -483,7 +503,7 @@ class WebBrowser(BaseTool):
             return ToolResult(
                 output="[screenshot of the active tab; shown below]",
                 media=[ToolMedia(kind="image", mime="image/png", artifact=artifact)],
-                data={"type": "screenshot", "bytes": len(png)},
+                payload=json_tool_payload({"type": "screenshot", "bytes": len(png)}),
             )
         if action == "eval":
             if not expression:
@@ -539,17 +559,28 @@ class WebBrowser(BaseTool):
             out.append(resolved)
         return out
 
-    async def _persist_profile(self, session: BrowserSession) -> None:
-        """Persist login state independently from rollout checkpoint policy."""
+    async def _persist_profile(self, driver: BrowserRuntimeDriver) -> str:
+        """Explicitly commit login state after permission/effect authorization."""
         profile = self.get_browser_profile()
         if not profile:
-            return
-        try:
-            state = await session.capture_state()
-        except Exception:
-            return
+            raise ToolError("No browser profile is configured")
+        state = await driver.session.capture_state()
         if state is not None:
-            self.save_browser_profile(profile, state[2])
+            storage_state = decode_storage_state(state[2])
+            receipt = self.save_browser_profile(
+                profile,
+                storage_state,
+                driver.profile_snapshot.revision if driver.profile_snapshot else None,
+            )
+            driver.profile_snapshot = BrowserProfileSnapshot(
+                receipt.subject_id,
+                profile.strip(),
+                receipt.revision,
+                receipt.content_digest,
+                storage_state,
+            )
+            return f"[browser profile saved at revision {receipt.revision}]"
+        raise ToolError("Browser did not produce storage state")
 
     async def cleanup_session(self, session_id: str) -> None:
         """Tear down this Role's browser (idempotent)."""

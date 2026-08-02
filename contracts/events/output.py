@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, List
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, ClassVar, cast
 
 from mote.contracts.events._base import DurableFact as _DurableFact
-
-if TYPE_CHECKING:
-    pass
+from mote.contracts.events.envelope import JsonValue, freeze_json
 
 OUTPUT_CANDIDATE_RECEIVED = "output_candidate_received"
 
@@ -31,7 +30,19 @@ OUTPUT_SNAPSHOT = "output_snapshot"
 OUTPUT_SNAPSHOT_INVALIDATED = "output_snapshot_invalidated"
 
 
-@dataclass
+def _freeze_records(value: object, *, field_name: str) -> tuple[Mapping[str, JsonValue], ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise TypeError(f"{field_name} must be a sequence of JSON objects")
+    records: list[Mapping[str, JsonValue]] = []
+    for index, item in enumerate(value):
+        frozen = freeze_json(item, path=f"{field_name}[{index}]")
+        if not isinstance(frozen, Mapping):
+            raise TypeError(f"{field_name}[{index}] must be a JSON object")
+        records.append(cast(Mapping[str, JsonValue], frozen))
+    return tuple(records)
+
+
+@dataclass(frozen=True)
 class OutputCandidateReceivedEvent(_DurableFact):
     """A terminal output candidate entered the run-scoped output engine."""
 
@@ -39,50 +50,79 @@ class OutputCandidateReceivedEvent(_DurableFact):
     contract_id: str = ""
     schema_fingerprint: str = ""
     representation: str = ""
-    raw: Any = None
+    raw: JsonValue = None
     run_id: str = ""
     run_kind: str = "agent"
 
     name: ClassVar[str] = OUTPUT_CANDIDATE_RECEIVED
     type: ClassVar[str] = OUTPUT_CANDIDATE_RECEIVED
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "raw", freeze_json(self.raw, path="output candidate raw"))
 
-@dataclass
+
+@dataclass(frozen=True)
 class OutputValidationRejectedEvent(_DurableFact):
     """A candidate failed its output contract and was not accepted."""
 
     candidate_id: str = ""
     contract_id: str = ""
-    issues: List[dict] = field(default_factory=list)
+    issues: tuple[Mapping[str, JsonValue], ...] = ()
     correction_attempt: int = 0
     corrections_remaining: int = 0
     correction_allowed: bool = False
-    validator_provenance: List[dict] = field(default_factory=list)
+    validator_provenance: tuple[Mapping[str, JsonValue], ...] = ()
     run_id: str = ""
     run_kind: str = "agent"
 
     name: ClassVar[str] = OUTPUT_VALIDATION_REJECTED
     type: ClassVar[str] = OUTPUT_VALIDATION_REJECTED
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "issues",
+            _freeze_records(self.issues, field_name="output validation issues"),
+        )
+        object.__setattr__(
+            self,
+            "validator_provenance",
+            _freeze_records(
+                self.validator_provenance,
+                field_name="output validator provenance",
+            ),
+        )
 
-@dataclass
+
+@dataclass(frozen=True)
 class OutputAcceptedEvent(_DurableFact):
     """A candidate decoded and validated successfully, before durable commit."""
 
     candidate_id: str = ""
     contract_id: str = ""
     schema_fingerprint: str = ""
-    value: Any = None
+    value: JsonValue = None
     correction_attempts: int = 0
-    validator_provenance: List[dict] = field(default_factory=list)
+    validator_provenance: tuple[Mapping[str, JsonValue], ...] = ()
     run_id: str = ""
     run_kind: str = "agent"
 
     name: ClassVar[str] = OUTPUT_ACCEPTED
     type: ClassVar[str] = OUTPUT_ACCEPTED
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", freeze_json(self.value, path="accepted output value"))
+        object.__setattr__(
+            self,
+            "validator_provenance",
+            _freeze_records(
+                self.validator_provenance,
+                field_name="output validator provenance",
+            ),
+        )
 
-@dataclass
+
+@dataclass(frozen=True)
 class OutputCommitStartedEvent(_DurableFact):
     """Durable commit began for an already accepted output."""
 
@@ -96,7 +136,7 @@ class OutputCommitStartedEvent(_DurableFact):
     type: ClassVar[str] = OUTPUT_COMMIT_STARTED
 
 
-@dataclass
+@dataclass(frozen=True)
 class OutputMigratedEvent(_DurableFact):
     """An explicit migration produced a candidate for the current contract."""
 
@@ -104,25 +144,33 @@ class OutputMigratedEvent(_DurableFact):
     source_contract_id: str = ""
     target_contract_id: str = ""
     target_schema_fingerprint: str = ""
-    value: Any = None
-    steps: List[dict] = field(default_factory=list)
+    value: JsonValue = None
+    steps: tuple[Mapping[str, JsonValue], ...] = ()
     run_id: str = ""
     run_kind: str = "agent"
 
     name: ClassVar[str] = OUTPUT_MIGRATED
     type: ClassVar[str] = OUTPUT_MIGRATED
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", freeze_json(self.value, path="migrated output value"))
+        object.__setattr__(
+            self,
+            "steps",
+            _freeze_records(self.steps, field_name="output migration steps"),
+        )
 
-@dataclass
+
+@dataclass(frozen=True)
 class OutputCommittedEvent(_DurableFact):
     """The accepted output and its transcript crossed the durability barrier."""
 
     candidate_id: str = ""
     contract_id: str = ""
     schema_fingerprint: str = ""
-    value: Any = None
+    value: JsonValue = None
     correction_attempts: int = 0
-    validator_provenance: List[dict] = field(default_factory=list)
+    validator_provenance: tuple[Mapping[str, JsonValue], ...] = ()
     run_id: str = ""
     run_kind: str = "agent"
     fencing_token: int = 0
@@ -130,8 +178,19 @@ class OutputCommittedEvent(_DurableFact):
     name: ClassVar[str] = OUTPUT_COMMITTED
     type: ClassVar[str] = OUTPUT_COMMITTED
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", freeze_json(self.value, path="committed output value"))
+        object.__setattr__(
+            self,
+            "validator_provenance",
+            _freeze_records(
+                self.validator_provenance,
+                field_name="output validator provenance",
+            ),
+        )
 
-@dataclass
+
+@dataclass(frozen=True)
 class OutputPublicationQueuedEvent(_DurableFact):
     """A committed output entered the durable publication outbox."""
 
@@ -145,7 +204,7 @@ class OutputPublicationQueuedEvent(_DurableFact):
     type: ClassVar[str] = OUTPUT_PUBLICATION_QUEUED
 
 
-@dataclass
+@dataclass(frozen=True)
 class OutputPublishedEvent(_DurableFact):
     """A committed output crossed the Role's outward publication boundary."""
 

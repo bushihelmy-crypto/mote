@@ -1,6 +1,6 @@
 """Sandbox runtime config — deploy-time settings for OS-level isolation.
 
-Lives in ``common/schema`` alongside ``permission_config.py`` so ``RoleSchema``
+Lives in the sandbox bounded context; Product composition projects it into ``RoleSchema``
 (via ``PermissionConfig.runtime``) can declare it without importing the runtime
 package (``mote.runtime.sandbox``). This is *only* the declarative shape; the
 enforcement lives in ``mote.runtime.sandbox`` (the runtime layer) and the
@@ -17,12 +17,14 @@ Relationship to ``SandboxConfig`` (also in ``permission_config.py``):
 Default: ``runtime=None`` (the default on ``PermissionConfig``) means no
 OS-level sandbox, only the logical boundary.
 """
+
 from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
+from mote.contracts.config.base import ConfigModel
 from mote.runtime.sandbox.network.patterns import matches_pattern
 
 # Which OS-level isolation backend to use. ``auto`` probes the host
@@ -37,7 +39,7 @@ SandboxBackendKind = Literal["auto", "bwrap", "none"]
 CredentialScheme = Literal["bearer", "basic", "header"]
 
 
-class CredentialConfig(BaseModel):
+class CredentialConfig(ConfigModel):
     """Per-domain credential-brokering rule for the sandbox egress proxy.
 
     Injects an authentication header at the trusted egress proxy so a sandboxed
@@ -78,7 +80,7 @@ class CredentialConfig(BaseModel):
     )
 
 
-class SandboxRuntimeConfig(BaseModel):
+class SandboxRuntimeConfig(ConfigModel):
     """OS-level sandbox runtime policy, nested under :class:`PermissionConfig`.
 
     When ``enabled`` and a backend is available, the executor wraps every

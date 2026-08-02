@@ -6,13 +6,14 @@ We only need to *read* claims (``exp``/``email``/account) from access tokens we
 already trust because they came from the configured token endpoint over TLS.
 We deliberately do NOT verify signatures here (no key material in P1).
 """
+
 from __future__ import annotations
 
 import base64
 import json
 from typing import Dict
 
-from mote.runtime.errors import JWTDecodeError  # noqa: F401
+from mote.runtime.models.auth.oauth.errors import JWTDecodeError
 from mote.runtime.models.auth.oauth.models import TokenClaims
 
 

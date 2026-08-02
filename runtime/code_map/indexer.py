@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterable, Optional, TypeVar
 
+from mote.contracts.ports.code_intelligence.code_map import CodeReference, CodeSymbol
 from mote.runtime.code_map import CodeMap
 from mote.runtime.code_map.extractor import CodeMapExtractor
 from mote.runtime.code_map.model import Symbol
@@ -101,7 +102,7 @@ class RepoIndexer:
 
     # -- reverse-dep query (the injected callable) ---------------------------
 
-    def importers(self, candidates: Iterable[str]) -> list:
+    def importers(self, candidates: Iterable[str]) -> tuple[str, ...]:
         """Whole-repo files importing any of *candidates* (module-name spellings).
 
         The duck-typed callable :class:`CodeMapContextSource` injects into
@@ -110,12 +111,12 @@ class RepoIndexer:
         """
         try:
             with self._lock:
-                return self.prepare()._store.importers_repo(set(candidates))
+                return tuple(sorted(self.prepare()._store.importers_repo(set(candidates))))
         except Exception as exc:  # noqa: BLE001 — never break the map render
             logger.debug(f"RepoIndexer: importers query failed: {exc}")
-            return []
+            return ()
 
-    def symbols_in(self, path: str) -> list:
+    def symbols_in(self, path: str) -> tuple[CodeSymbol, ...]:
         """Whole-repo symbols defined in *path*, from the persistent index.
 
         The LSP-free source of a dangling-import target's "defines" view: the
@@ -126,12 +127,25 @@ class RepoIndexer:
         """
         try:
             with self._lock:
-                return self.prepare()._store.symbols_in(path)
+                return tuple(
+                    CodeSymbol(
+                        symbol.name,
+                        symbol.qualified_name,
+                        symbol.kind,
+                        symbol.start_line,
+                        symbol.signature,
+                        symbol.summary,
+                    )
+                    for symbol in sorted(
+                        self.prepare()._store.symbols_in(path),
+                        key=lambda item: (item.start_line, item.qualified_name, item.kind),
+                    )
+                )
         except Exception as exc:  # noqa: BLE001 — never break the map render
             logger.debug(f"RepoIndexer: symbols_in query failed: {exc}")
-            return []
+            return ()
 
-    def module_summary_of(self, path: str) -> str:
+    def module_summary_of(self, path: str) -> str | None:
         """Whole-repo module-docstring summary for *path*, from the index.
 
         The LSP-free source of a dangling-import target's *purpose* line. Best-
@@ -139,14 +153,14 @@ class RepoIndexer:
         """
         try:
             with self._lock:
-                return self.prepare()._store.module_summary_of(path)
+                return self.prepare()._store.module_summary_of(path) or None
         except Exception as exc:  # noqa: BLE001 — never break the map render
             logger.debug(f"RepoIndexer: module_summary_of query failed: {exc}")
-            return ""
+            return None
 
     # -- whole-repo navigation (Decision C, exposed off the cold store) ------
 
-    def references_to(self, path: str, symbol: str) -> list:
+    def references_to(self, path: str, symbol: str) -> tuple[CodeReference, ...]:
         """Whole-repo ``(path, line)`` uses of ``symbol`` defined in ``path``.
 
         The symbol-precise reverse-dep query: the passive source points a
@@ -157,10 +171,16 @@ class RepoIndexer:
         """
         try:
             with self._lock:
-                return self.prepare().references_to(path, symbol)
+                return tuple(
+                    CodeReference(reference_path, line)
+                    for reference_path, line in sorted(
+                        self.prepare().references_to(path, symbol),
+                        key=lambda item: (item[0], item[1]),
+                    )
+                )
         except Exception as exc:  # noqa: BLE001 — never break the map render
             logger.debug(f"RepoIndexer: references_to query failed: {exc}")
-            return []
+            return ()
 
     def definition_of(self, name: str, module: str) -> Optional[Symbol]:
         """The whole-repo :class:`Symbol` a ``module``.``name`` import points at.

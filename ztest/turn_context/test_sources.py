@@ -5,11 +5,14 @@
 Each source is duck-typed and self-suppressing (returns None when there is
 nothing to report), so the bus can wire them unconditionally.
 """
+
 from __future__ import annotations
 
 import asyncio
 
 from mote.contracts.conversation import FoldState
+from mote.contracts.events.conversation import PostCompactEvent
+from mote.contracts.events.session import TurnEndEvent
 from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
 from mote.runtime.context.turn import (
     CompactionNoticeContextSource,
@@ -17,7 +20,6 @@ from mote.runtime.context.turn import (
     GitContextSource,
     TokenPressureContextSource,
 )
-from mote.runtime.events import PostCompactEvent, TurnEndEvent
 
 
 def run(coro):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Callable, Coroutine, Protocol, runtime_checkable
 
 
 class StopReason(str, Enum):
@@ -20,11 +20,6 @@ class StopDisposition(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class ResumeRef:
-    value: str
-
-
-@dataclass(frozen=True, slots=True)
 class OperationSucceeded:
     output: Any
 
@@ -32,45 +27,34 @@ class OperationSucceeded:
 @dataclass(frozen=True, slots=True)
 class OperationFailed:
     error: BaseException
-    resume_ref: ResumeRef | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class OperationPaused:
-    reason: str
-    resume_ref: ResumeRef
 
 
 @dataclass(frozen=True, slots=True)
 class OperationCancelled:
     reason: str = "cancelled"
-    resume_ref: ResumeRef | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class OperationTimedOut:
     reason: str = "timed_out"
-    resume_ref: ResumeRef | None = None
 
 
-OperationOutcome = OperationSucceeded | OperationFailed | OperationPaused | OperationCancelled | OperationTimedOut
+OperationOutcome = OperationSucceeded | OperationFailed | OperationCancelled | OperationTimedOut
 
 
+@runtime_checkable
 class DeferredOperation(Protocol):
-    async def execute(self) -> OperationOutcome:
-        ...
+    async def execute(self) -> OperationOutcome: ...
 
-    async def request_stop(self, reason: StopReason, disposition: StopDisposition) -> OperationOutcome:
-        ...
+    async def request_stop(self, reason: StopReason, disposition: StopDisposition) -> OperationOutcome: ...
 
-    async def aclose(self) -> None:
-        ...
+    async def aclose(self) -> None: ...
 
 
 class CoroutineOperation:
     """Single-use adapter for ordinary coroutine factories."""
 
-    def __init__(self, factory: Callable[[], Awaitable[Any]]) -> None:
+    def __init__(self, factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
         self._factory = factory
         self._task: asyncio.Task[Any] | None = None
         self._started = False
@@ -124,10 +108,8 @@ __all__ = [
     "OperationCancelled",
     "OperationFailed",
     "OperationOutcome",
-    "OperationPaused",
     "OperationSucceeded",
     "OperationTimedOut",
-    "ResumeRef",
     "StopDisposition",
     "StopReason",
 ]

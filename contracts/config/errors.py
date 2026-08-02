@@ -51,6 +51,12 @@ class UnknownConfigKeysError(ConfigValidationError):
         super().__init__(f"Unknown config keys (strict mode): {joined}")
 
 
+class ConfigSourceChangedError(ConfigError):
+    """A discovered configuration source changed before its bytes were read."""
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.CONFIG_INVALID
+
+
 class EnvKeyNotFoundError(ConfigError):
     """An environment variable / RFC-216 key was not found.
 

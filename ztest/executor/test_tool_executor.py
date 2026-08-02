@@ -15,8 +15,10 @@ import asyncio
 import pytest
 
 from mote.contracts.config.tool import ToolResultLimitConfig
+from mote.contracts.events.tool import ToolCallFinishedEvent, ToolInvocationStartedEvent
+from mote.contracts.tool import ToolEffect
+from mote.contracts.tool.errors import ToolValidationError
 from mote.orchestration.background_tasks.model import BgTaskResult
-from mote.runtime.errors import ToolValidationError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.definitions import native_definition
 from mote.runtime.tools.mcp.adapter import MCPToolAdapter
@@ -46,6 +48,44 @@ pytestmark = pytest.mark.asyncio
 
 def _register_native(executor: ToolExecutor, tool: BaseTool) -> None:
     executor.register_native_tool(native_definition(type(tool)), tool)
+
+
+class _EventRecorder:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    async def handle(self, event: object) -> None:
+        self.events.append(event)
+
+
+async def test_execution_owner_mints_one_identity_for_start_and_finish() -> None:
+    recorder = _EventRecorder()
+    executor = make_executor(EchoTool(), telemetry=InlineTelemetry(recorder))
+
+    result = await executor.run_command("Echo", {"text": "hello"})
+
+    assert result.success is True
+    started = next(event for event in recorder.events if isinstance(event, ToolInvocationStartedEvent))
+    finished = next(event for event in recorder.events if isinstance(event, ToolCallFinishedEvent))
+    assert started.identity == finished.identity
+    assert str(started.identity.invocation_id).startswith("tool-")
+    assert int(started.identity.attempt_ordinal) == 1
+    assert started.identity.definition_identity.startswith("sha256-")
+
+
+async def test_explicit_logical_identity_advances_attempt_ordinal() -> None:
+    class PureEcho(EchoTool):
+        effect = ToolEffect.PURE
+
+    recorder = _EventRecorder()
+    executor = make_executor(PureEcho(), telemetry=InlineTelemetry(recorder))
+
+    await executor.run_command("Echo", {"text": "one"}, result_id="logical-call")
+    await executor.run_command("Echo", {"text": "two"}, result_id="logical-call")
+
+    starts = [event for event in recorder.events if isinstance(event, ToolInvocationStartedEvent)]
+    assert [int(event.identity.attempt_ordinal) for event in starts] == [1, 2]
+    assert starts[0].identity.arguments_digest != starts[1].identity.arguments_digest
 
 
 class TestRunCommandDispatch:
@@ -156,15 +196,17 @@ class TestRunCommandReturnNormalization:
         result = await ex.run_command("Struct", {"ok": True})
         assert result.success is True
         assert result.output == "structured"
-        assert result.data == {"k": "v"}
+        assert result.payload is not None
+        assert result.payload.materialize() == {"k": "v"}
 
-    async def test_bg_task_result_wrapped_in_data(self):
+    async def test_bg_task_result_is_process_local_execution_value(self):
         ex = make_executor(BgTool())
         result = await ex.run_command("Bg", {"label": "crawl"})
         assert result.success is True
         assert result.output == "started"
-        assert isinstance(result.data, BgTaskResult)
-        assert result.data.command_name == "crawl"
+        assert isinstance(result.execution_value, BgTaskResult)
+        assert result.execution_value.command_name == "crawl"
+        assert result.payload is None
 
     async def test_atomic_tool_cannot_return_deferred_work(self):
         class InvalidDeferredTool(BaseTool):
@@ -200,7 +242,11 @@ class TestResultLimiting:
         # there; the persisted result co-locates under the session directory.
         from mote.runtime.session.workspace import SessionWorkspace
 
-        ex = make_executor(BigTool(), session_id="limit-sess", workspace_store=SessionWorkspace(tmp_path))
+        ex = make_executor(
+            BigTool(),
+            session_id="limit-sess",
+            workspace_store=SessionWorkspace(tmp_path),
+        )
         result = await ex.run_command("Big", {}, result_id="rid-1")
         assert result.output.startswith("<persisted-output>")
         assert (tmp_path / ".agent_sessions" / "limit-sess" / "tool_results" / "rid-1.txt").exists()
@@ -343,7 +389,10 @@ class TestMcpFiltering:
             "description": "an mcp tool",
             "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
         }
-        return MCPToolAdapter.from_discovery(_FakeMcp(), DiscoveredMcpTool(name, "an mcp tool", schema["parameters"]))
+        return MCPToolAdapter.from_discovery(
+            _FakeMcp(),
+            DiscoveredMcpTool(name, "an mcp tool", schema["parameters"], "test:mcp-source"),
+        )
 
     async def test_mcp_definition_registers_only_on_native_surface(self):
         ex = make_executor(EchoTool())
@@ -665,7 +714,7 @@ class TestDeregisterTool:
         assert ex.reconstructable_tool_names() == frozenset()
 
     async def test_emits_tools_changed_event(self):
-        from mote.runtime.events import ToolsChangedEvent
+        from mote.contracts.events.tool import ToolsChangedEvent
 
         telemetry, rec = self._recording_telemetry()
         ex = ToolExecutor("sess", tools=None, telemetry=telemetry)
@@ -683,7 +732,7 @@ class TestDeregisterTool:
     async def test_event_carries_fresh_reconstructable_set(self):
         # Two reconstructable tools; removing one must leave the other's names in
         # the announced set, so a compaction consumer refreshes from the event alone.
-        from mote.runtime.events import ToolsChangedEvent
+        from mote.contracts.events.tool import ToolsChangedEvent
 
         class ReconA(EchoTool):
             name = "ReconA"
@@ -706,7 +755,7 @@ class TestDeregisterTool:
         assert set(evt.reconstructable) == {"ReconB"}
 
     async def test_noop_removal_emits_nothing(self):
-        from mote.runtime.events import ToolsChangedEvent
+        from mote.contracts.events.tool import ToolsChangedEvent
 
         telemetry, rec = self._recording_telemetry()
         ex = ToolExecutor("sess", tools=None, telemetry=telemetry)
@@ -727,7 +776,8 @@ class TestRecoveryWiring:
 
     @staticmethod
     def _flaky_tool():
-        from mote.runtime.errors import MoteError, RecoveryAction
+        from mote.contracts.foundation.errors.base import MoteError
+        from mote.contracts.foundation.errors.codes import RecoveryAction
         from mote.runtime.tools.base_tool import BaseTool
 
         class _CompressError(MoteError):
@@ -759,7 +809,7 @@ class TestRecoveryWiring:
         assert tool.calls == 1
 
     async def test_injected_strategy_recovers(self):
-        from mote.runtime.errors import RecoveryAction
+        from mote.contracts.foundation.errors.codes import RecoveryAction
 
         FlakyTool, _ = self._flaky_tool()
         tool = FlakyTool()
@@ -798,6 +848,7 @@ class _FakeMcp:
                 name=name,
                 description="an mcp tool",
                 input_schema={"type": "object", "properties": {}},
+                source_identity="test:mcp-source",
             )
             for name in self._tools
         )
@@ -883,7 +934,7 @@ class TestReloadMcp:
         assert _FakeMcp.cleanups == 1
 
     async def test_emits_tools_changed_event_with_removed(self, monkeypatch):
-        from mote.runtime.events import ToolsChangedEvent
+        from mote.contracts.events.tool import ToolsChangedEvent
 
         self._patch(monkeypatch, ["server:a", "server:b"])
         telemetry, rec = self._recording_telemetry()
@@ -897,7 +948,12 @@ class TestReloadMcp:
         changed = [e for e in rec.events if isinstance(e, ToolsChangedEvent)]
         assert len(changed) == 2
         assert changed[0].removed == []
-        assert set(changed[1].removed) == {"server:a", "server:b"}
+        assert changed[0].added == ["server:a", "server:b"]
+        assert changed[0].changed == []
+        assert changed[1].removed == ["server:b"]
+        assert changed[1].added == []
+        assert changed[1].changed == ["server:a"]
+        assert changed[1].generation > changed[0].generation
 
     async def test_reload_is_reentrant(self, monkeypatch):
         # Running the same reload repeatedly is stable — no adapter duplication.
@@ -914,9 +970,9 @@ class TestReloadMcp:
 
 from mote.contracts.config.tool import DurableConfig, RunJournalConfig  # noqa: E402
 from mote.contracts.tool.effects import ToolEffect  # noqa: E402
+from mote.contracts.tool.errors import ToolError  # noqa: E402
 from mote.runtime.ledger import COMPLETED, FAILED, KIND_TOOL, STARTED, RunJournal  # noqa: E402
 from mote.runtime.session.workspace import SessionWorkspace  # noqa: E402
-from mote.runtime.tools.tool_result import ToolError  # noqa: E402
 
 
 class _ExternalTool(BaseTool):

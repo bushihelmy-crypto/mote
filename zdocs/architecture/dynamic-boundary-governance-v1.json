@@ -98,7 +98,7 @@
       "candidate_id": "telemetry",
       "implementation": "mote.runtime.events.telemetry.TelemetryRuntime",
       "role": "infrastructure_factory",
-      "source_symbol": "mote.runtime.agent.role_components.RoleComponents._build_telemetry"
+      "source_symbol": "mote.runtime.agent.role_components._build_telemetry"
     },
     {
       "candidate_id": "event-fabric",
@@ -138,7 +138,7 @@
     },
     {
       "candidate_id": "permission-sandbox",
-      "implementation": "mote.runtime.sandbox.SandboxRuntime",
+      "implementation": "mote.runtime.sandbox.runtime.SandboxRuntime",
       "role": "infrastructure_factory",
       "source_symbol": "mote.runtime.agent.components.integrations._build_sandbox_runtime"
     },
@@ -168,9 +168,9 @@
     },
     {
       "candidate_id": "hosted-service-gateway",
-      "implementation": "mote.runtime.models.inference_port.RuntimeModelInferencePort",
+      "implementation": "mote.runtime.service_gateway.gateway.RuntimeServiceGateway",
       "role": "governed_port_implementation",
-      "source_symbol": "mote.runtime.agent.components.cognition.cognition_component_specs"
+      "source_symbol": "mote.product.composition.service_gateway.builtin_service_gateway"
     },
     {
       "candidate_id": "agent-catalog-factory",
@@ -206,7 +206,7 @@
   "canonicalization": "sorted-key compact JSON; declaration order is authoritative",
   "capabilities": [
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.product.composition.model_builder.build_application_candidate",
       "capability_id": "model-runtime",
       "deployment_mode": "embedded",
@@ -224,8 +224,8 @@
       "stop_owner": "product-composition"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
-      "canonical_factory": "mote.runtime.agent.role_components.RoleComponents._build_telemetry",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
+      "canonical_factory": "mote.runtime.agent.role_components._build_telemetry",
       "capability_id": "telemetry",
       "deployment_mode": "embedded",
       "enablement": "required",
@@ -240,7 +240,7 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.runtime.agent.components.session._build_event_fabric",
       "capability_id": "event-fabric",
       "deployment_mode": "embedded",
@@ -256,7 +256,7 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.runtime.agent.components.session._build_session_log",
       "capability_id": "session-persistence",
       "deployment_mode": "embedded",
@@ -272,7 +272,7 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.runtime.agent.components.session._build_artifact_store",
       "capability_id": "artifact-store",
       "deployment_mode": "embedded",
@@ -290,7 +290,7 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.runtime.session.log.SessionLog",
       "capability_id": "journal",
       "deployment_mode": "embedded",
@@ -308,7 +308,7 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.runtime.agent.components.action._build_executor",
       "capability_id": "tool-executor",
       "deployment_mode": "embedded",
@@ -324,7 +324,7 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.product.toolsets.builtin_tool_catalog",
       "capability_id": "tool-catalog",
       "deployment_mode": "embedded",
@@ -340,12 +340,12 @@
       "stop_owner": "product-composition"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.runtime.agent.components.integrations._build_sandbox_runtime",
       "capability_id": "permission-sandbox",
       "deployment_mode": "embedded",
       "enablement": "configured",
-      "implementation": "mote.runtime.sandbox.SandboxRuntime",
+      "implementation": "mote.runtime.sandbox.runtime.SandboxRuntime",
       "implementation_owner": "runtime",
       "instance_scope": "session",
       "lifecycle_owner": "runtime-role",
@@ -356,7 +356,7 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.product.agents.background_tasks.build_background_task_pool",
       "capability_id": "background-task",
       "deployment_mode": "embedded",
@@ -374,7 +374,7 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.runtime.agent.components.integrations._build_lsp_service",
       "capability_id": "lsp",
       "deployment_mode": "embedded",
@@ -392,7 +392,7 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.runtime.agent.components.watching._build_file_watch_service",
       "capability_id": "file-watch",
       "deployment_mode": "embedded",
@@ -410,7 +410,7 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.runtime.agent.components.integrations._build_hook_manager",
       "capability_id": "hook",
       "deployment_mode": "embedded",
@@ -426,25 +426,25 @@
       "stop_owner": "runtime-role"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
-      "canonical_factory": "mote.runtime.agent.components.cognition.cognition_component_specs",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
+      "canonical_factory": "mote.product.composition.service_gateway.builtin_service_gateway",
       "capability_id": "hosted-service-gateway",
       "deployment_mode": "embedded",
       "enablement": "required",
-      "implementation": "mote.runtime.models.inference_port.RuntimeModelInferencePort",
+      "implementation": "mote.runtime.service_gateway.gateway.RuntimeServiceGateway",
       "implementation_owner": "runtime",
-      "instance_scope": "session",
-      "lifecycle_owner": "runtime-role",
+      "instance_scope": "application",
+      "lifecycle_owner": "product-composition",
       "replacement_capability_id": "",
       "required_ports": [
-        "mote.contracts.ports.inference"
+        "mote.contracts.ports.service.gateway.ServiceGateway"
       ],
-      "start_owner": "runtime-role",
+      "start_owner": "product-composition",
       "status": "active",
-      "stop_owner": "runtime-role"
+      "stop_owner": "product-composition"
     },
     {
-      "applicable_root": "mote.product.entrypoints.cli.bootstrap.build_engine",
+      "applicable_root": "mote.product.composition.bootstrap.activate_application",
       "canonical_factory": "mote.product.composition.container.ProductContainer.standard",
       "capability_id": "agent-catalog-factory",
       "deployment_mode": "embedded",
@@ -909,7 +909,7 @@
   ],
   "runtime_input": false,
   "schema": "governance-review-v1",
-  "source_digest": "sha256:96dbba037fb66308a4b08aa8bdffa6a29bbb71de999ffb7bdfe9db623707d20f",
+  "source_digest": "sha256:66b60e31de3e1910701371df881fd5160fc5d5399b9f95c01e0df8e3fa62a495",
   "transformations": [
     {
       "authority": "authoritative",
@@ -954,13 +954,13 @@
       "authority": "authoritative",
       "bounded_domain": "session",
       "conversion_owner": "session",
-      "converter": "mote.runtime.projections.session.SessionLiveProjection.handle",
+      "converter": "mote.runtime.session.projection.SessionLiveProjection.handle",
       "persistence": "journaled",
       "side_effect_policy": "transactional_projection",
       "source_stage": "durable_envelope",
       "source_type": "mote.contracts.events.envelope.EventEnvelope",
       "target_stage": "view",
-      "target_type": "mote.runtime.projections.session.SessionProjectionState",
+      "target_type": "mote.runtime.session.projection.SessionProjectionState",
       "transformation_id": "session.envelope-to-live-projection"
     },
     {

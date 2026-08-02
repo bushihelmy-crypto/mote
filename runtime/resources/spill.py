@@ -36,9 +36,10 @@ from mote.contracts.config.tool import (
     PERSISTED_OUTPUT_OPEN_TAG,
     PREVIEW_SIZE_BYTES,
 )
+from mote.contracts.ports.task.operations import TaskOutputLocationPort
+from mote.contracts.session.identity import SessionId
 from mote.runtime.persistence import disk_io
 from mote.runtime.resources.formatting import format_file_size
-from mote.runtime.session.workspace import SessionSpace, SessionWorkspace
 from mote.runtime.telemetry.logging import logger
 from mote.runtime.text.elision import cap_head
 
@@ -69,15 +70,16 @@ def generate_preview(content: str, max_bytes: int) -> tuple[str, bool]:
     return content[:cut_point], True
 
 
-def _tool_result_path(session_id: str, result_id: str, store: SessionWorkspace | None) -> Path:
+def _tool_result_path(session_id: str, result_id: str, store: TaskOutputLocationPort | None) -> Path:
     """Filepath where a tool result is persisted (``{id}.txt``).
 
     Location comes from the :class:`SessionWorkspace` — the ``tool_results/`` space
     under *session_id*'s directory — never computed here, so the layout stays
     single-sourced.
     """
-    store = store or SessionWorkspace()
-    return store.space(session_id, SessionSpace.TOOL_RESULTS) / f"{result_id}.txt"
+    if store is None:
+        raise ValueError("tool-result persistence requires an injected location owner")
+    return store.tool_result_path(SessionId(session_id), result_id)
 
 
 def _build_persisted_message(filepath: str, original_size: int, preview: str, has_more: bool) -> str:
@@ -91,7 +93,7 @@ def _build_persisted_message(filepath: str, original_size: int, preview: str, ha
     return message
 
 
-def persist_result(output: str, result_id: str, session_id: str, store: SessionWorkspace | None) -> str | None:
+def persist_result(output: str, result_id: str, session_id: str, store: TaskOutputLocationPort | None) -> str | None:
     """Write *output* to disk; return its filepath, or None on failure.
 
     Idempotent: a result id is unique per invocation and its content
@@ -132,7 +134,7 @@ def enforce_tool_result_limit(
     session_id: str = "",
     max_result_size_chars: int = DEFAULT_MAX_RESULT_SIZE_CHARS,
     persist: bool = True,
-    store: SessionWorkspace | None = None,
+    store: TaskOutputLocationPort | None = None,
 ) -> str:
     """Cap a single tool's *output*, persisting the full result when too large.
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Dict, List, Optional, Union
 
 from mote.contracts.conversation import Message
@@ -98,6 +99,56 @@ def _require_keys(payload: Dict[str, Any], names: set[str], owner: str) -> Dict[
     if set(payload) != names:
         raise ValueError(f"{owner} payload fields must be exactly {sorted(names)!r}")
     return payload
+
+
+_RUNTIME_CHECKPOINT_FIELDS = {
+    "runtime_id",
+    "kind",
+    "epoch",
+    "revision",
+    "codec",
+    "schema_version",
+    "payload_ref",
+    "alias",
+    "digest",
+    "sensitivity",
+    "fidelity",
+}
+
+
+def _decode_runtime_checkpoint(payload: object, *, owner: str) -> RuntimeCheckpoint:
+    if type(payload) is not dict:
+        raise TypeError(f"{owner} payload must be an object")
+    _require_keys(payload, _RUNTIME_CHECKPOINT_FIELDS, owner)
+    string_fields = (
+        "runtime_id",
+        "kind",
+        "codec",
+        "payload_ref",
+        "alias",
+        "digest",
+        "sensitivity",
+        "fidelity",
+    )
+    for field_name in string_fields:
+        if type(payload[field_name]) is not str:
+            raise TypeError(f"{owner}.{field_name} must be a string")
+    for field_name in ("epoch", "revision", "schema_version"):
+        if type(payload[field_name]) is not int:
+            raise TypeError(f"{owner}.{field_name} must be an integer")
+    return RuntimeCheckpoint(
+        runtime_id=payload["runtime_id"],
+        kind=payload["kind"],
+        epoch=payload["epoch"],
+        revision=payload["revision"],
+        codec=payload["codec"],
+        schema_version=payload["schema_version"],
+        payload_ref=payload["payload_ref"],
+        alias=payload["alias"],
+        digest=payload["digest"],
+        sensitivity=payload["sensitivity"],
+        fidelity=CheckpointFidelity(payload["fidelity"]),
+    )
 
 
 #: Bump when the persisted event shape changes incompatibly (drives migration).
@@ -456,21 +507,12 @@ class RuntimeCheckpointEvent:
             },
             cls.__name__,
         )
+        checkpoint_payload = {key: value for key, value in payload.items() if key != "reason"}
+        if type(payload["reason"]) is not str:
+            raise TypeError(f"{cls.__name__}.reason must be a string")
         return cls(
-            checkpoint=RuntimeCheckpoint(
-                runtime_id=str(payload["runtime_id"]),
-                kind=str(payload["kind"]),
-                epoch=int(payload["epoch"]),
-                revision=int(payload["revision"]),
-                codec=str(payload["codec"]),
-                schema_version=int(payload["schema_version"]),
-                payload_ref=str(payload["payload_ref"]),
-                alias=str(payload["alias"]),
-                digest=str(payload["digest"]),
-                sensitivity=str(payload["sensitivity"]),
-                fidelity=CheckpointFidelity(payload["fidelity"]),
-            ),
-            reason=str(payload["reason"]),
+            checkpoint=_decode_runtime_checkpoint(checkpoint_payload, owner=cls.__name__),
+            reason=payload["reason"],
         )
 
 
@@ -541,19 +583,7 @@ class RuntimeCommitEvent:
         return cls(
             fact=RuntimeCommitFact(
                 commit_id=str(payload["commit_id"]),
-                checkpoint=RuntimeCheckpoint(
-                    runtime_id=str(checkpoint["runtime_id"]),
-                    kind=str(checkpoint["kind"]),
-                    epoch=int(checkpoint["epoch"]),
-                    revision=int(checkpoint["revision"]),
-                    codec=str(checkpoint["codec"]),
-                    schema_version=int(checkpoint["schema_version"]),
-                    payload_ref=str(checkpoint["payload_ref"]),
-                    alias=str(checkpoint["alias"]),
-                    digest=str(checkpoint["digest"]),
-                    sensitivity=str(checkpoint["sensitivity"]),
-                    fidelity=CheckpointFidelity(checkpoint["fidelity"]),
-                ),
+                checkpoint=_decode_runtime_checkpoint(checkpoint, owner=f"{cls.__name__}.checkpoint"),
                 projections=tuple(
                     RuntimeProjectionIntent(
                         intent_id=str(item["intent_id"]),
@@ -705,19 +735,7 @@ class RuntimeOperationPreparedEvent:
                 codec=str(payload["codec"]),
                 schema_version=int(payload["schema_version"]),
                 payload=str(payload["operation_payload"]),
-                base_checkpoint=RuntimeCheckpoint(
-                    runtime_id=str(checkpoint["runtime_id"]),
-                    kind=str(checkpoint["kind"]),
-                    epoch=int(checkpoint["epoch"]),
-                    revision=int(checkpoint["revision"]),
-                    codec=str(checkpoint["codec"]),
-                    schema_version=int(checkpoint["schema_version"]),
-                    payload_ref=str(checkpoint["payload_ref"]),
-                    alias=str(checkpoint["alias"]),
-                    digest=str(checkpoint["digest"]),
-                    sensitivity=str(checkpoint["sensitivity"]),
-                    fidelity=CheckpointFidelity(checkpoint["fidelity"]),
-                ),
+                base_checkpoint=_decode_runtime_checkpoint(checkpoint, owner=f"{cls.__name__}.base_checkpoint"),
                 projections=tuple(
                     RuntimeProjectionIntent(
                         intent_id=str(item["intent_id"]),
@@ -961,47 +979,49 @@ SessionEvent = Union[
 
 #: Historic discriminator -> current event payload class. The v3 session codec
 #: owns stable persisted names; this map owns typed payload reconstruction.
-SESSION_EVENT_CLASSES = {
-    SESSION_META: SessionMetaEvent,
-    MESSAGE: MessageEvent,
-    CONTEXT_COMPACTED: ContextCompactedFact,
-    HISTORY_EDITED: HistoryEditedFact,
-    TURN_CONTEXT: TurnContextEvent,
-    PROMPT_REJECTED: PromptRejectedEvent,
-    META_UPDATE: MetaUpdateEvent,
-    FILE_HISTORY_IMPORTED: FileHistoryImportedEvent,
-    FILE_EDIT_PLAN_STORED: FileEditPlanStoredEvent,
-    CHECKPOINT: CheckpointEvent,
-    LLM_CALL: LLMCallEvent,
-    ROUTING_DECISION_FACT: RoutingDecisionFact,
-    RUNTIME_CHECKPOINT: RuntimeCheckpointEvent,
-    RUNTIME_COMMIT: RuntimeCommitEvent,
-    RUNTIME_PROJECTION_ACKNOWLEDGED: RuntimeProjectionAcknowledgedEvent,
-    RUNTIME_OPERATION_PREPARED: RuntimeOperationPreparedEvent,
-    RUNTIME_OPERATION_COMPLETED: RuntimeOperationCompletedEvent,
-    RUNTIME_OPERATION_ABORTED: RuntimeOperationAbortedEvent,
-    RUNTIME_HANDOFF_PREPARED: RuntimeHandoffPreparedEvent,
-    RUNTIME_HANDOFF_ACTIVATED: RuntimeHandoffActivatedEvent,
-    RUNTIME_HANDOFF_RESOLVED: RuntimeHandoffResolvedEvent,
-    OUTPUT_CANDIDATE_RECEIVED: OutputCandidateReceivedEvent,
-    OUTPUT_VALIDATION_REJECTED: OutputValidationRejectedEvent,
-    OUTPUT_ACCEPTED: OutputAcceptedEvent,
-    OUTPUT_COMMIT_STARTED: OutputCommitStartedEvent,
-    OUTPUT_MIGRATED: OutputMigratedEvent,
-    OUTPUT_COMMITTED: OutputCommittedEvent,
-    OUTPUT_PUBLICATION_QUEUED: OutputPublicationQueuedEvent,
-    OUTPUT_PUBLISHED: OutputPublishedEvent,
-    FILE_TRANSACTION_PREPARED: FileTransactionPreparedEvent,
-    FILE_TRANSACTION_COMMITTED: FileTransactionCommittedEvent,
-    FILE_TRANSACTION_ABORTED: FileTransactionAbortedEvent,
-    FILE_TRANSACTION_IN_DOUBT: FileTransactionInDoubtEvent,
-    HUNK_DETECTED: HunkDetectedEvent,
-    HUNK_REVIEW_TRANSITIONED: HunkReviewTransitionedEvent,
-    REWIND_PREPARED: RewindPreparedEvent,
-    REWIND_COMMITTED: RewindCommittedEvent,
-    REWIND_ABORTED: RewindAbortedEvent,
-    REWIND_IN_DOUBT: RewindInDoubtEvent,
-}
+SESSION_EVENT_CLASSES = MappingProxyType(
+    {
+        SESSION_META: SessionMetaEvent,
+        MESSAGE: MessageEvent,
+        CONTEXT_COMPACTED: ContextCompactedFact,
+        HISTORY_EDITED: HistoryEditedFact,
+        TURN_CONTEXT: TurnContextEvent,
+        PROMPT_REJECTED: PromptRejectedEvent,
+        META_UPDATE: MetaUpdateEvent,
+        FILE_HISTORY_IMPORTED: FileHistoryImportedEvent,
+        FILE_EDIT_PLAN_STORED: FileEditPlanStoredEvent,
+        CHECKPOINT: CheckpointEvent,
+        LLM_CALL: LLMCallEvent,
+        ROUTING_DECISION_FACT: RoutingDecisionFact,
+        RUNTIME_CHECKPOINT: RuntimeCheckpointEvent,
+        RUNTIME_COMMIT: RuntimeCommitEvent,
+        RUNTIME_PROJECTION_ACKNOWLEDGED: RuntimeProjectionAcknowledgedEvent,
+        RUNTIME_OPERATION_PREPARED: RuntimeOperationPreparedEvent,
+        RUNTIME_OPERATION_COMPLETED: RuntimeOperationCompletedEvent,
+        RUNTIME_OPERATION_ABORTED: RuntimeOperationAbortedEvent,
+        RUNTIME_HANDOFF_PREPARED: RuntimeHandoffPreparedEvent,
+        RUNTIME_HANDOFF_ACTIVATED: RuntimeHandoffActivatedEvent,
+        RUNTIME_HANDOFF_RESOLVED: RuntimeHandoffResolvedEvent,
+        OUTPUT_CANDIDATE_RECEIVED: OutputCandidateReceivedEvent,
+        OUTPUT_VALIDATION_REJECTED: OutputValidationRejectedEvent,
+        OUTPUT_ACCEPTED: OutputAcceptedEvent,
+        OUTPUT_COMMIT_STARTED: OutputCommitStartedEvent,
+        OUTPUT_MIGRATED: OutputMigratedEvent,
+        OUTPUT_COMMITTED: OutputCommittedEvent,
+        OUTPUT_PUBLICATION_QUEUED: OutputPublicationQueuedEvent,
+        OUTPUT_PUBLISHED: OutputPublishedEvent,
+        FILE_TRANSACTION_PREPARED: FileTransactionPreparedEvent,
+        FILE_TRANSACTION_COMMITTED: FileTransactionCommittedEvent,
+        FILE_TRANSACTION_ABORTED: FileTransactionAbortedEvent,
+        FILE_TRANSACTION_IN_DOUBT: FileTransactionInDoubtEvent,
+        HUNK_DETECTED: HunkDetectedEvent,
+        HUNK_REVIEW_TRANSITIONED: HunkReviewTransitionedEvent,
+        REWIND_PREPARED: RewindPreparedEvent,
+        REWIND_COMMITTED: RewindCommittedEvent,
+        REWIND_ABORTED: RewindAbortedEvent,
+        REWIND_IN_DOUBT: RewindInDoubtEvent,
+    }
+)
 
 
 __all__ = [

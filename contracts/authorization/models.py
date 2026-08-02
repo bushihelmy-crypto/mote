@@ -1,6 +1,6 @@
 """Permission types — pure cross-layer data, no enforcement logic.
 
-Lives in ``common/schema`` (alongside ``tool_config.py``) and is kept
+Lives in the Contracts authorization domain and is kept
 dependency-free (only stdlib typing/dataclasses) so any layer — tools, the
 permission engine, the config schema, the hook layer — can import these as the
 single source of truth without circular imports. Pure permission types stay
@@ -14,6 +14,7 @@ Two orthogonal concepts live here:
 The runtime decision pipeline (see ``executor/permission/engine.py``) combines
 them into a single ``PermissionDecision``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

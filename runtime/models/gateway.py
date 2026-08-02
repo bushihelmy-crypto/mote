@@ -10,7 +10,7 @@ from mote.contracts.ports.artifact.store import ArtifactResolver
 from mote.contracts.ports.conversation.context_reducer import ContextReducer
 from mote.contracts.ports.model.gateway import ModelGateway, ModelRoute
 from mote.contracts.ports.session.facts import SessionFactSink
-from mote.runtime.errors import ModelNotFoundError
+from mote.runtime.models.errors import ModelNotFoundError
 from mote.runtime.models.failover.transforms import CanonicalRequestTransformer
 from mote.runtime.models.routing.service import RoutingService
 from mote.runtime.telemetry.logging import log_class

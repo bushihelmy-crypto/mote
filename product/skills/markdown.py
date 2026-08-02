@@ -5,8 +5,6 @@ from pathlib import Path
 
 import yaml
 
-from mote.runtime.telemetry.logging import logger
-
 
 @dataclass
 class MarkdownDocument:
@@ -23,26 +21,11 @@ class MarkdownMetaParser:
 
     FRONTMATTER_DELIMITER = "---"
 
-    def parse(self, file_path: Path) -> MarkdownDocument:
-        """Parse a Markdown file into a MarkdownDocument.
-
-        Extracts YAML frontmatter (between --- delimiters) and splits
-        the body into sections by ## headings.
-
-        Args:
-            file_path: Path to the Markdown file.
-
-        Returns:
-            MarkdownDocument with metadata, content, and sections.
-        """
-        try:
-            text = file_path.read_text(encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"MarkdownMetaParser: failed to read {file_path}: {e}")
-            return MarkdownDocument(source_path=file_path)
+    def parse_text(self, text: str, *, source_path: Path) -> MarkdownDocument:
+        """Parse already-verified source content without reopening its path."""
 
         if not text.strip():
-            return MarkdownDocument(source_path=file_path)
+            return MarkdownDocument(source_path=source_path)
 
         metadata, body = self._extract_frontmatter(text)
         sections = self._split_sections(body)
@@ -51,7 +34,7 @@ class MarkdownMetaParser:
             metadata=metadata,
             content=body,
             sections=sections,
-            source_path=file_path,
+            source_path=source_path,
         )
 
     def _extract_frontmatter(self, text: str) -> tuple[dict, str]:
@@ -75,12 +58,11 @@ class MarkdownMetaParser:
 
         metadata = {}
         if yaml_text:
-            try:
-                parsed = yaml.safe_load(yaml_text)
-                if isinstance(parsed, dict):
-                    metadata = parsed
-            except yaml.YAMLError as e:
-                logger.warning(f"MarkdownMetaParser: YAML parse error: {e}")
+            parsed = yaml.safe_load(yaml_text)
+            if parsed is not None and not isinstance(parsed, dict):
+                raise ValueError("Markdown frontmatter must be a mapping")
+            if isinstance(parsed, dict):
+                metadata = parsed
 
         return metadata, body
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from mote.contracts.ports.artifact.store import ArtifactResolver, ArtifactStore
+from mote.contracts.ports.artifact.store import ArtifactLookupIndex, ArtifactResolver
 from mote.contracts.ports.artifact.store import ReliableArtifactPublisher as ArtifactPublisherPort
 from mote.contracts.ports.code_intelligence.code_map import CodeMapIndexer
 from mote.contracts.ports.code_intelligence.lsp import DiagnosticsProvider
@@ -22,7 +22,7 @@ from mote.runtime.agent.component_graph import ComponentKey
 from mote.runtime.agent.components.context_provider import ContextProvider
 from mote.runtime.agent.role_state import RoleStateController
 from mote.runtime.agent.session_manager import RoleSessionManager
-from mote.runtime.artifacts import ArtifactRepositoryBlobStore, ArtifactRepositoryBundle
+from mote.runtime.artifacts import ArtifactRepositoryBundle, ContentAddressedArtifactBlobStore
 from mote.runtime.context import ContextManager, ContextVisibility
 from mote.runtime.context.turn import TurnContextBus
 from mote.runtime.events.backends import SQLiteSubscriptionStateStore
@@ -30,22 +30,25 @@ from mote.runtime.events.fabric import EventFabric
 from mote.runtime.events.telemetry import TelemetryRuntime
 from mote.runtime.fileops import FileOperations
 from mote.runtime.hook.manager import HookManager
-from mote.runtime.interactive import ArtifactCheckpointPayloadStore, RuntimeHost
 from mote.runtime.interactive.browser.profile import BrowserProfileStore
+from mote.runtime.interactive.checkpoint_store import ArtifactCheckpointPayloadStore
+from mote.runtime.interactive.host import RuntimeHost
 from mote.runtime.lsp.service import LspService
 from mote.runtime.models.gateway import LLMRouter
 from mote.runtime.models.inference_port import RuntimeModelInferencePort
 from mote.runtime.output.graph_service import GraphOutputService
-from mote.runtime.projections import RuntimeProjectionReconciler, RuntimeProjectionRegistry, SessionLiveProjection
+from mote.runtime.projections import RuntimeProjectionReconciler, RuntimeProjectionRegistry
 from mote.runtime.resources import ResourceRegistry
-from mote.runtime.sandbox import SandboxRuntime
+from mote.runtime.sandbox.runtime import SandboxRuntime
 from mote.runtime.secrets.store import SecretStore
 from mote.runtime.session import RuntimeCheckpointRecorder, SessionLog, SessionRuntimeProjectionJournal
 from mote.runtime.session.committer import SessionFactCommitter
+from mote.runtime.session.projection import SessionLiveProjection
 from mote.runtime.session.runtime_handoff import SessionRuntimeHandoffJournal
 from mote.runtime.session.runtime_operation import SessionRuntimeOperationJournal
 from mote.runtime.session.subscribers import CheckpointSubscriber, TitleSubscriber
 from mote.runtime.session.workspace import SessionWorkspace
+from mote.runtime.tools.permission.engine import PermissionEngine
 from mote.runtime.tools.snapshots import RuntimeToolSnapshotManager
 from mote.runtime.tools.tool_executor import ToolExecutor
 from mote.runtime.watching import FileWatchService
@@ -53,6 +56,7 @@ from mote.runtime.watching import FileWatchService
 WORKSPACE_STORE: ComponentKey[SessionWorkspace] = ComponentKey("workspace_store")
 BACKGROUND_POOL: ComponentKey[BackgroundTaskService] = ComponentKey("bg_pool")
 TOOL_CALL_POLICY: ComponentKey[ToolCallPolicy] = ComponentKey("tool_call_policy")
+PERMISSION_ENGINE: ComponentKey[PermissionEngine | None] = ComponentKey("permission_engine")
 TOOL_RESULT_POLICY: ComponentKey[ToolResultPolicy] = ComponentKey("tool_result_policy")
 EXECUTOR: ComponentKey[ToolExecutor[object]] = ComponentKey("executor")
 COMMAND_CHANNEL: ComponentKey[CommandChannel] = ComponentKey("command_channel")
@@ -94,8 +98,8 @@ SUBSCRIPTION_STATE_STORE: ComponentKey[SQLiteSubscriptionStateStore] = Component
 EVENT_FABRIC: ComponentKey[EventFabric] = ComponentKey("event_fabric")
 FILE_OPERATIONS: ComponentKey[FileOperations] = ComponentKey("file_operations")
 ARTIFACT_REPOSITORY_BUNDLE: ComponentKey[ArtifactRepositoryBundle] = ComponentKey("artifact_repository_bundle")
-ARTIFACT_BLOB_STORE: ComponentKey[ArtifactRepositoryBlobStore] = ComponentKey("artifact_blob_store")
-ARTIFACT_STORE: ComponentKey[ArtifactStore] = ComponentKey("artifact_store")
+ARTIFACT_BLOB_STORE: ComponentKey[ContentAddressedArtifactBlobStore] = ComponentKey("artifact_blob_store")
+ARTIFACT_STORE: ComponentKey[ArtifactLookupIndex] = ComponentKey("artifact_store")
 ARTIFACT_PUBLISHER: ComponentKey[ArtifactPublisherPort] = ComponentKey("artifact_publisher")
 CHECKPOINT_PAYLOAD_STORE: ComponentKey[ArtifactCheckpointPayloadStore] = ComponentKey("checkpoint_payload_store")
 RUNTIME_PROJECTION_JOURNAL: ComponentKey[SessionRuntimeProjectionJournal] = ComponentKey("runtime_projection_journal")
@@ -134,6 +138,7 @@ __all__ = [
     "INFERENCE_SUBSYSTEMS_FACTORY",
     "LSP_SERVICE",
     "PROMPT_POLICY",
+    "PERMISSION_ENGINE",
     "REPO_INDEX",
     "RESOURCE_REGISTRY",
     "ROUTER",

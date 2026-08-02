@@ -1,28 +1,22 @@
 """Immutable composition values inherited atomically by Agent incarnations."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from pathlib import Path
-from types import MappingProxyType
-from typing import Any, Callable, Generic, Mapping, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar, overload
 
-from mote.contracts.ports.code_intelligence.code_map import CodeMapIndexerFactory
-from mote.contracts.ports.code_intelligence.lsp import LspServiceFactory
-from mote.contracts.ports.conversation.compaction_policy import CompactionPolicyExtensionSpec
-from mote.contracts.ports.conversation.prompt_policy import PromptPolicyExtensionSpec
-from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicyExtensionSpec
-from mote.contracts.ports.skill.registry import SkillServiceFactory
-from mote.contracts.ports.task.operations import BackgroundTaskServiceFactory
-from mote.contracts.ports.tool.policy import ToolCallPolicyExtensionSpec
 from mote.contracts.runtime.application import ApplicationCompositionPort
 from mote.contracts.session.lease import RunLeasePolicy
 from mote.kernel.output import OutputContract, text_output_contract
 from mote.runtime.models.clients.context import Context
 from mote.runtime.services import EngineServices, EngineServicesLease
-from mote.runtime.tools.provider import NativeToolset, XmlToolset
 
 DepsT = TypeVar("DepsT")
 OutputT = TypeVar("OutputT")
+NewOutputT = TypeVar("NewOutputT")
+
+if TYPE_CHECKING:
+    from mote.runtime.agent.component_projection import AgentComponentProjection
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,57 +25,18 @@ class AgentDependencies(Generic[DepsT, OutputT]):
 
     deps: DepsT
     output_contract: OutputContract[OutputT]
+    component_projection: "AgentComponentProjection | None" = None
     run_lease_policy: RunLeasePolicy = field(default_factory=RunLeasePolicy)
-    toolsets: tuple[XmlToolset[DepsT] | NativeToolset[DepsT], ...] = ()
-    tool_policy_extensions: tuple[ToolCallPolicyExtensionSpec, ...] = ()
-    prompt_policy_extensions: tuple[PromptPolicyExtensionSpec, ...] = ()
-    compaction_policy_extensions: tuple[CompactionPolicyExtensionSpec, ...] = ()
-    run_completion_policy_extensions: tuple[RunCompletionPolicyExtensionSpec, ...] = ()
-    skill_service_factory: SkillServiceFactory | None = None
-    code_map_indexer_factory: CodeMapIndexerFactory | None = None
-    hook_config: Any = None
-    mcp_servers: tuple[Any, ...] = ()
-    primary_config_path: Path | None = None
-    config_secret_predicate: Callable[[str], bool] | None = None
-    watched_config_files: tuple[Path, ...] = ()
-    user_config_root: Path | None = None
-    session_workspace_root: Path | None = None
-    browser_profiles_root: Path | None = None
-    sandbox_ca_root: Path | None = None
-    secrets_root: Path | None = None
-    oauth_root: Path | None = None
-    lsp_service_factory: LspServiceFactory | None = None
-    background_task_pool_builder: BackgroundTaskServiceFactory | None = None
-    routing_strategy_builders: Mapping[str, Callable[[], object]] = field(default_factory=lambda: {})
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "toolsets", tuple(self.toolsets))
-        object.__setattr__(self, "watched_config_files", tuple(self.watched_config_files))
-        object.__setattr__(self, "mcp_servers", tuple(self.mcp_servers))
-        object.__setattr__(
-            self,
-            "tool_policy_extensions",
-            tuple(self.tool_policy_extensions),
-        )
-        object.__setattr__(
-            self,
-            "prompt_policy_extensions",
-            tuple(self.prompt_policy_extensions),
-        )
-        object.__setattr__(
-            self,
-            "compaction_policy_extensions",
-            tuple(self.compaction_policy_extensions),
-        )
-        object.__setattr__(
-            self,
-            "run_completion_policy_extensions",
-            tuple(self.run_completion_policy_extensions),
-        )
-        object.__setattr__(
-            self,
-            "routing_strategy_builders",
-            MappingProxyType(dict(self.routing_strategy_builders)),
+    def with_output_contract(
+        self, output_contract: OutputContract[NewOutputT]
+    ) -> "AgentDependencies[DepsT, NewOutputT]":
+        """Keep capabilities while selecting an explicit output specialization."""
+        return AgentDependencies(
+            deps=self.deps,
+            output_contract=output_contract,
+            component_projection=self.component_projection,
+            run_lease_policy=self.run_lease_policy,
         )
 
     @classmethod
@@ -118,6 +73,42 @@ class AgentWiring(Generic[DepsT, OutputT]):
         return replace(self, services_lease=self.services.acquire())
 
     @classmethod
+    @overload
+    def for_context(
+        cls,
+        context: Context,
+        *,
+        dependencies: AgentDependencies[DepsT, OutputT],
+        deps: None = None,
+        owned: bool = False,
+        application_composition: ApplicationCompositionPort | None = None,
+    ) -> "AgentWiring[DepsT, OutputT]": ...
+
+    @classmethod
+    @overload
+    def for_context(
+        cls,
+        context: Context,
+        *,
+        dependencies: None = None,
+        deps: DepsT,
+        owned: bool = False,
+        application_composition: ApplicationCompositionPort | None = None,
+    ) -> "AgentWiring[DepsT, str]": ...
+
+    @classmethod
+    @overload
+    def for_context(
+        cls,
+        context: Context,
+        *,
+        dependencies: None = None,
+        deps: None = None,
+        owned: bool = False,
+        application_composition: ApplicationCompositionPort | None = None,
+    ) -> "AgentWiring[None, str]": ...
+
+    @classmethod
     def for_context(
         cls,
         context: Context,
@@ -126,7 +117,7 @@ class AgentWiring(Generic[DepsT, OutputT]):
         deps: DepsT | None = None,
         owned: bool = False,
         application_composition: ApplicationCompositionPort | None = None,
-    ) -> "AgentWiring[Any, Any]":
+    ) -> "AgentWiring[DepsT, OutputT] | AgentWiring[DepsT, str] | AgentWiring[None, str]":
         """Provision a complete dependency value with one Context.
 
         Omitting ``dependencies`` intentionally selects the text-output Agent
@@ -136,11 +127,16 @@ class AgentWiring(Generic[DepsT, OutputT]):
 
         if dependencies is not None and deps is not None:
             raise ValueError("'dependencies' and 'deps' are mutually exclusive")
-        resolved = dependencies if dependencies is not None else replace(cls.defaults().dependencies, deps=deps)
         services = EngineServices(context=context, application_composition=application_composition)
+        if dependencies is None:
+            return AgentWiring(
+                services=services,
+                dependencies=AgentDependencies.text(deps),
+                services_lease=services.acquire() if owned else None,
+            )
         return AgentWiring(
             services=services,
-            dependencies=resolved,
+            dependencies=dependencies,
             services_lease=services.acquire() if owned else None,
         )
 
@@ -158,4 +154,7 @@ class AgentWiring(Generic[DepsT, OutputT]):
         return AgentWiring(dependencies=AgentDependencies[None, str].text(None))
 
 
-__all__ = ["AgentDependencies", "AgentWiring"]
+__all__ = [
+    "AgentDependencies",
+    "AgentWiring",
+]

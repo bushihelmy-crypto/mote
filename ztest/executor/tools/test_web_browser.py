@@ -15,6 +15,7 @@ closes its browser to free the subprocess.
 
 Skipped entirely when Playwright / its Chromium browser is unavailable.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -363,7 +364,7 @@ class TestActions:
 
     def test_screenshot_non_vision_model_raises(self, workspace):
         """A non-vision default model → refuse the capture (it could never reach it)."""
-        from mote.runtime.errors import ToolNotConfiguredError
+        from mote.contracts.tool.errors import ToolNotConfiguredError
 
         role = CapRole(cwd=str(workspace), default_model="gpt-4")
         tool = bind(WebBrowser(), role, session_id="b_shot_novision")
@@ -436,7 +437,7 @@ class TestReadImage:
 
     def test_read_image_no_vision_model_raises(self, caprole):
         """No vision model bound → ToolNotConfiguredError, not a plain-text notice."""
-        from mote.runtime.errors import ToolNotConfiguredError
+        from mote.contracts.tool.errors import ToolNotConfiguredError
 
         caprole.describe_image_text = None  # capability raises NotImplementedError
         tool = bind(WebBrowser(), caprole, session_id="b_img_novision")
@@ -715,7 +716,7 @@ class TestSecretFill:
         run(scenario())
 
     def test_unknown_secret_fails_closed(self, caprole):
-        from mote.runtime.errors import ToolError
+        from mote.contracts.tool.errors import ToolError
 
         tool = bind(WebBrowser(), caprole, session_id="b_sec_unknown")
 
@@ -771,7 +772,7 @@ class TestClientCerts:
         ]
 
     def test_resolve_client_certs_fails_closed_on_unknown_secret(self, caprole):
-        from mote.runtime.errors import ToolError
+        from mote.contracts.tool.errors import ToolError
 
         caprole.browser_client_certs = [
             {

@@ -83,6 +83,15 @@ class CostTracker:
     last_cost: float = 0.0  # USD cost of the most recent recorded call
     has_unknown_model_cost: bool = False
 
+    def attributed_cost_usd(self) -> float:
+        return self.total_cost
+
+    def attributed_total_tokens(self) -> int:
+        return self.total_token_usage().total_tokens
+
+    def attributed_cost_is_estimated(self) -> bool:
+        return self.has_unknown_model_cost
+
     # ------------------------------------------------------------------ record
     def add(self, usage: TokenUsage, model: Optional[str], *, context_window: int = 0) -> float:
         """Record one call's *usage* under *model*; returns its USD cost.

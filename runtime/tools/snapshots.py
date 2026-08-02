@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from uuid import uuid4
 
 from mote.contracts.tool.catalog import (
@@ -15,7 +13,9 @@ from mote.contracts.tool.catalog import (
     ToolDispatchResult,
     ToolExecutionOutcome,
 )
-from mote.runtime.tools.bound_registry import BoundTool, BoundToolRegistry, UnrecoverableBindingError
+from mote.runtime.tools.bound_registry import BoundToolRegistry, PinnedToolInvocation
+from mote.runtime.tools.definition_compiler import compile_tool_catalog_identity
+from mote.runtime.tools.tool_binding import ExecutableToolBinding
 
 
 class RuntimeToolSnapshotManager:
@@ -27,30 +27,20 @@ class RuntimeToolSnapshotManager:
 
     def materialize(self, target, *, include_hidden: bool) -> ToolBindingSnapshot:
         definitions = self._definitions(include_hidden=include_hidden)
-        payload = [
-            {
-                "name": item.name,
-                "description": item.description,
-                "input_schema": item.input_schema,
-                "semantic_identity": item.semantic_identity,
-                "effect": item.effect,
-                "defer_loading": item.defer_loading,
-            }
-            for item in definitions
-        ]
-        fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        bound_definitions = tuple(self._bound_definition(item.name) for item in definitions)
+        fingerprint = compile_tool_catalog_identity(bound_definitions)
         self._revision += 1
         snapshot_id = uuid4().hex
         catalog = MaterializedToolCatalog(
-            ToolCatalogIdentity("runtime-tools", "1"),
+            ToolCatalogIdentity("runtime-tools", fingerprint),
             self._revision,
             tuple(definitions),
             fingerprint,
         )
         tools = {
-            item.name: BoundTool(
+            item.name: PinnedToolInvocation(
                 item.semantic_identity,
-                self._bound_invoke(item.name),
+                self._bound_invoke(item.name, self._revision),
             )
             for item in definitions
         }
@@ -62,7 +52,7 @@ class RuntimeToolSnapshotManager:
             catalog=catalog,
             target_id=target.lease.target_id,
             capability_fingerprint=target.capability_fingerprint,
-            provider_descriptor="runtime-tool-provider@1",
+            provider_descriptor=f"runtime-tool-provider:{fingerprint}",
             registry_revision=self._revision,
             retention_lease_id=uuid4().hex,
         )
@@ -88,29 +78,41 @@ class RuntimeToolSnapshotManager:
         for spec in specs:
             name = str(spec.get("name") or "")
             tool = self._executor._catalog.get(name)
-            effect = getattr(getattr(tool, "effect", None), "value", None) or str(getattr(tool, "effect", "pure"))
+            if not isinstance(tool, ExecutableToolBinding):
+                raise TypeError(f"tool '{name}' is not an executable binding")
+            compiled = tool.compiled_definition
             definitions.append(
                 MaterializedToolDefinition(
                     name=name,
-                    description=str(spec.get("description") or ""),
-                    input_schema=dict(
-                        spec.get("input_schema") or spec.get("parameters") or {"type": "object", "properties": {}}
-                    ),
-                    semantic_identity=f"{name}@{getattr(tool, 'definition_version', '1')}",
-                    effect=effect,
+                    description=compiled.description,
+                    input_schema=compiled.input_schema,
+                    semantic_identity=compiled.semantic_identity,
+                    effect=compiled.effect.value,
                     defer_loading=bool(spec.get("defer_loading")),
                 )
             )
         return definitions
 
-    def _bound_invoke(self, name: str):
+    def _bound_definition(self, name: str):
+        tool = self._executor._catalog.get(name)
+        if not isinstance(tool, ExecutableToolBinding):
+            raise TypeError(f"tool '{name}' is not an executable binding")
+        return tool.compiled_definition
+
+    def _bound_invoke(self, name: str, registry_revision: int):
         pinned_tool = self._executor._catalog.get(name)
+        if not isinstance(pinned_tool, ExecutableToolBinding):
+            raise TypeError(f"tool '{name}' is not an executable binding")
 
         async def invoke(arguments):
-            if self._executor._catalog.get(name) is not pinned_tool:
-                raise UnrecoverableBindingError(name)
             call_id = str(arguments.pop("__mote_call_id", "")) or None
-            return await self._executor.run_command(name, arguments, result_id=call_id)
+            return await self._executor.run_pinned_command(
+                pinned_tool,
+                name,
+                arguments,
+                catalog_generation=registry_revision,
+                result_id=call_id,
+            )
 
         return invoke
 

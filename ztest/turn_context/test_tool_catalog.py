@@ -13,14 +13,15 @@ next turn re-sends everything. Under native tool-use the channel reports
 over ``get_executor`` / ``get_channel`` callables so it never imports the
 executor or the Role.
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 
+from mote.contracts.events.conversation import PostCompactEvent
 from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
 from mote.runtime.context.turn import ToolCatalogContextSource
-from mote.runtime.events import PostCompactEvent
 
 
 def run(coro):
@@ -58,6 +59,7 @@ def _source(executor, channel=None):
     return ToolCatalogContextSource(
         get_executor=lambda: executor,
         get_channel=lambda: channel,
+        mcp_enabled=lambda: True,
     )
 
 
@@ -93,6 +95,7 @@ class TestSilent:
         src = ToolCatalogContextSource(
             get_executor=lambda: _FakeExecutor(builtin={"Read": {}}),
             get_channel=lambda: None,
+            mcp_enabled=lambda: True,
         )
         assert run(src.render()) is None
 
@@ -100,6 +103,7 @@ class TestSilent:
         src = ToolCatalogContextSource(
             get_executor=lambda: None,
             get_channel=lambda: _FakeChannel(),
+            mcp_enabled=lambda: True,
         )
         assert run(src.render()) is None
 
@@ -214,8 +218,7 @@ class TestMcpEnabledGate:
         assert "# MCP Tools" in out
         assert "github:get_me" in out
 
-    def test_no_gate_falls_back_to_original_logic(self):
-        # mcp_enabled None → list MCP whenever the map is non-empty (unchanged).
+    def test_enabled_policy_is_explicit(self):
         exe = _FakeExecutor(mcp={"gh:x": {}}, pipeline={"deploy": {}})
         out = run(_source(exe).render())
         assert "# MCP Tools" in out

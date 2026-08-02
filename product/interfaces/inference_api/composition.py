@@ -13,15 +13,17 @@ from aiohttp import web
 
 from mote.contracts.artifact import ArtifactRef
 from mote.contracts.inference.deadline import CrossProcessDeadline
+from mote.contracts.inference.epochs import ExecutionEpochSource
 from mote.contracts.inference.executions import BoundExecutionRequest, TransferPartRequest
 from mote.contracts.inference.identity import InferencePrincipal, TrustedSchedulingClass
 from mote.contracts.model.failover import EndpointDescriptor
 from mote.contracts.ports.artifact.provider_transfer import ProviderArtifactTransferRuntime
-from mote.contracts.ports.artifact.store import ArtifactLookupIndex
+from mote.contracts.ports.artifact.store import ArtifactLookupIndex, GenerationArtifactReader
 from mote.contracts.ports.inference.session_runtime import SessionRuntime
 from mote.contracts.ports.inference.wire_permit import WirePermitIssuer
 from mote.contracts.ports.model.gateway import ModelGateway
 from mote.contracts.ports.service.command_runtime import ServiceCommandRuntime
+from mote.contracts.runtime.application import DefaultModelView
 from mote.product.inference.command_gateway import RuntimeArtifactTransferGateway, RuntimeCommandGateway
 from mote.product.inference.session_gateway import RuntimeSessionGateway
 from mote.product.interfaces.inference_api.application import InferenceApiAuthorizer, build_inference_api
@@ -38,10 +40,13 @@ class InferenceRuntimeLease(Protocol):
     session_runtime: SessionRuntime | None
     transfer_runtime: ProviderArtifactTransferRuntime | None
     permit_issuer: WirePermitIssuer | None
+    epoch_source: ExecutionEpochSource | None
     permit_audience: str
     generation_id: str
     generation_artifact_digest: str
-    default_model: object
+    default_model: DefaultModelView
+    artifact_store: ArtifactLookupIndex | None
+    artifact_reader: GenerationArtifactReader | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +109,7 @@ def build_generation_inference_api(
     bearer_token: str | None = None,
     authorizer: InferenceApiAuthorizer | None = None,
     artifact_store: ArtifactLookupIndex | None = None,
-    artifact_reader=None,
+    artifact_reader: GenerationArtifactReader | None = None,
     deadline_seconds: float = 60.0,
 ) -> web.Application:
     if deadline_seconds <= 0:
@@ -112,10 +117,11 @@ def build_generation_inference_api(
     if not lease.generation_id or not lease.generation_artifact_digest:
         raise ValueError("runtime lease has no generation identity")
     if artifact_store is None:
-        artifact_store = getattr(lease, "artifact_store", None)
+        artifact_store = lease.artifact_store
     if artifact_reader is None:
-        artifact_reader = getattr(lease, "artifact_reader", None)
+        artifact_reader = lease.artifact_reader
     issuer = lease.permit_issuer
+    epoch_source = lease.epoch_source
     audience = lease.permit_audience
     principal = InferencePrincipal(
         tenant_id="mote-application",
@@ -138,7 +144,7 @@ def build_generation_inference_api(
     realtime = None
     artifacts = None
     if lease.command_runtime is not None:
-        if issuer is None or not audience:
+        if issuer is None or epoch_source is None or not audience:
             raise ValueError("command runtime requires generation permit authority")
         durable = CommandCompatibilityOwner(
             RuntimeCommandGateway(
@@ -146,7 +152,7 @@ def build_generation_inference_api(
                 issuer,
                 context.request,
                 permit_audience=audience,
-                epoch_provider=lambda: (0, 0),
+                epoch_provider=lambda: epoch_source.snapshot().pair(),
             )
         )
         responses = ResponseCompatibilityOwner(
@@ -155,21 +161,21 @@ def build_generation_inference_api(
                 issuer,
                 context.request,
                 permit_audience=audience,
-                epoch_provider=lambda: (0, 0),
+                epoch_provider=lambda: epoch_source.snapshot().pair(),
             )
         )
     if lease.session_runtime is not None:
-        if issuer is None or not audience:
+        if issuer is None or epoch_source is None or not audience:
             raise ValueError("session runtime requires generation permit authority")
         realtime = RuntimeSessionGateway(
             lease.session_runtime,
             issuer,
             lambda payload: context.request("realtime.open", payload),
             permit_audience=audience,
-            epoch_provider=lambda: (0, 0),
+            epoch_provider=lambda: epoch_source.snapshot().pair(),
         )
     if lease.transfer_runtime is not None:
-        if issuer is None or not audience:
+        if issuer is None or epoch_source is None or not audience:
             raise ValueError("transfer runtime requires generation permit authority")
         artifacts = ArtifactTransferCompatibilityOwner(
             RuntimeArtifactTransferGateway(
@@ -177,7 +183,7 @@ def build_generation_inference_api(
                 issuer,
                 context.transfer,
                 permit_audience=audience,
-                epoch_provider=lambda: (0, 0),
+                epoch_provider=lambda: epoch_source.snapshot().pair(),
             ),
             artifact_store,
         )

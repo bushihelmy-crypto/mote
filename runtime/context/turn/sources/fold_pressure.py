@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional, Protocol, Union
 
+from mote.contracts.conversation.context import FoldState
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 
 
@@ -37,8 +38,7 @@ class _FoldStateProvider(Protocol):
     ``ContextManager``) keeps the source trivially fakeable in tests.
     """
 
-    def fold_state(self) -> object:
-        ...
+    def fold_state(self) -> FoldState | None: ...
 
 
 class FoldPressureContextSource:
@@ -81,14 +81,16 @@ class FoldPressureContextSource:
         if provider is None:
             return None
         state = provider.fold_state()
-        near = bool(state is not None and getattr(state, "near_fold", False))
+        near = state is not None and state.near_fold
         # Rising edge only: emit when we just entered the window, then latch so
         # later turns still inside it stay quiet. Update the latch every render
         # (including to False when the window is left) so the next entry re-fires.
         fire, self._was_near = (near and not self._was_near), near
         if not fire:
             return None
-        keep_recent = getattr(state, "keep_recent", 0)
+        if state is None:
+            return None
+        keep_recent = state.keep_recent
         return (
             "# Tool-result clearing threshold approaching\n"
             "Old tool results and whole-file Edit contents are nearing the clearing "

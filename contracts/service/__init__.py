@@ -7,6 +7,7 @@ from mote.contracts.service.journal import (
     ServiceCallJournalRecord,
     ServiceCallPlannedRecord,
     ServiceCallRecovery,
+    ServiceCallSuspendedRecord,
     ServiceDecisionRecord,
     ServiceReceiptAcceptedRecord,
 )
@@ -25,7 +26,21 @@ from mote.contracts.service.models import (
     ServicePlan,
     ServiceReceipt,
     ServiceResponse,
+    ServiceResumeHandle,
 )
+from mote.contracts.service.operations import (
+    HostedServicePayload,
+    HostedServiceResult,
+    MediaGenerationPayload,
+    MediaGenerationResult,
+    MediaGenerationSpec,
+    MediaKind,
+    WebSearchPayload,
+    WebSearchResult,
+    capability_for_payload,
+    route_for_payload,
+)
+from mote.contracts.service.reconciliation import PendingServiceCall
 
 __all__ = [
     "ResolvedServiceResponse",
@@ -37,6 +52,7 @@ __all__ = [
     "ServiceCallJournalRecord",
     "ServiceCallPlannedRecord",
     "ServiceCallRecovery",
+    "ServiceCallSuspendedRecord",
     "ServiceCallState",
     "ServiceCompleted",
     "ServiceDecisionRecord",
@@ -50,4 +66,16 @@ __all__ = [
     "ServiceReceipt",
     "ServiceReceiptAcceptedRecord",
     "ServiceResponse",
+    "ServiceResumeHandle",
+    "HostedServicePayload",
+    "HostedServiceResult",
+    "MediaGenerationPayload",
+    "MediaGenerationResult",
+    "MediaGenerationSpec",
+    "MediaKind",
+    "PendingServiceCall",
+    "WebSearchPayload",
+    "WebSearchResult",
+    "capability_for_payload",
+    "route_for_payload",
 ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,7 +12,7 @@ from mote.contracts.surface import SurfaceInput, SurfacePresentationMode
 from mote.product.toolsets.builtin.web_browser import WebBrowser
 from mote.runtime.interactive.browser import driver as browser_runtime_module
 from mote.runtime.interactive.browser.driver import BrowserRuntimeDriver
-from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
+from mote.runtime.interactive.checkpoint_codec import BROWSER_CHECKPOINT_CODEC, encode_inline_json
 
 
 class _FakeBrowserSession:
@@ -74,15 +75,23 @@ def test_browser_runtime_passes_a_user_owned_cdp_endpoint_to_the_session():
 
 @pytest.mark.asyncio
 async def test_browser_profile_persistence_is_independent_from_runtime_sink():
+    from mote.contracts.browser import BrowserProfileCommitReceipt
+
     saved = []
     tool = WebBrowser()
     tool.get_browser_profile = lambda: "acct"
-    tool.save_browser_profile = lambda profile, state: saved.append((profile, state))
+
+    def save(profile, state, revision):
+        saved.append((profile, state.to_payload(), revision))
+        return BrowserProfileCommitReceipt("subject", 1, "digest")
+
+    tool.save_browser_profile = save
     session = _FakeBrowserSession()
+    driver = SimpleNamespace(session=session, profile_snapshot=None)
 
-    await tool._persist_profile(session)
+    await tool._persist_profile(driver)
 
-    assert saved == [("acct", {"cookies": [], "origins": []})]
+    assert saved == [("acct", {"cookies": [], "origins": []}, None)]
 
 
 @pytest.mark.asyncio
@@ -96,7 +105,7 @@ async def test_browser_runtime_handoff_retains_observation_not_input(monkeypatch
     checkpoint = RuntimeCheckpoint(
         runtime_id="browser-runtime",
         kind="browser",
-        epoch=0,
+        epoch=1,
         revision=0,
         codec=encoded.codec,
         schema_version=encoded.schema_version,
@@ -172,10 +181,8 @@ async def test_profile_checkpoint_encrypts_storage_outside_rollout(monkeypatch):
         digest=encoded.digest,
         fidelity=encoded.fidelity or CheckpointFidelity.LOGICAL,
     )
-    payload = decode_inline_json(checkpoint, codec="browser-state+json@1")
+    payload = BROWSER_CHECKPOINT_CODEC.decode(checkpoint)
 
-    assert payload == {
-        "urls": ["data:text/html,ok"],
-        "active": 0,
-        "storage_state": None,
-    }
+    assert payload.urls == ("data:text/html,ok",)
+    assert payload.active == 0
+    assert payload.storage_state is None

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests the Role's explicit session-fact commit boundary end to end."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -75,10 +76,11 @@ class _CheckpointCaptureDriver:
 def _offline_context() -> Context:
     from mote.ztest.model_fakes import offline_config
 
-    return Context(config=offline_config())
+    return Context()
 
 
 def _offline_wiring(*, run_lease_coordinator=None, toolsets=()) -> AgentWiring:
+    from mote.product.agents.factory import CodingAgentFactory
     from mote.product.paths import default_runtime_paths
     from mote.ztest.model_fakes import FakeApplicationComposition, FakeModelGateway
 
@@ -88,16 +90,8 @@ def _offline_wiring(*, run_lease_coordinator=None, toolsets=()) -> AgentWiring:
         workspace_root=_runtime_root,
     )
     return AgentWiring(
-        dependencies=AgentDependencies(
-            deps=None,
-            output_contract=text_output_contract(),
-            toolsets=toolsets,
-            user_config_root=paths.user_config_root,
-            session_workspace_root=paths.session_workspace_root,
-            browser_profiles_root=paths.browser_profiles_root,
-            sandbox_ca_root=paths.sandbox_ca_root,
-            secrets_root=paths.secrets_root,
-            oauth_root=paths.oauth_root,
+        dependencies=CodingAgentFactory(paths=paths).dependencies(
+            deps=None, output_contract=text_output_contract(), toolsets=toolsets
         ),
         services=EngineServices(
             context=_offline_context(),
@@ -121,7 +115,7 @@ def _replay_result(**kwargs) -> SimpleNamespace:
 
 
 def _current_meta(role: Role) -> dict[str, object]:
-    return {"role_class": role.role_type_id, "toolset_manifest": []}
+    return {"role_class": role.residency_definition_id, "toolset_manifest": []}
 
 
 async def _initialize_session_log(role: Role) -> None:
@@ -129,7 +123,7 @@ async def _initialize_session_log(role: Role) -> None:
     await role.session_log.append(
         SessionMetaEvent(
             session_id=role.session_id,
-            role_class=role.role_type_id,
+            role_class=role.residency_definition_id,
             toolset_manifest=(),
         )
     )
@@ -315,7 +309,7 @@ async def test_committed_graph_output_resumes_by_stable_run_id(role_in_tmp):
 
 @pytest.mark.asyncio
 async def test_concurrent_graph_resume_has_one_live_owner(role_in_tmp):
-    from mote.runtime.errors import RunLeaseUnavailableError
+    from mote.contracts.output.errors import RunLeaseUnavailableError
     from mote.runtime.models.clients.context import Context
 
     contender = Role(name="Contender", wiring=_offline_wiring())
@@ -329,7 +323,7 @@ async def test_concurrent_graph_resume_has_one_live_owner(role_in_tmp):
 
 @pytest.mark.asyncio
 async def test_role_accepts_replaceable_lease_coordinator(tmp_path):
-    from mote.runtime.errors import OutputCommitFencedError
+    from mote.contracts.output.errors import OutputCommitFencedError
     from mote.runtime.models.clients.context import Context
     from mote.runtime.session.run_lease import RunLeaseStore
 
@@ -373,7 +367,7 @@ async def test_resume_session_rebuilds_history(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_resume_refuses_mismatched_role_class(tmp_path, monkeypatch):
     """Resuming a session into a different Role class is refused fail-closed."""
-    from mote.runtime.errors import SessionResumeIdentityError
+    from mote.runtime.agent.errors import SessionResumeIdentityError
     from mote.runtime.models.clients.context import Context
 
     monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
@@ -386,7 +380,7 @@ async def test_resume_refuses_mismatched_role_class(tmp_path, monkeypatch):
     await _add_message(role_a, UserMessage(content="first"))
 
     class OtherRole(Role):
-        pass
+        role_type_id = "test.other-role.v1"
 
     role_b = _offline_role("B", role_type=OtherRole)
     role_b.state.session_id = sid
@@ -394,22 +388,23 @@ async def test_resume_refuses_mismatched_role_class(tmp_path, monkeypatch):
         role_b.resume_session()
 
 
-def test_resume_allows_absent_recorded_role_class(tmp_path, monkeypatch):
-    """A log with no recorded role_class carries no identity to check → allowed."""
+def test_resume_rejects_absent_recorded_role_class(tmp_path, monkeypatch):
+    """Missing durable definition identity fails closed."""
+    from mote.runtime.agent.errors import SessionResumeIdentityError
     from mote.runtime.models.clients.context import Context
 
     monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path / ".agent_sessions")
     role = Role(name="Any", wiring=_offline_wiring())
     mgr = role._session_manager
-    # Absent / empty recorded identity never raises (backward compatible).
-    mgr.validate_identity({})
-    mgr.validate_identity({"role_class": None})
+    for meta in ({}, {"role_class": None, "toolset_manifest": []}):
+        with pytest.raises((KeyError, SessionResumeIdentityError)):
+            mgr.validate_identity(meta)
     # A matching identity also passes.
-    mgr.validate_identity({"role_class": mgr._role_identity(role)})
+    mgr.validate_identity({"role_class": mgr._role_identity(role), "toolset_manifest": []})
 
 
 def test_resume_refuses_mismatched_toolset_manifest() -> None:
-    from mote.runtime.errors import SessionResumeIdentityError
+    from mote.runtime.agent.errors import SessionResumeIdentityError
     from mote.runtime.tools.provider import NativeToolset
 
     recorded = NativeToolset("workspace", (), version="1")
@@ -437,7 +432,7 @@ def test_resume_enforces_persisted_toolset_manifest(
     current_version,
     succeeds,
 ) -> None:
-    from mote.runtime.errors import SessionResumeIdentityError
+    from mote.runtime.agent.errors import SessionResumeIdentityError
     from mote.runtime.session.log import SessionLog
     from mote.runtime.tools.provider import NativeToolset
 

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
-from mote.contracts.model.inference import FinalizedInferenceRequest, InferenceAttemptFence, TargetInvalidated
+from mote.contracts.conversation import UserMessage
+from mote.contracts.model.inference import (
+    FinalizedGenerateRequest,
+    FinalizedInferenceRequest,
+    InferenceAttemptFence,
+    TargetInvalidated,
+)
+from mote.contracts.model.invocation import GenerateOutput
 from mote.runtime.models import inference_port as inference_port_module
 from mote.runtime.models.inference_port import RuntimeModelInferencePort, TargetCapacityError
 
@@ -20,21 +26,38 @@ class _RuntimeLease:
         self.closed = True
 
 
+def _request(call_id: str = "call") -> FinalizedInferenceRequest:
+    return FinalizedInferenceRequest(
+        call_id,
+        FinalizedGenerateRequest(messages=(UserMessage("hello"),), task="interactive"),
+    )
+
+
+def test_finalized_request_rejects_wrong_operation_payload() -> None:
+    with pytest.raises(TypeError, match="only accepts a generate"):
+        FinalizedInferenceRequest("call", object())  # type: ignore[reportArgumentType]
+    with pytest.raises(TypeError, match="canonical Message"):
+        FinalizedGenerateRequest(  # type: ignore[arg-type]
+            messages=("hello",),
+            task="interactive",
+        )
+
+
 @pytest.mark.asyncio
 async def test_late_inference_attempt_is_fenced(monkeypatch):
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def generate(_route, **_payload):
+    async def generate(_route, _request, **_payload):
         entered.set()
         await release.wait()
-        return SimpleNamespace(content="old", tool_calls=[]), None
+        return GenerateOutput(content="old"), None
 
-    monkeypatch.setattr(inference_port_module, "generate", generate)
+    monkeypatch.setattr(inference_port_module, "generate_finalized", generate)
     port = RuntimeModelInferencePort()
     llm = FakeLLM()
     target = port.pin_route(llm.route)
-    request = FinalizedInferenceRequest("call", {})
+    request = _request()
     old = asyncio.create_task(port.infer(target, request, InferenceAttemptFence("call", "old", 1)))
     await entered.wait()
     newer = asyncio.create_task(port.infer(target, request, InferenceAttemptFence("call", "new", 2)))
@@ -49,16 +72,16 @@ async def test_late_inference_attempt_is_fenced(monkeypatch):
 async def test_same_attempt_returns_cached_result(monkeypatch):
     calls = 0
 
-    async def generate(_route, **_payload):
+    async def generate(_route, _request, **_payload):
         nonlocal calls
         calls += 1
-        return SimpleNamespace(content="done", tool_calls=[]), None
+        return GenerateOutput(content="done"), None
 
-    monkeypatch.setattr(inference_port_module, "generate", generate)
+    monkeypatch.setattr(inference_port_module, "generate_finalized", generate)
     port = RuntimeModelInferencePort()
     llm = FakeLLM()
     target = port.pin_route(llm.route)
-    request = FinalizedInferenceRequest("call", {})
+    request = _request()
     attempt = InferenceAttemptFence("call", "attempt", 1)
 
     first = await port.infer(target, request, attempt)
@@ -74,17 +97,17 @@ async def test_concurrent_same_attempt_shares_one_provider_call(monkeypatch):
     release = asyncio.Event()
     calls = 0
 
-    async def generate(_route, **_payload):
+    async def generate(_route, _request, **_payload):
         nonlocal calls
         calls += 1
         entered.set()
         await release.wait()
-        return SimpleNamespace(content="done", tool_calls=[]), None
+        return GenerateOutput(content="done"), None
 
-    monkeypatch.setattr(inference_port_module, "generate", generate)
+    monkeypatch.setattr(inference_port_module, "generate_finalized", generate)
     port = RuntimeModelInferencePort()
     target = port.pin_route(FakeLLM().route)
-    request = FinalizedInferenceRequest("call", {})
+    request = _request()
     attempt = InferenceAttemptFence("call", "attempt", 1)
     first = asyncio.create_task(port.infer(target, request, attempt))
     await entered.wait()
@@ -99,15 +122,15 @@ async def test_concurrent_same_attempt_shares_one_provider_call(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_attempt_and_request_identity_must_match(monkeypatch):
-    async def fail_generate(_route, **_payload):
+    async def fail_generate(_route, _request, **_payload):
         raise AssertionError("provider must not be called")
 
-    monkeypatch.setattr(inference_port_module, "generate", fail_generate)
+    monkeypatch.setattr(inference_port_module, "generate_finalized", fail_generate)
     port = RuntimeModelInferencePort()
     target = port.pin_route(FakeLLM().route)
     result = await port.infer(
         target,
-        FinalizedInferenceRequest("request-call", {}),
+        _request("request-call"),
         InferenceAttemptFence("attempt-call", "attempt", 1),
     )
 
@@ -120,19 +143,19 @@ async def test_release_waits_for_active_inference_before_closing_lease(monkeypat
     entered = asyncio.Event()
     finish = asyncio.Event()
 
-    async def generate(_route, **_payload):
+    async def generate(_route, _request, **_payload):
         entered.set()
         await finish.wait()
-        return SimpleNamespace(content="done", tool_calls=[]), None
+        return GenerateOutput(content="done"), None
 
-    monkeypatch.setattr(inference_port_module, "generate", generate)
+    monkeypatch.setattr(inference_port_module, "generate_finalized", generate)
     port = RuntimeModelInferencePort()
     lease = _RuntimeLease()
     target = port.pin_route(FakeLLM().route, runtime_lease=lease)
     inference = asyncio.create_task(
         port.infer(
             target,
-            FinalizedInferenceRequest("call", {}),
+            _request(),
             InferenceAttemptFence("call", "attempt", 1),
         )
     )
@@ -182,7 +205,7 @@ async def test_expired_ready_target_closes_its_runtime_lease():
 
     result = await port.infer(
         target,
-        FinalizedInferenceRequest("call", {}),
+        _request(),
         InferenceAttemptFence("call", "attempt", 1),
     )
 

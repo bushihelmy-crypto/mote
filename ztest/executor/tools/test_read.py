@@ -6,6 +6,7 @@ Covers text slicing (offset/limit + line numbers), the empty/short-file and
 binary/device guards, notebook flattening, image media results, the per-instance
 dedup cache, and the shared file-read-state recording used by Write/Edit.
 """
+
 from __future__ import annotations
 
 import base64
@@ -313,7 +314,7 @@ class TestReadVideo:
 
     def test_unavailable_raises_not_configured(self, workspace, monkeypatch):
         import mote.product.toolsets.builtin.read_adapters.video as video_adapter
-        from mote.runtime.errors import ToolNotConfiguredError
+        from mote.contracts.tool.errors import ToolNotConfiguredError
         from mote.runtime.media.video import VideoUnavailable
 
         async def fake(*a, **k):
@@ -533,7 +534,7 @@ class TestReadImage:
 
     def test_non_vision_model_raises(self, workspace):
         """Default model is not vision-capable → refuse before attaching the image."""
-        from mote.runtime.errors import ToolNotConfiguredError
+        from mote.contracts.tool.errors import ToolNotConfiguredError
 
         png = base64.b64decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -551,7 +552,7 @@ class TestReadPdf:
 
     def test_non_pdf_model_raises(self, workspace):
         """Default model does not accept native PDF input → refuse up-front."""
-        from mote.runtime.errors import ToolNotConfiguredError
+        from mote.contracts.tool.errors import ToolNotConfiguredError
 
         p = os.path.join(str(workspace), "doc.pdf")
         with open(p, "wb") as f:

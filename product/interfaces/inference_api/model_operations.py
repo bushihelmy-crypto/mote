@@ -15,12 +15,12 @@ from mote.contracts.model.invocation import (
     ImageGenerationInput,
     ImageGenerationOutput,
     ModelInvocation,
-    ModelOperation,
     SpeechInput,
     SpeechOutput,
     TranscriptionInput,
     TranscriptionOutput,
 )
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.topology import DefaultRoute, RouteId
 from mote.contracts.ports.model.gateway import ModelGateway
 from mote.product.interfaces.inference_api.operations import UnaryCompatibilityOwner

@@ -17,6 +17,7 @@ Usage:
     schema = build_json_schema(MyTool.call)              # {type:object, properties, required}
     specs = to_native_tool_specs({name: native_schema}, "anthropic")  # provider envelope
 """
+
 from __future__ import annotations
 
 import inspect
@@ -61,7 +62,7 @@ def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
     return annotation, False
 
 
-def _json_type(annotation: Any) -> dict[str, Any]:
+def annotation_to_json_schema(annotation: Any) -> dict[str, Any]:
     """Map a Python annotation to a JSON Schema type fragment.
 
     Falls back to {"type": "string"} for anything unrecognized — native APIs
@@ -76,7 +77,7 @@ def _json_type(annotation: Any) -> dict[str, Any]:
     # Parameterized generics: list[str], dict[str, int], etc.
     if origin in (list, set, tuple):
         args = typing.get_args(inner)
-        item = _json_type(args[0]) if args else {"type": "string"}
+        item = annotation_to_json_schema(args[0]) if args else {"type": "string"}
         return {"type": "array", "items": item}
     if origin is dict:
         return {"type": "object"}
@@ -94,10 +95,6 @@ def _json_type(annotation: Any) -> dict[str, Any]:
 
     # Unknown / unhashable (e.g. typing constructs, Path) → permissive string.
     return {"type": "string"}
-
-
-# Public alias — used by bggraph.base_node for node-level JSON Schema generation.
-annotation_to_json_schema = _json_type
 
 
 def _parse_arg_descriptions(docstring: str | None) -> dict[str, str]:
@@ -171,7 +168,7 @@ def build_json_schema(call_fn: Callable[..., Any]) -> dict[str, Any]:
             continue
 
         annotation = hints.get(name, param.annotation)
-        prop = _json_type(annotation)
+        prop = annotation_to_json_schema(annotation)
         if name in descriptions and descriptions[name]:
             prop["description"] = descriptions[name]
         properties[name] = prop

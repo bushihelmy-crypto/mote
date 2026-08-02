@@ -44,7 +44,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from mote.runtime.errors import ToolValidationError
+from mote.contracts.tool.errors import ToolValidationError
+from mote.contracts.tool.result import json_tool_payload
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import DescribeDeferredTools, ListDeferredTools, RegisterResource, RevealTools
 from mote.runtime.tools.tool_result import ToolResult
@@ -163,7 +164,7 @@ class SearchTools(BaseTool):
         # ``tool_reference`` blocks that the API expands into full definitions.
         # Other providers/XML ignore ``data`` — the human-readable ``output`` and
         # the durable RoleState reveal drive the client-side fallback there.
-        return ToolResult(output=output, data={"tool_references": revealed})
+        return ToolResult(output=output, payload=json_tool_payload({"tool_references": revealed}))
 
     def _persist_descriptions(self, descriptions: dict[str, str]) -> None:
         """Register each revealed tool's full description as a sticky resource.

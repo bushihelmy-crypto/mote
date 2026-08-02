@@ -6,13 +6,15 @@ import pytest
 
 from mote.contracts.agent import BaseAgent
 from mote.contracts.tool import CommandProtocol
+from mote.contracts.tool.errors import ToolNotConfiguredError
 from mote.kernel.output import text_output_contract
+from mote.product.agents.catalog import AgentCatalog
 from mote.product.composition.container import ProductContainer
+from mote.product.composition.lifecycle import lifecycle_resources
 from mote.product.media_generation.registry import MediaProvider
 from mote.product.web_search.registry import SearchBackend
 from mote.runtime.agent import Role
 from mote.runtime.control.lifecycle import LifecycleState
-from mote.runtime.errors import ToolNotConfiguredError
 from mote.runtime.services import EngineServices
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
@@ -40,6 +42,23 @@ def _config():
     )
 
 
+def test_standard_construction_does_not_discover_checkout_extensions(monkeypatch, tmp_path) -> None:
+    import mote.product.composition.container as container_module
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("standard construction crossed the extension activation boundary")
+
+    monkeypatch.setattr(container_module, "discover_source_files", unexpected)
+    monkeypatch.setattr(container_module, "load_global_hooks", unexpected)
+    monkeypatch.setattr(container_module, "load_mcp_servers", unexpected)
+    monkeypatch.setattr(container_module, "builtin_agent_catalog", unexpected)
+
+    container = ProductContainer.standard(_config(), cwd=tmp_path)
+
+    assert "agent_factory" not in container.__dict__
+    assert "agents" not in container.__dict__
+
+
 def test_standard_product_containers_are_fully_isolated() -> None:
     first = ProductContainer.standard(_config())
     second = ProductContainer.standard(_config())
@@ -58,7 +77,7 @@ def test_builtin_catalogs_are_copied_into_each_container() -> None:
     container = ProductContainer.standard(_config())
 
     assert container.search_backends.get_backend("provider").name == "provider"
-    assert sorted(container.media_providers.providers) == [
+    assert sorted(container.media_providers.snapshot) == [
         ("audio", "openai"),
         ("image", "openai"),
         ("music", "openai"),
@@ -91,7 +110,7 @@ async def test_engine_services_close_product_routing_runtime() -> None:
     container = ProductContainer.standard(_config())
     services = EngineServices(
         context=_Context(),
-        resources=container.lifecycle_resources(),
+        resources=lifecycle_resources(container.routing_models),
     )
 
     await services.aclose()
@@ -192,6 +211,25 @@ def test_plugin_catalog_generation_does_not_mutate_existing_sessions() -> None:
     }
     assert "TenantTool" not in original_names
     assert "TenantTool" in extended_names
+
+
+def test_plugin_recomposition_stays_lazy_and_preserves_canonical_cwd(monkeypatch, tmp_path) -> None:
+    import mote.product.composition.container as container_module
+
+    observed_cwds = []
+
+    def catalog(factory, cwd, *, source_policy):
+        observed_cwds.append(cwd)
+        return AgentCatalog.from_types((), factory)
+
+    monkeypatch.setattr(container_module, "builtin_agent_catalog", catalog)
+    original = ProductContainer.standard(_config(), cwd=tmp_path)
+
+    extended = original.with_plugins()
+
+    assert observed_cwds == []
+    assert extended.agents is not None
+    assert observed_cwds == [tmp_path]
 
 
 def test_application_snapshot_projects_separate_xml_and_native_definitions() -> None:

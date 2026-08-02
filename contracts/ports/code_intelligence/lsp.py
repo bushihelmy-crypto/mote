@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from mote.contracts.events.telemetry import DiagnosticsEvent
 from mote.contracts.ports.events.subscription import CommittedEventHandler
 from mote.contracts.ports.events.telemetry import TelemetryEmitter
 
@@ -26,7 +27,7 @@ class LspServiceFactory(Protocol):
         self,
         config: object,
         project_root: Path,
-        telemetry: TelemetryEmitter,
+        telemetry: TelemetryEmitter[DiagnosticsEvent],
     ) -> CommittedEventHandler: ...
 
     def build_diagnostics_provider(self) -> DiagnosticsProvider: ...

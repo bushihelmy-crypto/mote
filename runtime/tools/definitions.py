@@ -11,6 +11,7 @@ from mote.contracts.tool import NativeToolSchema, XmlToolSchema
 from mote.contracts.tool.execution import ToolExecutionKind
 from mote.kernel.tools.docstrings import description_body, first_line
 from mote.kernel.tools.spec_adapter import build_json_schema
+from mote.runtime.tools.definition_compiler import python_tool_source_identity
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_convert import function_docstring_to_schema
 
@@ -86,6 +87,7 @@ def xml_definition(
             if description is not None
             else render_xml_capability
         ),
+        source_identity=python_tool_source_identity(capability_type),
         description=resolved_description,
         summary=first_line(resolved_description),
         search_text=_search_text_from_description(capability_type, resolved_description),
@@ -110,6 +112,7 @@ def native_definition(
             if description is not None
             else render_native_capability
         ),
+        source_identity=python_tool_source_identity(capability_type),
         description=resolved_description,
         summary=first_line(resolved_description),
         search_text=_search_text_from_description(capability_type, resolved_description),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import NewType, Protocol, TypeGuard, TypeVar
+from typing import NewType, Protocol, TypeVar
 
 TelemetryIdentity = NewType("TelemetryIdentity", str)
 
@@ -36,29 +36,23 @@ class TelemetrySubscriptionSpec:
 
 
 EventT_contra = TypeVar("EventT_contra", contravariant=True)
-EventT_co = TypeVar("EventT_co", covariant=True)
 
 
 class TelemetryHandler(Protocol[EventT_contra]):
     async def handle(self, event: EventT_contra) -> None: ...
 
 
-class TelemetryEmitter(Protocol):
-    async def emit(self, event: object) -> None: ...
+class TelemetryEmitter(Protocol[EventT_contra]):
+    async def emit(self, event: EventT_contra) -> None: ...
 
 
 class SyncTelemetryHandler(Protocol[EventT_contra]):
     def handle_sync(self, event: EventT_contra) -> None: ...
 
 
-class EventNarrower(Protocol[EventT_co]):
-    def __call__(self, event: object) -> TypeGuard[EventT_co]: ...
-
-
 __all__ = [
     "MAX_TELEMETRY_CAPACITY",
     "MAX_TELEMETRY_IDENTITY_BYTES",
-    "EventNarrower",
     "SyncTelemetryHandler",
     "TelemetryHandler",
     "TelemetryEmitter",

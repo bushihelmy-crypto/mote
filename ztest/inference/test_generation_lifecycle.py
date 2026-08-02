@@ -25,7 +25,11 @@ def test_generation_lifecycle_drains_all_before_closing_any_resource():
         events = []
         first = _Resource("first", events)
         second = _Resource("second", events)
-        lifecycle = GenerationLifecycle((first, second, first), drain_timeout_seconds=7)
+        lifecycle = GenerationLifecycle(
+            (first, second, first),
+            drainables=(first, second, first),
+            drain_timeout_seconds=7,
+        )
         await lifecycle.aclose()
         await lifecycle.aclose()
         return events
@@ -41,12 +45,9 @@ def test_generation_lifecycle_drains_all_before_closing_any_resource():
 def test_generation_lifecycle_closes_every_resource_after_drain_failure():
     async def scenario():
         events = []
-        lifecycle = GenerationLifecycle(
-            (
-                _Resource("bad", events, fail_drain=True),
-                _Resource("good", events),
-            )
-        )
+        bad = _Resource("bad", events, fail_drain=True)
+        good = _Resource("good", events)
+        lifecycle = GenerationLifecycle((bad, good), drainables=(bad, good))
         with pytest.raises(BaseExceptionGroup) as captured:
             await lifecycle.aclose()
         return events, captured.value

@@ -40,7 +40,7 @@ from mote.runtime.telemetry.logging import logger
 #: map means "no servers configured"; a user pastes community blocks under it.
 _MCP_TEMPLATE = {"mcpServers": {}}
 
-#: The global hooks file mote discovers (``common.hook.config_source``). An empty
+#: The global hooks file discovered by the Product-owned hook config source. An empty
 #: map means "no hooks configured"; a user adds event → matcher-group rules.
 _HOOKS_TEMPLATE = {"hooks": {}}
 

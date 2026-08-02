@@ -2,20 +2,40 @@
 
 from __future__ import annotations
 
+from types import TracebackType
 from typing import Protocol
 
-from mote.contracts.service import ServiceCallJournalRecord, ServiceCallRecovery
+from mote.contracts.service import PendingServiceCall, ServiceCallJournalRecord, ServiceCallRecovery
 
 
 class ServiceCallJournal(Protocol):
-    async def append(self, record: ServiceCallJournalRecord) -> None:
-        ...
+    def claim(self, service_call_id: str) -> "ServiceCallOwnershipClaim": ...
 
-    def records(self, service_call_id: str) -> tuple[ServiceCallJournalRecord, ...]:
-        ...
+    async def append(self, record: ServiceCallJournalRecord) -> None: ...
 
-    def recover(self, service_call_id: str) -> ServiceCallRecovery:
-        ...
+    def records(self, service_call_id: str) -> tuple[ServiceCallJournalRecord, ...]: ...
+
+    def recover(self, service_call_id: str) -> ServiceCallRecovery: ...
+
+    async def pending_calls(self, *, after: str | None, limit: int) -> tuple[PendingServiceCall, ...]: ...
+
+    async def request_cancel(self, service_call_id: str) -> None: ...
+
+    def cancellation_requested(self, service_call_id: str) -> bool: ...
 
 
-__all__ = ["ServiceCallJournal"]
+class ServiceCallOwnershipClaim(Protocol):
+    async def __aenter__(self) -> "ServiceCallOwnershipClaim": ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+    @property
+    def generation(self) -> int: ...
+
+
+__all__ = ["ServiceCallJournal", "ServiceCallOwnershipClaim"]

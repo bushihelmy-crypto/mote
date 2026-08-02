@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 from mote.contracts.events.conversation import (
     ContextCompactedEvent,
     HistoryEditedEvent,
@@ -11,12 +9,22 @@ from mote.contracts.events.conversation import (
     PromptRejectedEvent,
 )
 from mote.contracts.events.model import ModelCallFinishedEvent, RoutingDecisionEvent
+from mote.contracts.events.output import (
+    OutputAcceptedEvent,
+    OutputCandidateReceivedEvent,
+    OutputCommitStartedEvent,
+    OutputCommittedEvent,
+    OutputMigratedEvent,
+    OutputPublicationQueuedEvent,
+    OutputPublishedEvent,
+    OutputValidationRejectedEvent,
+)
 from mote.contracts.events.session import TurnEndEvent
 from mote.contracts.model.failover import ModelCallSummary
 from mote.contracts.ports.events.journal import AppendResult
+from mote.contracts.ports.session.facts import RolloutSourceEvent
 from mote.runtime.events.fabric import EventFabric
 from mote.runtime.session.codec import encode_session_event
-from mote.runtime.session.event_policy import is_rollout_event
 from mote.runtime.session.events import (
     ContextCompactedFact,
     HistoryEditedFact,
@@ -46,9 +54,7 @@ class SessionFactCommitter:
         fact = encode_session_event(event, session_id=self._log.session_id)
         return self._fabric.append_from_thread(self._log.stream_id, (fact,))
 
-    async def commit_fact(self, event: object) -> AppendResult | None:
-        if not is_rollout_event(event):
-            raise TypeError(f"event is not a session fact: {type(event).__name__}")
+    async def commit_fact(self, event: RolloutSourceEvent) -> AppendResult:
         persisted: SessionEvent
         if isinstance(event, MessageAppendedEvent):
             persisted = MessageEvent(message=event.message)
@@ -87,8 +93,23 @@ class SessionFactCommitter:
                 state=dict(event.state),
                 route_schema_version=event.route_schema_version,
             )
+        elif isinstance(
+            event,
+            (
+                OutputCandidateReceivedEvent,
+                OutputValidationRejectedEvent,
+                OutputAcceptedEvent,
+                OutputCommitStartedEvent,
+                OutputMigratedEvent,
+                OutputCommittedEvent,
+                OutputPublicationQueuedEvent,
+                OutputPublishedEvent,
+                PromptRejectedEvent,
+            ),
+        ):
+            persisted = event
         else:
-            persisted = cast(SessionEvent, event)
+            raise TypeError(f"event has no session fact projection: {type(event).__name__}")
         result = await self.commit_event(persisted)
         if isinstance(event, (PromptRejectedEvent, TurnEndEvent)):
             await self._log.writer.drain()

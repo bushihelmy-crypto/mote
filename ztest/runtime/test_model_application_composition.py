@@ -111,6 +111,40 @@ def test_failed_and_stale_candidates_are_closed() -> None:
     asyncio.run(scenario())
 
 
+def test_reload_cannot_expand_capabilities_or_change_trust_identity() -> None:
+    async def scenario() -> None:
+        container = AtomicApplicationComposition()
+        first, _ = _candidate(container, "one")
+        first.approved_capabilities = frozenset({"tools.read"})
+        first.trust_revision = "trusted-v1"
+        await container.activate(first, container.issue_activation_token(), ExpectedEmpty())
+
+        expanded, expanded_handle = _candidate(container, "two", "runtime-2")
+        expanded.approved_capabilities = frozenset({"tools.read", "tools.shell"})
+        expanded.trust_revision = "trusted-v1"
+        with pytest.raises(ApplicationNotReadyError, match="expands"):
+            await container.activate(
+                expanded,
+                container.issue_activation_token(),
+                ExpectedActive(container.current_generation_id),
+            )
+        assert expanded_handle.releases == 1
+
+        changed, changed_handle = _candidate(container, "three", "runtime-3")
+        changed.approved_capabilities = frozenset({"tools.read"})
+        changed.trust_revision = "unapproved-checkout-change"
+        with pytest.raises(ApplicationNotReadyError, match="trusted"):
+            await container.activate(
+                changed,
+                container.issue_activation_token(),
+                ExpectedActive(container.current_generation_id),
+            )
+        assert changed_handle.releases == 1
+        await container.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_empty_shutdown_is_idempotent() -> None:
     async def scenario() -> None:
         container = AtomicApplicationComposition()

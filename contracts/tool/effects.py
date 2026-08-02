@@ -21,7 +21,7 @@ everything else → EXTERNAL (conservative: an untagged tool with an unknown
 effect is guarded, not silently replayed). A tool overrides the class attribute
 only when the derivation is wrong for it.
 
-Lives in ``common.schema`` as a pure leaf enum (like ``node_status``) so every
+Lives in Contracts as a pure leaf enum so every
 layer — the tool base class, the executor chokepoint, and the resume/replay
 reconciler — imports it without a dependency cycle.
 """

@@ -7,12 +7,14 @@ collecting progress writer (via :func:`set_progress_writer`) and assert on the
 captured text.  Also covers the ``report_progress`` no-op-outside-context
 contract and the ``_render_*`` / ``_resolve_param_source`` helpers.
 """
+
 from __future__ import annotations
 
 import pytest
 
-from mote.orchestration.background_tasks.delivery import report_progress, reset_progress_writer, set_progress_writer
-from mote.orchestration.workflows import END, START, BgStatus, GraphBatchFailureError, WorkflowBuilder
+from mote.contracts.workflow.identity import WorkflowDefinitionId
+from mote.orchestration.workflows import END, START, GraphBatchFailureError, WorkflowBuilder, WorkflowNodeStatus
+from mote.orchestration.workflows.events import emit_workflow_progress, reset_progress_sink, set_progress_sink
 from mote.orchestration.workflows.notify import (
     _render_completed_nodes,
     _render_status_nodes,
@@ -33,8 +35,8 @@ class _Collector:
     def __init__(self):
         self.events: list[tuple] = []
 
-    def __call__(self, stage, status, detail=None):
-        self.events.append((stage, status, detail))
+    def emit(self, event):
+        self.events.append((event.stage, WorkflowNodeStatus(event.phase.value), event.detail))
 
     @property
     def text(self) -> str:
@@ -44,15 +46,16 @@ class _Collector:
 @pytest.fixture
 def collector():
     c = _Collector()
-    token = set_progress_writer(c)
+    token = set_progress_sink(c)
     try:
         yield c
     finally:
-        reset_progress_writer(token)
+        reset_progress_sink(token)
 
 
 def _build_graph() -> WorkflowBuilder:
     g = WorkflowBuilder("media", state_schema=S)
+    g._definition_id = WorkflowDefinitionId("definition-media")
     g.add_node("split", sync_node(lambda s: {"parts": 3}), params={"src": {"from": "$input.x"}})
     g.add_node("tts", sync_node(lambda s: "audio"))
     g.add_node("render", sync_node(lambda s: "video"))
@@ -68,6 +71,7 @@ def _build_graph() -> WorkflowBuilder:
 def _ring_graph() -> WorkflowBuilder:
     """A ``work`` node that self-loops (mirrors code_review's review_batch)."""
     g = WorkflowBuilder("ring", state_schema=S)
+    g._definition_id = WorkflowDefinitionId("definition-ring")
     g.add_node("work", sync_node(lambda s: {"x": s.x}))
     g.add_node("done", sync_node(lambda s: "ok"))
     g.add_edge(START, "work")
@@ -80,7 +84,7 @@ def _ring_graph() -> WorkflowBuilder:
     return g
 
 
-def _run_state(g: WorkflowBuilder, **statuses: BgStatus) -> GraphRunState:
+def _run_state(g: WorkflowBuilder, **statuses: WorkflowNodeStatus) -> GraphRunState:
     """Build a run state for *g* with the given per-node statuses applied.
 
     Node execution status now lives on the per-run :class:`GraphRunState` (not
@@ -94,21 +98,34 @@ def _run_state(g: WorkflowBuilder, **statuses: BgStatus) -> GraphRunState:
 
 class TestReportProgressContract:
     def test_noop_outside_context(self):
-        # No writer installed → must not raise.
-        report_progress("x", BgStatus.RUNNING, "detail")
+        graph = _build_graph()
+        emit_workflow_progress(
+            graph,
+            GraphRunState.for_graph(graph),
+            "x",
+            WorkflowNodeStatus.RUNNING,
+            "detail",
+        )
 
     def test_writer_receives_event(self, collector):
-        report_progress("split", BgStatus.SUCCESS, {"parts": 3})
-        assert collector.events == [("split", BgStatus.SUCCESS, {"parts": 3})]
+        graph = _build_graph()
+        emit_workflow_progress(
+            graph,
+            GraphRunState.for_graph(graph),
+            "split",
+            WorkflowNodeStatus.SUCCESS,
+            "parts: 3",
+        )
+        assert collector.events == [("split", WorkflowNodeStatus.SUCCESS, "parts: 3")]
 
 
 class TestPushStarted:
     def test_started_includes_stage_summary(self, collector):
         g = _build_graph()
-        push_started_notification(g, task_id="bg_1")
+        push_started_notification(g, GraphRunState.for_graph(g))
         assert len(collector.events) == 1
         stage, status, detail = collector.events[0]
-        assert status == BgStatus.RUNNING
+        assert status == WorkflowNodeStatus.RUNNING
         assert "media" in detail
         assert "stage-summary" in detail
         assert "split" in detail
@@ -118,16 +135,16 @@ class TestPushTerminal:
     def test_success(self, collector):
         g = _build_graph()
         state = g.state_schema(x=1)
-        push_terminal_notification(g, state, BgStatus.SUCCESS, result="final", initial_params={"x": 1})
+        push_terminal_notification(g, state, WorkflowNodeStatus.SUCCESS, result="final", initial_params={"x": 1})
         detail = collector.events[-1][2]
-        assert "success" in detail
+        assert "succeeded" in detail
         assert "final" in detail
 
     def test_failure_lists_failed_node(self, collector):
         g = _build_graph()
         state = g.state_schema(x=1)
         err = GraphBatchFailureError([("tts", ValueError("boom tts"))])
-        push_terminal_notification(g, state, BgStatus.FAILED, error=err, initial_params={"x": 1})
+        push_terminal_notification(g, state, WorkflowNodeStatus.FAILED, error=err, initial_params={"x": 1})
         detail = collector.events[-1][2]
         assert "failed" in detail
         assert "tts" in detail
@@ -138,7 +155,7 @@ class TestPushTerminal:
         g = _build_graph()
         state = g.state_schema(x=1)
         err = GraphBatchFailureError([("tts", ValueError("boom1")), ("tts", ValueError("boom2"))])
-        push_terminal_notification(g, state, BgStatus.FAILED, error=err)
+        push_terminal_notification(g, state, WorkflowNodeStatus.FAILED, error=err)
         detail = collector.events[-1][2]
         failed_seg = detail.split("failed nodes:")[1].split("waiting_for_route")[0]
         # Last-wins → only the second error text; node listed once in failed.
@@ -150,9 +167,9 @@ class TestPushTerminal:
         g = _build_graph()
         state = g.state_schema(x=1)
         setattr(state, "tts", "audio")
-        g._nodes["tts"].status = BgStatus.SUCCESS
+        g._nodes["tts"].status = WorkflowNodeStatus.SUCCESS
         err = GraphBatchFailureError([("tts", ValueError("boom"))])
-        push_terminal_notification(g, state, BgStatus.FAILED, error=err)
+        push_terminal_notification(g, state, WorkflowNodeStatus.FAILED, error=err)
         detail = collector.events[-1][2]
         failed_seg = detail.split("failed nodes:")[1].split("waiting_for_route")[0]
         completed_seg = detail.split("completed nodes:")[1].split("skipped nodes:")[0]
@@ -162,6 +179,7 @@ class TestPushTerminal:
     def test_terminal_waiting_always_none(self, collector):
         # Graph is never paused on an LLM route at terminal.
         g = WorkflowBuilder("llm", state_schema=S)
+        g._definition_id = WorkflowDefinitionId("definition-llm-terminal")
         g.add_node("a", sync_node(lambda s: "a-done"))
         g.add_node("go", sync_node(lambda s: "went"))
         g.add_edge(START, "a")
@@ -169,11 +187,13 @@ class TestPushTerminal:
         g.add_edge("go", END)
         state = g.state_schema(x=1)
         setattr(state, "a", "a-done")
-        g._nodes["a"].status = BgStatus.SUCCESS
-        push_terminal_notification(g, state, BgStatus.SUCCESS, result="went")
+        g._nodes["a"].status = WorkflowNodeStatus.SUCCESS
+        push_terminal_notification(g, state, WorkflowNodeStatus.SUCCESS, result="went")
         # Success path uses a different template, so force a FAILED terminal to
         # exercise the waiting section explicitly.
-        push_terminal_notification(g, state, BgStatus.FAILED, error=GraphBatchFailureError([("go", ValueError("x"))]))
+        push_terminal_notification(
+            g, state, WorkflowNodeStatus.FAILED, error=GraphBatchFailureError([("go", ValueError("x"))])
+        )
         detail = collector.events[-1][2]
         waiting_seg = detail.split("waiting_for_route nodes:")[1].split("completed nodes:")[0]
         assert "(none)" in waiting_seg
@@ -187,7 +207,7 @@ class TestPushNodeFailure:
         exc = ValueError("render crashed")
         push_node_notification(
             "render",
-            BgStatus.FAILED,
+            WorkflowNodeStatus.FAILED,
             state,
             g,
             completed={"split"},
@@ -208,14 +228,14 @@ class TestPushNodeFailure:
         setattr(state, "split", {"parts": 3})
         rs = _run_state(
             g,
-            split=BgStatus.SUCCESS,
-            tts=BgStatus.SKIPPED,
-            merge=BgStatus.PENDING,
-            render=BgStatus.FAILED,
+            split=WorkflowNodeStatus.SUCCESS,
+            tts=WorkflowNodeStatus.SKIPPED,
+            merge=WorkflowNodeStatus.PENDING,
+            render=WorkflowNodeStatus.FAILED,
         )
         push_node_notification(
             "render",
-            BgStatus.FAILED,
+            WorkflowNodeStatus.FAILED,
             state,
             g,
             completed={"split"},
@@ -250,12 +270,12 @@ class TestPushNodeFailure:
         g = _build_graph()
         state = g.state_schema(x=1)
         setattr(state, "split", {"parts": 3})
-        g._nodes["split"].status = BgStatus.SUCCESS
-        g._nodes["tts"].status = BgStatus.SKIPPED
-        g._nodes["merge"].status = BgStatus.PENDING
+        g._nodes["split"].status = WorkflowNodeStatus.SUCCESS
+        g._nodes["tts"].status = WorkflowNodeStatus.SKIPPED
+        g._nodes["merge"].status = WorkflowNodeStatus.PENDING
         push_node_notification(
             "render",
-            BgStatus.FAILED,
+            WorkflowNodeStatus.FAILED,
             state,
             g,
             completed={"split"},
@@ -271,7 +291,7 @@ class TestPushNodeFailure:
         state = g.state_schema(x=1)
         push_node_notification(
             "tts",
-            BgStatus.SUCCESS,
+            WorkflowNodeStatus.SUCCESS,
             state,
             g,
             completed={"tts"},
@@ -291,7 +311,7 @@ class TestPushNodeFailure:
         rs.get("work").attempts = 3  # third lap around the ring
         push_node_notification(
             "work",
-            BgStatus.SUCCESS,
+            WorkflowNodeStatus.SUCCESS,
             state,
             g,
             completed={"work"},
@@ -306,7 +326,7 @@ class TestPushNodeFailure:
         collector.events.clear()
         push_node_notification(
             "done",
-            BgStatus.SUCCESS,
+            WorkflowNodeStatus.SUCCESS,
             state,
             g,
             completed={"done"},
@@ -319,7 +339,7 @@ class TestPushNodeFailure:
         state = g.state_schema(x=1)
         push_node_notification(
             "render",
-            BgStatus.FAILED,
+            WorkflowNodeStatus.FAILED,
             state,
             g,
             completed=set(),
@@ -333,7 +353,7 @@ class TestPushNodeFailure:
         state = g.state_schema(x=1)
         push_node_notification(
             "render",
-            BgStatus.FAILED,
+            WorkflowNodeStatus.FAILED,
             state,
             g,
             completed=set(),
@@ -346,6 +366,7 @@ class TestPushNodeFailure:
 class TestPushLlmRoute:
     def test_llm_route_options(self, collector):
         g = WorkflowBuilder("llm", state_schema=S)
+        g._definition_id = WorkflowDefinitionId("definition-llm-route")
         g.add_node("a", sync_node(lambda s: "a-done"))
         g.add_node("go", sync_node(lambda s: "went"))
         g.add_edge(START, "a")
@@ -354,7 +375,7 @@ class TestPushLlmRoute:
         state = g.state_schema(x=1)
         setattr(state, "a", "a-done")
         edge = g._llm_edges[0]
-        push_llm_route_notification(edge, state, g)
+        push_llm_route_notification(edge, state, g, GraphRunState.for_graph(g))
         detail = collector.events[-1][2]
         assert "waiting_for_route" in detail
         assert "Pick the next move" in detail
@@ -382,7 +403,7 @@ class TestHelpers:
         state = g.state_schema(x=0)
         # Only 'split' has completed and has a result.
         setattr(state, "split", {"parts": 3})
-        rs = _run_state(g, split=BgStatus.SUCCESS)
+        rs = _run_state(g, split=WorkflowNodeStatus.SUCCESS)
         text = _render_completed_nodes(g, state, rs, {"split", "tts"})
         assert "split" in text
         assert "tts" not in text  # tts has no result / not completed
@@ -391,7 +412,7 @@ class TestHelpers:
         g = _build_graph()
         state = g.state_schema(x=0)
         setattr(state, "split", {"parts": 3})
-        rs = _run_state(g, split=BgStatus.SKIPPED)
+        rs = _run_state(g, split=WorkflowNodeStatus.SKIPPED)
         # SKIPPED no longer surfaces in the completed section.
         assert "split" not in _render_completed_nodes(g, state, rs, {"split"})
 
@@ -404,13 +425,13 @@ class TestHelpers:
         g.add_edge("go", END)
         state = g.state_schema(x=1)
         setattr(state, "a", "a-done")
-        rs = _run_state(g, a=BgStatus.SUCCESS)
+        rs = _run_state(g, a=WorkflowNodeStatus.SUCCESS)
         # 'a' is parked on an LLM route → reported as waiting, not completed.
         assert "a" not in _render_completed_nodes(g, state, rs, {"a"})
 
     def test_render_status_nodes(self):
         g = _build_graph()
-        rs = _run_state(g, tts=BgStatus.SKIPPED, merge=BgStatus.PENDING)
-        assert "tts" in _render_status_nodes(g, rs, BgStatus.SKIPPED)
-        assert "merge" in _render_status_nodes(g, rs, BgStatus.PENDING)
-        assert _render_status_nodes(g, rs, BgStatus.TIMEOUT) == "  (none)"
+        rs = _run_state(g, tts=WorkflowNodeStatus.SKIPPED, merge=WorkflowNodeStatus.PENDING)
+        assert "tts" in _render_status_nodes(g, rs, WorkflowNodeStatus.SKIPPED)
+        assert "merge" in _render_status_nodes(g, rs, WorkflowNodeStatus.PENDING)
+        assert _render_status_nodes(g, rs, WorkflowNodeStatus.TIMEOUT) == "  (none)"

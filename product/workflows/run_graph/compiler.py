@@ -45,9 +45,15 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Annotated, Any
 
-from asteval import Interpreter
 from pydantic import Field, create_model
 
+try:
+    from asteval import Interpreter  # type: ignore[reportMissingImports] - optional Product backend
+except ImportError:  # Optional RunGraph compute backend; checked at activation.
+    Interpreter = None  # type: ignore[assignment,misc]
+
+from mote.contracts.workflow.definition_source import DeclarativeWorkflowDefinitionSource
+from mote.contracts.workflow.execution import WorkflowNodeDispatchResult
 from mote.orchestration.workflows import NoOutput
 from mote.orchestration.workflows.graph import WorkflowBuilder
 from mote.orchestration.workflows.types import END, START, GraphState, Stage
@@ -67,7 +73,8 @@ from mote.runtime.tools.tool_result import ToolResult
 # Injected by the caller (the ``run_graph`` tool): route a tool call back through
 # the executor chokepoint. Returns the tool's ``ToolResult`` (never raises for a
 # denied/failed call — failure is signalled by ``success=False``).
-DispatchFn = Callable[[str, dict[str, Any]], Awaitable[ToolResult]]
+DispatchResult = ToolResult | WorkflowNodeDispatchResult
+DispatchFn = Callable[[str, dict[str, Any]], Awaitable[DispatchResult]]
 
 _MISSING = object()
 _ELSE_KEY = "__else__"
@@ -123,7 +130,14 @@ _failure_sink: contextvars.ContextVar[list[ItemFailure] | None] = contextvars.Co
 )
 
 
-def record_item_failure(node_id: str, tool: str, args: dict[str, Any], error: BaseException, *, skipped: bool) -> None:
+def record_item_failure(
+    node_id: str,
+    tool: str,
+    args: dict[str, Any],
+    error: BaseException,
+    *,
+    skipped: bool,
+) -> None:
     """Record (and log) one failed map/fold item, with its resolved args.
 
     Always logs for operators; also appends to the active failure sink (if any is
@@ -273,7 +287,10 @@ def _build_state_schema(spec: GraphSpec) -> type[GraphState]:
             annotation = Annotated[pytype, _REDUCE_OPS[ch.reduce]]
         # deepcopy per-instance via default_factory so a list/dict initial is
         # never shared between concurrent or resumed runs.
-        fields[name] = (annotation, Field(default_factory=lambda v=ch.initial: deepcopy(v)))
+        fields[name] = (
+            annotation,
+            Field(default_factory=lambda v=ch.initial: deepcopy(v)),
+        )
 
     # Seed omitted optional inputs to None. Untyped (Any) to match how inputs
     # otherwise ride extra="allow" — provided values are never coerced. Channel
@@ -404,17 +421,17 @@ def eval_predicate(pred: Predicate, state: GraphState) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _unwrap(result: ToolResult, node_id: str) -> Any:
+def _unwrap(result: DispatchResult, node_id: str) -> Any:
     """Extract a dispatched tool's value, or fail the node on ``success=False``.
 
-    Prefers structured ``data`` (so ``$ref`` can index into it) and falls back to
+    Prefers the canonical durable payload (so ``$ref`` can index into it) and falls back to
     the text ``output``. A denied/failed call raises :class:`GraphToolError`
     (permanent → node FAILED, no retry).
     """
     if not result.success:
         reason = result.error if result.error is not None else result.output
         raise GraphToolError(f"node {node_id!r}: tool call failed: {reason}")
-    return result.data if result.data is not None else result.output
+    return result.payload.materialize() if result.payload is not None else result.output
 
 
 def _sink(node: NodeSpec) -> str:
@@ -617,9 +634,25 @@ _COMPUTE_NAMESPACE: dict[str, Any] = {
 #   - banned builtins: file I/O (``open`` + the numpy readers, defensive even
 #     with use_numpy=False) and interactive / introspection surface
 #     (``input`` / ``print`` / ``dir`` / ``id`` / ``type``).
-_COMPUTE_CONFIG: dict[str, bool] = {"import": False, "importfrom": False, "while": False}
+_COMPUTE_CONFIG: dict[str, bool] = {
+    "import": False,
+    "importfrom": False,
+    "while": False,
+}
 _COMPUTE_BANNED = frozenset(
-    {"open", "input", "print", "dir", "id", "type", "fromfile", "loadtxt", "genfromtxt", "fromregex", "frombuffer"}
+    {
+        "open",
+        "input",
+        "print",
+        "dir",
+        "id",
+        "type",
+        "fromfile",
+        "loadtxt",
+        "genfromtxt",
+        "fromregex",
+        "frombuffer",
+    }
 )
 # Hard wall-clock ceiling for a single compute expression. asteval has NO
 # built-in time / iteration limit and runs in-process, so a runaway (or merely
@@ -644,6 +677,8 @@ def _eval_expr(expr: str, symbols: dict[str, Any], node_id: str) -> Any:
     can parse / filter / reshape data; the node's resolved ``args`` overlay that
     namespace last, so a matching arg name shadows a module if the model wants.
     """
+    if Interpreter is None:
+        raise RuntimeError("RunGraph compute expressions require the optional 'asteval' dependency")
     interp = Interpreter(use_numpy=False, config=_COMPUTE_CONFIG)
     for name in _COMPUTE_BANNED:
         interp.symtable.pop(name, None)
@@ -800,9 +835,17 @@ def _validate_refs(spec: GraphSpec) -> None:
 
     for edge in spec.edges:
         if edge.when is not None:
-            check(edge.when.left, where=f"edge {edge.from_}->{edge.to} .when.left", local=set())
+            check(
+                edge.when.left,
+                where=f"edge {edge.from_}->{edge.to} .when.left",
+                local=set(),
+            )
             if edge.when.right is not None:
-                check(edge.when.right, where=f"edge {edge.from_}->{edge.to} .when.right", local=set())
+                check(
+                    edge.when.right,
+                    where=f"edge {edge.from_}->{edge.to} .when.right",
+                    local=set(),
+                )
 
     check(spec.output, where="output", local=set())
 
@@ -855,7 +898,19 @@ def _wire_edges(graph: WorkflowBuilder, spec: GraphSpec) -> None:
         mapping = {str(i): e.to for i, e in enumerate(edges)}
         else_targets = unguarded.get(src, [])
         mapping[_ELSE_KEY] = else_targets[0] if else_targets else END
-        graph.add_conditional_edges(src, _make_router(edges, _ELSE_KEY), mapping)
+        edge_payload = json.dumps(
+            [edge.model_dump(mode="json") for edge in edges],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        graph.add_conditional_edges(
+            src,
+            _make_router(edges, _ELSE_KEY),
+            mapping,
+            implementation_id=(
+                "mote.product.run-graph-router.v1.sha256-" f"{hashlib.sha256(edge_payload.encode()).hexdigest()}"
+            ),
+        )
 
     # 3. Plain explicit edges from non-branch sources (a branch source's single
     #    unguarded edge is already consumed as its else target above).
@@ -922,6 +977,20 @@ def build_graph(
         recursion_limit=limit,
         output=NoOutput,
     )
+    source_payload = json.dumps(
+        spec.model_dump(mode="json", by_alias=True, exclude_unset=True),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    graph.bind_definition_source(
+        DeclarativeWorkflowDefinitionSource(
+            "mote.product.run-graph",
+            1,
+            source_payload,
+            hashlib.sha256(source_payload.encode()).hexdigest(),
+        )
+    )
 
     for node in spec.nodes:
         if node.kind == "tool":
@@ -932,7 +1001,20 @@ def build_graph(
             fn = _make_fold_node(node, dispatch)
         else:  # compute
             fn = _make_compute_node(node)
-        graph.add_node(node.id, fn, params={})
+        node_payload = json.dumps(
+            node.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        graph.add_node(
+            node.id,
+            fn,
+            params={},
+            implementation_id=(
+                f"mote.product.run-graph-node.v1.{node.kind}.sha256-"
+                f"{hashlib.sha256(node_payload.encode()).hexdigest()}"
+            ),
+        )
 
     _wire_edges(graph, spec)
     return graph

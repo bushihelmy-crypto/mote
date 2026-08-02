@@ -2,36 +2,45 @@
 # -*- coding: utf-8 -*-
 """Tests for the Bash tool (``mote.product.toolsets.builtin.bash``).
 
-Drives the REAL subprocess path (aexecute) in the per-test workspace. Covers
+Drives the real governed subprocess path in the per-test workspace. Covers
 stdout capture, stderr capture, exit-code annotation, the stable-cwd model
 (a ``cd`` does NOT persist — Codex-aligned), per-call ``workdir`` scoping, and
 the empty-command guard.
 """
+
 from __future__ import annotations
 
 import os
 
 import pytest
 
+from mote.contracts.tool.errors import ToolError
 from mote.product.toolsets.builtin.bash import Bash
-from mote.runtime.tools.tool_result import ToolError
+from mote.runtime.tools.execution_context import AuthorizedToolInvocation, bind_authorized_invocation
 
 from .conftest import CapRole, bind, run
 
 
 def _bash(tool, **kwargs):
     """Run the tool and return its text output (Bash returns a ToolResult)."""
-    return run(tool.call(**kwargs)).output
+    with bind_authorized_invocation(AuthorizedToolInvocation("Bash", dict(kwargs), 1)):
+        return run(tool.call(**kwargs)).output
 
 
 def _bash_result(tool, **kwargs):
-    """Run the tool and return the whole ToolResult (for inspecting ``data``)."""
-    return run(tool.call(**kwargs))
+    """Run the tool and return the whole ToolResult."""
+    with bind_authorized_invocation(AuthorizedToolInvocation("Bash", dict(kwargs), 1)):
+        return run(tool.call(**kwargs))
+
+
+class _PassthroughSandbox:
+    async def wrap_command(self, command, *, cwd=None, env=None):
+        return command, dict(env or {})
 
 
 def _ready(workspace):
     """Bind a Bash tool to a role whose cwd starts at the workspace."""
-    role = CapRole(cwd=str(workspace))
+    role = CapRole(cwd=str(workspace), sandbox_runtime=_PassthroughSandbox())
     return bind(Bash(), role), role
 
 
@@ -69,7 +78,7 @@ class TestBashCwd:
     def test_runs_in_role_cwd(self, workspace):
         sub = workspace / "work"
         sub.mkdir()
-        role = CapRole(cwd=str(sub))
+        role = CapRole(cwd=str(sub), sandbox_runtime=_PassthroughSandbox())
         tool = bind(Bash(), role)
         out = _bash(tool, command="pwd")
         assert os.path.realpath(out) == os.path.realpath(str(sub))
@@ -86,9 +95,9 @@ class TestBashCwd:
         assert os.path.realpath(out) == os.path.realpath(str(workspace))
 
     def test_invalid_cwd_falls_back(self, workspace):
-        role = CapRole(cwd=str(workspace / "does-not-exist"))
+        role = CapRole(cwd=str(workspace / "does-not-exist"), sandbox_runtime=_PassthroughSandbox())
         tool = bind(Bash(), role)
-        # Non-existent cwd => aexecute falls back to the process default; no crash.
+        # Non-existent cwd => the runner falls back to the process default; no crash.
         out = _bash(tool, command="echo ok")
         assert out == "ok"
 
@@ -145,21 +154,24 @@ class TestBashInputs:
         assert '"items"' in out
         assert '"bad-key"' in out
 
-    def test_stdout_json_parsed_into_data(self, workspace):
+    def test_stdout_json_parsed_into_payload(self, workspace):
         tool, _ = _ready(workspace)
         res = _bash_result(tool, command='echo "{\\"k\\": [1, 2]}"')
         # A caller / graph $ref can index into the structured value.
-        assert res.data == {"k": [1, 2]}
+        assert res.payload is not None
+        assert res.payload.materialize() == {"k": [1, 2]}
 
     def test_stdout_plaintext_is_data_string(self, workspace):
         tool, _ = _ready(workspace)
         res = _bash_result(tool, command="echo plain text")
-        assert res.data == "plain text"
+        assert res.payload is not None
+        assert res.payload.materialize() == "plain text"
 
-    def test_empty_stdout_data_is_none(self, workspace):
+    def test_empty_stdout_payload_is_json_null(self, workspace):
         tool, _ = _ready(workspace)
         res = _bash_result(tool, command=":")
-        assert res.data is None
+        assert res.payload is not None
+        assert res.payload.materialize() is None
 
     def test_no_inputs_leaves_env_uninjected(self, workspace):
         tool, _ = _ready(workspace)
@@ -174,7 +186,8 @@ class TestBashCheck:
         # A zero exit under check still succeeds, with the structured data intact.
         res = _bash_result(tool, command="echo 42", check=True)
         assert res.success is True
-        assert res.data == 42
+        assert res.payload is not None
+        assert res.payload.materialize() == 42
 
     def test_check_fails_on_nonzero_exit(self, workspace):
         tool, _ = _ready(workspace)
@@ -185,7 +198,7 @@ class TestBashCheck:
         # The command's own output rides along so the model can see what happened.
         assert "boom" in res.output
         # No trustworthy structured result on a failed command.
-        assert res.data is None
+        assert res.payload is None
 
     def test_no_check_nonzero_exit_still_succeeds(self, workspace):
         tool, _ = _ready(workspace)

@@ -16,6 +16,7 @@ from typing import Any, List, Optional
 
 import pytest
 
+from mote.contracts.session import SessionHostingError, SessionHostingErrorKind
 from mote.product.session_hosting import registry as sr
 from mote.product.session_hosting.registry import SessionRegistry
 from mote.ztest.telemetry import InlineTelemetry
@@ -62,15 +63,15 @@ def patched_backend(monkeypatch):
 
     monkeypatch.setattr(sr, "_build_control", build_control)
     monkeypatch.setattr(sr, "_resume_role", resume_role)
-    monkeypatch.setattr(sr, "_role_cleanup", lambda role: getattr(role, "cleanup", None))
+    monkeypatch.setattr(sr, "_role_cleanup", lambda role: role.cleanup)
     return SimpleNamespace(built=built, resumed=resumed)
 
 
 def make_factory(built: List[FakeRole]):
     """A role_factory closure that mints a FakeRole, tracking created roles."""
 
-    def role_factory(*, name: str = "Assistant", session_id: Optional[str] = None, agent_type=None):
-        role = FakeRole(session_id=session_id or f"new-{len(built)}", name=name)
+    def role_factory(request):
+        role = FakeRole(session_id=request.session_id or f"new-{len(built)}", name=request.name)
         built.append(role)
         return role
 
@@ -78,14 +79,14 @@ def make_factory(built: List[FakeRole]):
 
 
 # --------------------------------------------------------------------------
-# get_or_create
+# explicit create/load
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_mints_and_starts(patched_backend):
+async def test_load_existing_starts_verified_session(patched_backend):
     reg = SessionRegistry(make_factory(patched_backend.built))
-    session = await reg.get_or_create("s1")
+    session = await reg.load_existing("s1")
     assert session.session_id == "s1"
     assert session.control.started is True  # control plane started
     assert session.agent_id == "s1"
@@ -93,10 +94,10 @@ async def test_get_or_create_mints_and_starts(patched_backend):
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_is_idempotent_per_id(patched_backend):
+async def test_load_existing_is_idempotent_per_id(patched_backend):
     reg = SessionRegistry(make_factory(patched_backend.built))
-    first = await reg.get_or_create("s1")
-    second = await reg.get_or_create("s1")
+    first = await reg.load_existing("s1")
+    second = await reg.load_existing("s1")
     assert first is second  # resident across turns — same session object
     assert len(patched_backend.built) == 1  # built only once
 
@@ -104,23 +105,59 @@ async def test_get_or_create_is_idempotent_per_id(patched_backend):
 @pytest.mark.asyncio
 async def test_known_id_resumes_persisted_rollout(patched_backend):
     reg = SessionRegistry(make_factory(patched_backend.built))
-    await reg.get_or_create("existing-thread")
+    await reg.load_existing("existing-thread")
     assert patched_backend.resumed == ["existing-thread"]
 
 
 @pytest.mark.asyncio
 async def test_none_id_mints_fresh_without_resume(patched_backend):
     reg = SessionRegistry(make_factory(patched_backend.built))
-    session = await reg.get_or_create(None)
+    session = await reg.create_new()
     assert session.session_id.startswith("new-")
     assert patched_backend.resumed == []  # a brand-new thread never resumes
 
 
 @pytest.mark.asyncio
+async def test_unknown_load_does_not_register_empty_replacement(patched_backend, monkeypatch):
+    monkeypatch.setattr(sr, "_resume_role", lambda role: False)
+    reg = SessionRegistry(make_factory(patched_backend.built))
+    with pytest.raises(SessionHostingError) as raised:
+        await reg.load_existing("missing")
+    assert raised.value.kind is SessionHostingErrorKind.NOT_FOUND
+    assert reg.get("missing") is None
+
+
+@pytest.mark.asyncio
+async def test_corrupt_load_preserves_nonresident_state(patched_backend, monkeypatch):
+    def corrupt(role):
+        raise ValueError("corrupt journal")
+
+    monkeypatch.setattr(sr, "_resume_role", corrupt)
+    reg = SessionRegistry(make_factory(patched_backend.built))
+    with pytest.raises(SessionHostingError) as raised:
+        await reg.load_existing("broken")
+    assert raised.value.kind is SessionHostingErrorKind.LOAD_FAILED
+    assert reg.get("broken") is None
+
+
+@pytest.mark.asyncio
+async def test_fork_failure_never_creates_fresh_session(patched_backend):
+    class UnforkableRole(FakeRole):
+        async def fork_session(self):
+            raise NotImplementedError("unsupported")
+
+    reg = SessionRegistry(lambda request: UnforkableRole(request.session_id or "new"))
+    with pytest.raises(SessionHostingError) as raised:
+        await reg.fork_existing("source")
+    assert raised.value.kind is SessionHostingErrorKind.FORK_UNSUPPORTED
+    assert reg.session_ids == ["source"]
+
+
+@pytest.mark.asyncio
 async def test_distinct_ids_get_distinct_sessions(patched_backend):
     reg = SessionRegistry(make_factory(patched_backend.built))
-    a = await reg.get_or_create("a")
-    b = await reg.get_or_create("b")
+    a = await reg.load_existing("a")
+    b = await reg.load_existing("b")
     assert a is not b
     assert a.control is not b.control
     assert set(reg.session_ids) == {"a", "b"}
@@ -134,7 +171,7 @@ async def test_distinct_ids_get_distinct_sessions(patched_backend):
 @pytest.mark.asyncio
 async def test_evict_stops_control_and_cleans_role(patched_backend):
     reg = SessionRegistry(make_factory(patched_backend.built))
-    session = await reg.get_or_create("s1")
+    session = await reg.load_existing("s1")
     existed = await reg.evict("s1")
     assert existed is True
     assert session.control.stopped is True
@@ -155,7 +192,7 @@ async def test_evict_releases_engine_ownership(patched_backend):
             pass
 
     reg = SessionRegistry(make_factory(patched_backend.built), engine=FakeEngine())
-    session = await reg.get_or_create("s1")
+    session = await reg.load_existing("s1")
 
     await reg.evict("s1")
 
@@ -172,8 +209,8 @@ async def test_evict_unknown_id_is_noop(patched_backend):
 @pytest.mark.asyncio
 async def test_aclose_evicts_all(patched_backend):
     reg = SessionRegistry(make_factory(patched_backend.built))
-    s1 = await reg.get_or_create("s1")
-    s2 = await reg.get_or_create("s2")
+    s1 = await reg.load_existing("s1")
+    s2 = await reg.load_existing("s2")
     await reg.aclose()
     assert s1.control.stopped and s2.control.stopped
     assert reg.session_ids == []
@@ -193,8 +230,8 @@ async def test_failed_evict_remains_resident_for_retry(patched_backend):
             await super().cleanup()
 
     role = RetryRole("s1")
-    reg = SessionRegistry(lambda **_kwargs: role)
-    session = await reg.get_or_create("s1")
+    reg = SessionRegistry(lambda _request: role)
+    session = await reg.load_existing("s1")
 
     with pytest.raises(RuntimeError, match="transient cleanup"):
         await reg.evict("s1")

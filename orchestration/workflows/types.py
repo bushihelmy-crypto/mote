@@ -1,8 +1,7 @@
-"""Core data types for :mod:`mote.runtime.tools.bggraph`.
+"""Core data types for the Workflow execution state machine.
 
-This module is deliberately dependency-light (``common`` + stdlib only) so that
-it can be imported by the pool layer for the :class:`GraphPause` marker without
-pulling in the engine / graph builder.
+This module is deliberately dependency-light so Workflow definitions and the
+durable checkpoint codec share one authoritative node-state vocabulary.
 
 The execution model is aligned with **langgraph transitions** (forward frontier
 super-steps), *not* a static topological DAG:
@@ -17,6 +16,7 @@ super-steps), *not* a static topological DAG:
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, Coroutine, Optional, Sequence
@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
+from mote.contracts.task.status import ExecutionStatusProjection, ExecutionStatusSource
 from mote.orchestration.workflows.control import WorkflowPause
 
 # ---------------------------------------------------------------------------
@@ -38,11 +39,11 @@ GraphPause = WorkflowPause
 
 
 # ---------------------------------------------------------------------------
-# Node status — canonical definition lives in common/schema/node_status.py
+# Workflow node status — owned by the durable Workflow state machine.
 # ---------------------------------------------------------------------------
 
 
-class BgStatus(str, Enum):
+class WorkflowNodeStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     SUCCESS = "success"
@@ -52,6 +53,22 @@ class BgStatus(str, Enum):
     SKIPPED = "skipped"
     WAITING_FOR_ROUTE = "waiting_for_route"
     STALLED = "stalled"
+
+
+def project_workflow_node_status(
+    status: WorkflowNodeStatus,
+) -> ExecutionStatusProjection:
+    return ExecutionStatusProjection(ExecutionStatusSource.WORKFLOW_NODE, status.value)
+
+
+def decode_workflow_node_status(
+    payload: Mapping[str, object],
+) -> WorkflowNodeStatus:
+    projection = ExecutionStatusProjection.from_payload(
+        payload,
+        expected_source=ExecutionStatusSource.WORKFLOW_NODE,
+    )
+    return WorkflowNodeStatus(projection.value)
 
 
 # ---------------------------------------------------------------------------
@@ -64,13 +81,11 @@ class BgStatus(str, Enum):
 # completion from ``getattr(state, name) is not None``.
 #
 # ``GraphRunState`` is the separate, authoritative *execution record*: per-node
-# status / attempts / failure reason / timing. The driver writes it as the graph
-# runs; the pool snapshots it onto ``TaskMeta``; resume reads it (instead of
-# inferring) to decide what is already done and what to re-run. Because the same
-# object is reused across resumes, ``attempts`` accumulates so a transient-failing
-# node cannot thrash forever.
+# status / attempts / failure reason / timing. The Workflow driver writes it and
+# the durable checkpoint codec persists it; resume reads that checkpoint rather
+# than inferring completion from state values.
 
-_TERMINAL_DONE = (BgStatus.SUCCESS, BgStatus.SKIPPED)
+_TERMINAL_DONE = (WorkflowNodeStatus.SUCCESS, WorkflowNodeStatus.SKIPPED)
 
 
 @dataclass
@@ -78,7 +93,7 @@ class NodeRecord:
     """Authoritative execution record for a single node (not its data)."""
 
     name: str
-    status: BgStatus = BgStatus.PENDING
+    status: WorkflowNodeStatus = WorkflowNodeStatus.PENDING
     attempts: int = 0  # accumulates across resumes (retry budget)
     last_error: Optional[str] = None  # full, untruncated failure text
     started_at: Optional[float] = None
@@ -99,10 +114,10 @@ class NodeRecord:
 
 @dataclass
 class GraphRunState:
-    """Per-node execution records for one graph task, durable across resumes."""
+    """Per-node execution records for one Workflow run, durable across resumes."""
 
     records: dict[str, NodeRecord] = field(default_factory=dict)
-    run_id: str = field(default_factory=lambda: uuid4().hex)
+    activity_execution_id: str = field(default_factory=lambda: uuid4().hex)
 
     @classmethod
     def for_graph(cls, graph: Any) -> "GraphRunState":
@@ -145,11 +160,11 @@ class GraphRunState:
         return {n for n, r in self.records.items() if r.status in _TERMINAL_DONE}
 
     def running_names(self) -> list:
-        return [n for n, r in self.records.items() if r.status == BgStatus.RUNNING]
+        return [n for n, r in self.records.items() if r.status == WorkflowNodeStatus.RUNNING]
 
     def mark_running(self, name: str) -> None:
         rec = self.get(name)
-        rec.status = BgStatus.RUNNING
+        rec.status = WorkflowNodeStatus.RUNNING
         rec.attempts += 1  # accumulates across resumes — retry budget
         rec.started_at = time.time()
         rec.ended_at = None
@@ -162,7 +177,7 @@ class GraphRunState:
         writes: Optional[list[str]] = None,
     ) -> None:
         rec = self.get(name)
-        rec.status = BgStatus.SUCCESS
+        rec.status = WorkflowNodeStatus.SUCCESS
         rec.ended_at = time.time()
         rec.last_error = None
         if route_key is not None:
@@ -179,7 +194,7 @@ class GraphRunState:
         retries_limit: int = 0,
     ) -> None:
         rec = self.get(name)
-        rec.status = BgStatus.FAILED
+        rec.status = WorkflowNodeStatus.FAILED
         rec.ended_at = time.time()
         rec.last_error = str(error) if error is not None else None
         rec.retries_attempted = retries_attempted
@@ -187,18 +202,18 @@ class GraphRunState:
 
     def mark_cancelled(self, name: str) -> None:
         rec = self.get(name)
-        rec.status = BgStatus.CANCELLED
+        rec.status = WorkflowNodeStatus.CANCELLED
         rec.ended_at = time.time()
 
     def mark_skipped(self, name: str) -> None:
         rec = self.get(name)
-        rec.status = BgStatus.SKIPPED
+        rec.status = WorkflowNodeStatus.SKIPPED
         rec.ended_at = time.time()
 
     def reset(self, name: str) -> None:
         """Re-arm a node for a fresh attempt, preserving its attempt count."""
         rec = self.get(name)
-        rec.status = BgStatus.PENDING
+        rec.status = WorkflowNodeStatus.PENDING
         rec.started_at = None
         rec.ended_at = None
         rec.last_error = None
@@ -262,6 +277,7 @@ class _NodeDef:
 
     name: str
     fn: Callable[[GraphState], Awaitable[Stage]]
+    implementation_id: str = ""
     description: str = ""
     params: dict[str, dict] = field(default_factory=dict)
 
@@ -296,6 +312,7 @@ class _ConditionalEdge:
     from_node: str
     router: Callable[[GraphState], str]
     mapping: dict[str, str]
+    implementation_id: str = ""
 
 
 @dataclass

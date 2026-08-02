@@ -4,8 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from mote.contracts.output.errors import OutputCommitFencedError, RunLeaseUnavailableError
 from mote.contracts.session.lease import RunLeasePolicy
-from mote.runtime.errors import OutputCommitFencedError, RunLeaseUnavailableError
 from mote.runtime.session.run_lease import RunLeaseHandle, RunLeaseStore
 
 
@@ -158,7 +158,7 @@ def test_process_crash_expires_then_takeover_fences_old_epoch(tmp_path):
 async def test_heartbeat_backend_failure_blocks_later_commit(tmp_path, monkeypatch):
     import asyncio
 
-    from mote.runtime.errors import RunLeaseCoordinatorUnavailableError
+    from mote.contracts.output.errors import RunLeaseCoordinatorUnavailableError
 
     events = []
 
@@ -191,7 +191,7 @@ def test_lease_policy_rejects_unsafe_heartbeat_window():
 
 
 def test_corrupt_coordinator_state_fails_with_typed_retryable_error(tmp_path):
-    from mote.runtime.errors import RunLeaseCoordinatorUnavailableError
+    from mote.contracts.output.errors import RunLeaseCoordinatorUnavailableError
 
     path = tmp_path / "leases.json"
     path.write_text("not-json", encoding="utf-8")

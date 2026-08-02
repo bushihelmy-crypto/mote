@@ -16,9 +16,10 @@ from mote.orchestration.agents.messaging.mailbox import DeliveryMode
 from mote.orchestration.agents.residency.store import ResidencyStore
 from mote.orchestration.automation import TriggerDisposition, TriggerReceipt
 from mote.orchestration.automation.cron.service import MAX_CRON_TASKS, CronService, validate_new_task
-from mote.orchestration.automation.cron.store import CronTaskStore
+from mote.orchestration.automation.cron.store import CronOccurrence, CronOccurrenceState, CronTaskStore
 from mote.orchestration.automation.cron.task import CronTask
-from mote.product.automation import AgentTriggerAdapter
+from mote.product.automation import AgentTriggerAdapter, system_timezone_name
+from mote.runtime.clock import SystemClock
 
 
 def _ms(year, month, day, hour=0, minute=0, second=0):
@@ -66,7 +67,29 @@ class FakeSink:
 
 
 def make_service(tmp_path, sink=None, **kwargs):
-    return CronService(sink or FakeSink(), base_dir=str(tmp_path), **kwargs)
+    return CronService(
+        sink or FakeSink(),
+        base_dir=str(tmp_path),
+        default_timezone_name=system_timezone_name(),
+        clock_source=SystemClock(),
+        **kwargs,
+    )
+
+
+def occurrence(task):
+    return CronOccurrence(
+        occurrence_id=f"cron:{task.id}:{task.revision}:{task.created_at}",
+        task_id=str(task.id),
+        task_revision=task.revision,
+        scheduled_at_ms=task.created_at,
+        observed_at_ms=task.created_at,
+        state=CronOccurrenceState.DISPATCHING,
+        attempt=1,
+        receipt_id=None,
+        reason=None,
+        next_attempt_at_ms=None,
+        delete_on_accept=not task.recurring,
+    )
 
 
 # --- task management -------------------------------------------------------
@@ -88,10 +111,9 @@ def test_create_rejects_invalid_cron(tmp_path):
 
 
 def test_create_rejects_at_cap(tmp_path):
-    store = CronTaskStore(base_dir=str(tmp_path))
-    for _ in range(MAX_CRON_TASKS):
-        store.add(CronTask.new("* * * * *", "x", _ms(2026, 6, 15)))
     svc = make_service(tmp_path)
+    for _ in range(MAX_CRON_TASKS):
+        svc.create_task("* * * * *", "x", "sess")
     with pytest.raises(ValueError):
         svc.create_task("* * * * *", "overflow", "sess")
 
@@ -115,17 +137,12 @@ def test_delete_tasks(tmp_path):
 
 
 def test_validate_accepts_valid_cron():
-    validate_new_task("*/5 * * * *", 0)  # no raise
+    validate_new_task("*/5 * * * *", now_ms=0)  # no raise
 
 
 def test_validate_rejects_invalid_cron():
     with pytest.raises(ValueError):
-        validate_new_task("not a cron", 0)
-
-
-def test_validate_rejects_at_cap():
-    with pytest.raises(ValueError):
-        validate_new_task("* * * * *", MAX_CRON_TASKS)
+        validate_new_task("not a cron", now_ms=0)
 
 
 # --- _on_fire / _is_idle ---------------------------------------------------
@@ -135,7 +152,7 @@ def test_on_fire_dispatches_structured_trigger(tmp_path):
     sink = FakeSink()
     svc = make_service(tmp_path, sink)
     task = CronTask.new("* * * * *", "do it", _ms(2026, 6, 15), target_session_id="sess")
-    svc._on_fire(task)
+    svc._on_fire(task, occurrence(task))
     assert len(sink.triggers) == 1
     assert sink.triggers[0].target == "sess"
     assert sink.triggers[0].content == "do it"
@@ -148,7 +165,8 @@ def test_on_fire_missing_target_does_not_raise(tmp_path):
 
     svc = make_service(tmp_path, RaisingSink())
     task = CronTask.new("* * * * *", "do it", _ms(2026, 6, 15), target_session_id="gone")
-    svc._on_fire(task)  # best-effort: swallows
+    with pytest.raises(KeyError):
+        svc._on_fire(task, occurrence(task))
 
 
 def test_on_fire_no_target_falls_back_to_service_session(tmp_path):
@@ -157,7 +175,7 @@ def test_on_fire_no_target_falls_back_to_service_session(tmp_path):
     sink = FakeSink()
     svc = make_service(tmp_path, sink, session_id="ctrl")
     task = CronTask.new("* * * * *", "do it", _ms(2026, 6, 15))
-    svc._on_fire(task)
+    svc._on_fire(task, occurrence(task))
     assert len(sink.triggers) == 1
     assert sink.triggers[0].target == "ctrl"
 
@@ -168,20 +186,34 @@ def test_on_fire_no_target_no_service_session_noop(tmp_path):
     svc = make_service(tmp_path, sink, session_id="")
     svc._session_id = ""  # override the "cron" default to prove the guard
     task = CronTask.new("* * * * *", "do it", _ms(2026, 6, 15))
-    svc._on_fire(task)
+    receipt = svc._on_fire(task, occurrence(task))
     assert sink.triggers == []
+    assert receipt.disposition is TriggerDisposition.REJECTED
 
 
-def test_agent_adapter_defers_active_target(tmp_path):
+def test_agent_adapter_is_idempotent_after_acceptance(tmp_path):
     control = FakeControl({"a": FakeRuntime(active_turn=False)})
     adapter = AgentTriggerAdapter(control)
     svc = make_service(tmp_path, adapter)
     task = CronTask.new("* * * * *", "do it", _ms(2026, 6, 15), target_session_id="a")
-    svc._on_fire(task)
+    first = svc._on_fire(task, occurrence(task))
     assert len(control.sent) == 1
     control._rt["a"].active_turn = True
-    svc._on_fire(task)
+    second = svc._on_fire(task, occurrence(task))
     assert len(control.sent) == 1
+    assert first == second
+    assert first.receipt_id == occurrence(task).occurrence_id
+
+
+def test_agent_adapter_defers_active_target(tmp_path):
+    control = FakeControl({"a": FakeRuntime(active_turn=True)})
+    svc = make_service(tmp_path, AgentTriggerAdapter(control))
+    task = CronTask.new("* * * * *", "do it", _ms(2026, 6, 15), target_session_id="a")
+
+    receipt = svc._on_fire(task, occurrence(task))
+
+    assert receipt.disposition is TriggerDisposition.DEFERRED
+    assert control.sent == []
 
 
 # --- integration with a real AgentControl ----------------------------------
@@ -204,18 +236,24 @@ class FakeRole:
 
 
 def test_fire_delivers_to_real_runtime_mailbox(tmp_path):
+    from mote.runtime.control.leases import InMemoryLeaseCoordinator
+
+    residency_leases = InMemoryLeaseCoordinator()
     control = AgentControl(
         store=ResidencyStore(
             base_dir=str(tmp_path / "residency"),
             sessions_base_dir=str(tmp_path / "sessions"),
-        )
+            lease_coordinator=residency_leases,
+        ),
+        residency_lease_coordinator=residency_leases,
+        lineage_path=tmp_path / "agent-lineage.json",
     )
     runtime = AgentRuntime(FakeRole("sess"))
     control.add_agent(runtime, metadata=AgentMetadata(agent_path=AgentPath.from_string("/root/sess")))
 
     svc = make_service(tmp_path, AgentTriggerAdapter(control))
     task = CronTask.new("* * * * *", "ping", _ms(2026, 6, 15), target_session_id="sess")
-    svc._on_fire(task)
+    svc._on_fire(task, occurrence(task))
 
     assert not runtime.mailbox.empty()
     assert runtime.mailbox.has_trigger_turn()

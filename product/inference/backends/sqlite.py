@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -13,9 +14,22 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from mote.contracts.clock import UNIX_UTC_CLOCK
 from mote.contracts.events.governance import RestoreCopyMetadata
-from mote.contracts.inference.generation_artifact import GenerationArtifact
-from mote.contracts.inference.governance import BudgetReservation, ReservationState, UsageSettlement
+from mote.contracts.inference.epochs import ExecutionEpochSnapshot
+from mote.contracts.inference.execution_owner import ExecutionId, ExecutionOwnerRecord
+from mote.contracts.inference.generation_artifact import GenerationArtifact, verify_generation_artifact_digest
+from mote.contracts.inference.governance import (
+    BudgetAdmissionDisposition,
+    BudgetAdmissionError,
+    BudgetDimension,
+    BudgetReservation,
+    BudgetReservationRequest,
+    BudgetScope,
+    BudgetScopeKind,
+    ReservationState,
+    UsageSettlement,
+)
 from mote.contracts.inference.persisted_event import PersistedLifecycleEvent
 from mote.contracts.inference.provider_evidence import ProviderEvidence, ProviderEvidenceConflictError
 from mote.contracts.inference.receipt import (
@@ -36,6 +50,7 @@ from mote.contracts.inference.session import (
     SessionReceiptState,
     validate_session_receipt_transition,
 )
+from mote.contracts.ports.clock import ClockSource
 from mote.runtime.inference.generation import GenerationState
 from mote.runtime.inference.reconciliation import ReconciliationRecord, acknowledge_owner_action, require_owner_action
 from mote.runtime.persistence.async_io import run_disk_io as _run_disk_io
@@ -47,8 +62,13 @@ INFERENCE_GATEWAY_STORAGE_FORMAT_VERSION = 1
 _BACKUP_METADATA_TABLE = "mote_restore_copy_metadata"
 
 
-class ReceiptConflictError(RuntimeError):
-    pass
+class ReceiptConflictError(BudgetAdmissionError):
+    def __init__(
+        self,
+        message: str,
+        disposition: BudgetAdmissionDisposition = BudgetAdmissionDisposition.IDENTITY_CONFLICT,
+    ) -> None:
+        super().__init__(disposition, message)
 
 
 class ReceiptFencedError(RuntimeError):
@@ -150,6 +170,12 @@ class SQLiteAttemptReceiptStore:
     ) -> tuple[tuple[GenerationArtifact, GenerationState], ...]:
         return await run_disk_io(self._load_generations)
 
+    async def execution_epoch_snapshot(self):
+        return await run_disk_io(self._execution_epoch_snapshot)
+
+    async def advance_backup_epoch(self):
+        return await run_disk_io(self._advance_backup_epoch)
+
     async def append_event(self, event: PersistedLifecycleEvent) -> PersistedLifecycleEvent:
         return await run_disk_io(self._append_event, event)
 
@@ -159,6 +185,12 @@ class SQLiteAttemptReceiptStore:
         if not execution_id or after_sequence < 0 or limit <= 0:
             raise ValueError("invalid lifecycle event cursor")
         return await run_disk_io(self._read_events, execution_id, after_sequence, limit)
+
+    async def put_owner_record(self, record: ExecutionOwnerRecord) -> ExecutionOwnerRecord:
+        return await run_disk_io(self._put_owner_record, record)
+
+    async def get_owner_record(self, execution_id: ExecutionId) -> ExecutionOwnerRecord | None:
+        return await run_disk_io(self._get_owner_record, execution_id)
 
     async def get(self, attempt_id: str, generation_id: str) -> AttemptReceipt | None:
         return await run_disk_io(self._get, attempt_id, generation_id)
@@ -241,6 +273,14 @@ class SQLiteAttemptReceiptStore:
                     payload TEXT NOT NULL,
                     FOREIGN KEY (reservation_id) REFERENCES usage_reservations(reservation_id)
                 );
+                CREATE TABLE IF NOT EXISTS usage_reservation_scopes (
+                    reservation_id TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    units INTEGER NOT NULL,
+                    PRIMARY KEY (reservation_id, tenant_id, project_id),
+                    FOREIGN KEY (reservation_id) REFERENCES usage_reservations(reservation_id)
+                );
                 CREATE TABLE IF NOT EXISTS session_receipts (
                     session_id TEXT NOT NULL,
                     generation_id TEXT NOT NULL,
@@ -268,6 +308,10 @@ class SQLiteAttemptReceiptStore:
                     payload BLOB NOT NULL,
                     contract TEXT NOT NULL,
                     PRIMARY KEY (execution_id, sequence)
+                );
+                CREATE TABLE IF NOT EXISTS execution_owner_records (
+                    execution_id TEXT PRIMARY KEY,
+                    record TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS reconciliation_bindings (
                     execution_id TEXT PRIMARY KEY,
@@ -325,8 +369,38 @@ class SQLiteAttemptReceiptStore:
                     artifact TEXT NOT NULL,
                     activation_sequence INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS execution_epochs (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    backup_epoch INTEGER NOT NULL CHECK (backup_epoch >= 1),
+                    admission_epoch INTEGER NOT NULL CHECK (admission_epoch >= 1)
+                );
+                INSERT OR IGNORE INTO execution_epochs
+                    (singleton, backup_epoch, admission_epoch) VALUES (1, 1, 1);
                 """)
+            self._validate_usage_budget_schema(connection)
         os.chmod(self._path, 0o600)
+
+    @staticmethod
+    def _validate_usage_budget_schema(connection: sqlite3.Connection) -> None:
+        """Fail closed unless every usage record uses the sole current schema."""
+        rows = connection.execute(
+            "SELECT reservation_id, tenant_id, project_id, units, payload FROM usage_reservations"
+        ).fetchall()
+        for reservation_id, tenant_id, project_id, units, payload in rows:
+            raw = json.loads(payload)
+            if raw.get("schema_version") != 2:
+                raise SQLiteIntegrityError("usage reservation schema is unknown")
+            scope_count = connection.execute(
+                "SELECT COUNT(*) FROM usage_reservation_scopes WHERE reservation_id = ?",
+                (reservation_id,),
+            ).fetchone()[0]
+            if scope_count < 1:
+                raise SQLiteIntegrityError("usage reservation scopes are unavailable")
+        settlements = connection.execute("SELECT settlement_id, payload FROM usage_settlements").fetchall()
+        for settlement_id, payload in settlements:
+            raw = json.loads(payload)
+            if raw.get("schema_version") != 2:
+                raise SQLiteIntegrityError("usage settlement schema is unknown")
 
     def _verify_startup(self, hard_min_free_bytes: int) -> SQLiteStartupReport:
         if not self._path.is_file():
@@ -667,6 +741,7 @@ class SQLiteAttemptReceiptStore:
         return attempt_count, session_count
 
     def _stage_generation(self, artifact: GenerationArtifact) -> None:
+        verify_generation_artifact_digest(artifact)
         payload = artifact.model_dump_json()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -720,7 +795,31 @@ class SQLiteAttemptReceiptStore:
                 "UPDATE gateway_generations SET state = ?, activation_sequence = ? " "WHERE generation_id = ?",
                 (GenerationState.ACTIVE.value, sequence, generation_id),
             )
+            connection.execute(
+                "UPDATE execution_epochs SET admission_epoch = admission_epoch + 1 " "WHERE singleton = 1"
+            )
             connection.commit()
+
+    def _execution_epoch_snapshot(self):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT backup_epoch, admission_epoch FROM execution_epochs WHERE singleton = 1"
+            ).fetchone()
+        if row is None:
+            raise SQLiteIntegrityError("execution epoch authority is missing")
+        return ExecutionEpochSnapshot(int(row[0]), int(row[1]))
+
+    def _advance_backup_epoch(self):
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("UPDATE execution_epochs SET backup_epoch = backup_epoch + 1 " "WHERE singleton = 1")
+            row = connection.execute(
+                "SELECT backup_epoch, admission_epoch FROM execution_epochs WHERE singleton = 1"
+            ).fetchone()
+            connection.commit()
+        if row is None:
+            raise SQLiteIntegrityError("execution epoch authority is missing")
+        return ExecutionEpochSnapshot(int(row[0]), int(row[1]))
 
     def _load_generations(
         self,
@@ -781,6 +880,35 @@ class SQLiteAttemptReceiptStore:
                 (execution_id, after_sequence, limit),
             ).fetchall()
         return tuple(PersistedLifecycleEvent.model_validate_json(row[0]) for row in rows)
+
+    def _put_owner_record(self, record: ExecutionOwnerRecord) -> ExecutionOwnerRecord:
+        payload = record.model_dump_json()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT record FROM execution_owner_records WHERE execution_id = ?",
+                (record.execution_id,),
+            ).fetchone()
+            if row is not None:
+                existing = ExecutionOwnerRecord.model_validate_json(row[0])
+                if existing != record:
+                    raise ReceiptConflictError("execution owner identity conflicts with existing record")
+                connection.commit()
+                return existing
+            connection.execute(
+                "INSERT INTO execution_owner_records (execution_id, record) VALUES (?, ?)",
+                (record.execution_id, payload),
+            )
+            connection.commit()
+        return record
+
+    def _get_owner_record(self, execution_id: ExecutionId) -> ExecutionOwnerRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT record FROM execution_owner_records WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+        return ExecutionOwnerRecord.model_validate_json(row[0]) if row is not None else None
 
     @staticmethod
     def _fsync_directory(directory: Path) -> None:
@@ -1412,13 +1540,57 @@ class SQLiteSessionReceiptStore:
 class SQLiteUsageLedger:
     """Budget authority sharing the receipt store's SQLite transaction domain."""
 
-    def __init__(self, authority: SQLiteAttemptReceiptStore) -> None:
+    def __init__(
+        self,
+        authority: SQLiteAttemptReceiptStore,
+        *,
+        clock_source: ClockSource,
+    ) -> None:
         self._authority = authority
+        self._clock_source = clock_source
+
+    def _now(self) -> datetime:
+        return self._clock_source.now().to_datetime(expected_clock=UNIX_UTC_CLOCK)
+
+    def reservations_by_id(self, reservation_ids: tuple[str, ...]) -> tuple[BudgetReservation, ...]:
+        if not reservation_ids or len(set(reservation_ids)) != len(reservation_ids):
+            raise ValueError("budget reservation identities must be non-empty and unique")
+        with self._authority._connect() as connection:
+            reservations: list[BudgetReservation] = []
+            for reservation_id in reservation_ids:
+                row = connection.execute(
+                    "SELECT payload FROM usage_reservations WHERE reservation_id = ?",
+                    (reservation_id,),
+                ).fetchone()
+                if row is None:
+                    raise SQLiteIntegrityError(f"budget reservation {reservation_id!r} is missing")
+                reservation = BudgetReservation.model_validate_json(row[0])
+                if reservation.reservation_id != reservation_id:
+                    raise SQLiteIntegrityError(f"budget reservation {reservation_id!r} identity is corrupt")
+                reservations.append(reservation)
+            return tuple(reservations)
 
     async def configure_budget(self, tenant_id: str, project_id: str, limit_units: int) -> None:
-        if not tenant_id or not project_id or limit_units < 0:
+        if (
+            type(tenant_id) is not str
+            or not tenant_id
+            or type(project_id) is not str
+            or not project_id
+            or type(limit_units) is not int
+            or limit_units < 0
+        ):
             raise ValueError("invalid budget configuration")
         await run_disk_io(self._configure_budget, tenant_id, project_id, limit_units)
+
+    async def reserve_many(
+        self,
+        requests: tuple[BudgetReservationRequest, ...],
+        *,
+        ttl_seconds: float,
+    ) -> tuple[BudgetReservation, ...]:
+        if not requests or type(ttl_seconds) not in {int, float} or not math.isfinite(ttl_seconds) or ttl_seconds <= 0:
+            raise ValueError("budget reservation batch and ttl must be non-empty")
+        return await run_disk_io(self._reserve_many, requests, ttl_seconds)
 
     async def reserve(
         self,
@@ -1429,8 +1601,16 @@ class SQLiteUsageLedger:
         project_id: str,
         units: int,
         ttl_seconds: float,
+        dimension: BudgetDimension = BudgetDimension.INFERENCE_UNIT,
+        scopes: tuple[BudgetScope, ...] = (),
     ) -> BudgetReservation:
-        if units <= 0 or ttl_seconds <= 0:
+        if (
+            type(units) is not int
+            or units <= 0
+            or type(ttl_seconds) not in {int, float}
+            or not math.isfinite(ttl_seconds)
+            or ttl_seconds <= 0
+        ):
             raise ValueError("reservation units and ttl must be positive")
         return await run_disk_io(
             self._reserve,
@@ -1440,6 +1620,8 @@ class SQLiteUsageLedger:
             project_id,
             units,
             ttl_seconds,
+            dimension,
+            scopes,
         )
 
     async def settle(
@@ -1449,7 +1631,7 @@ class SQLiteUsageLedger:
         settlement_id: str,
         actual_units: int,
     ) -> UsageSettlement:
-        if actual_units < 0:
+        if type(actual_units) is not int or actual_units < 0:
             raise ValueError("actual usage cannot be negative")
         return await run_disk_io(
             self._settle,
@@ -1485,7 +1667,12 @@ class SQLiteUsageLedger:
         actual_units: int,
         fencing_token: int,
     ) -> UsageSettlement:
-        if actual_units < 0 or fencing_token <= reservation.fencing_token:
+        if (
+            type(actual_units) is not int
+            or actual_units < 0
+            or type(fencing_token) is not int
+            or fencing_token <= reservation.fencing_token
+        ):
             raise ValueError("reconciliation requires known usage and a higher fencing token")
         return await run_disk_io(
             self._reconcile,
@@ -1496,7 +1683,12 @@ class SQLiteUsageLedger:
         )
 
     async def reclaim_expired(self, *, now: datetime, fencing_token: int) -> tuple[UsageSettlement, ...]:
-        if now.utcoffset() is None or fencing_token <= 0:
+        if (
+            not isinstance(now, datetime)
+            or now.utcoffset() is None
+            or type(fencing_token) is not int
+            or fencing_token <= 0
+        ):
             raise ValueError("expiry recovery requires aware time and positive fencing token")
         return await run_disk_io(self._reclaim_expired, now, fencing_token)
 
@@ -1508,6 +1700,116 @@ class SQLiteUsageLedger:
                 (tenant_id, project_id, limit_units),
             )
 
+    def _reserve_many(
+        self,
+        requests: tuple[BudgetReservationRequest, ...],
+        ttl_seconds: float,
+    ) -> tuple[BudgetReservation, ...]:
+        reservation_ids = {request.reservation_id for request in requests}
+        attempt_ids = {request.attempt_id for request in requests}
+        if len(reservation_ids) != len(requests) or len(attempt_ids) != len(requests):
+            raise ReceiptConflictError("budget batch identities are duplicated")
+        with self._authority._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing: list[BudgetReservation] = []
+            for request in requests:
+                row = connection.execute(
+                    "SELECT payload FROM usage_reservations WHERE reservation_id = ? OR attempt_id = ?",
+                    (request.reservation_id, request.attempt_id),
+                ).fetchone()
+                if row is not None:
+                    reservation = BudgetReservation.model_validate_json(row[0])
+                    if not self._request_matches_reservation(request, reservation):
+                        raise ReceiptConflictError("budget batch identity conflict")
+                    existing.append(reservation)
+            if existing:
+                if len(existing) != len(requests):
+                    raise ReceiptConflictError("budget batch is partially committed")
+                connection.commit()
+                return tuple(existing)
+
+            pending: dict[tuple[str, str], int] = {}
+            for request in requests:
+                for scope in request.scopes:
+                    key = (scope.tenant_id, scope.project_id)
+                    budget = connection.execute(
+                        "SELECT limit_units, settled_units FROM usage_budgets WHERE tenant_id = ? AND project_id = ?",
+                        key,
+                    ).fetchone()
+                    if budget is None:
+                        raise ReceiptConflictError(
+                            "budget scope is not configured",
+                            BudgetAdmissionDisposition.NOT_CONFIGURED,
+                        )
+                    active = connection.execute(
+                        "SELECT COALESCE(SUM(s.units), 0) FROM usage_reservation_scopes s "
+                        "JOIN usage_reservations r ON r.reservation_id = s.reservation_id "
+                        "WHERE s.tenant_id = ? AND s.project_id = ? AND r.state IN (?, ?)",
+                        (*key, ReservationState.RESERVED.value, ReservationState.PENDING_RECONCILIATION.value),
+                    ).fetchone()[0]
+                    requested = pending.get(key, 0) + request.units
+                    if budget[1] + active + requested > budget[0]:
+                        raise ReceiptConflictError(
+                            "budget exhausted",
+                            BudgetAdmissionDisposition.EXHAUSTED,
+                        )
+                    pending[key] = requested
+
+            expires_at = self._now() + timedelta(seconds=ttl_seconds)
+            reservations = tuple(
+                BudgetReservation(
+                    reservation_id=request.reservation_id,
+                    attempt_id=request.attempt_id,
+                    tenant_id=request.tenant_id,
+                    project_id=request.project_id,
+                    units=request.units,
+                    dimension=request.dimension,
+                    scopes=request.scopes,
+                    fencing_token=1,
+                    expires_at=expires_at,
+                )
+                for request in requests
+            )
+            for reservation in reservations:
+                connection.execute(
+                    "INSERT INTO usage_reservations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        reservation.reservation_id,
+                        reservation.attempt_id,
+                        reservation.tenant_id,
+                        reservation.project_id,
+                        reservation.units,
+                        reservation.fencing_token,
+                        reservation.state.value,
+                        reservation.expires_at.isoformat(),
+                        reservation.model_dump_json(),
+                    ),
+                )
+                connection.executemany(
+                    "INSERT INTO usage_reservation_scopes VALUES (?, ?, ?, ?)",
+                    [
+                        (reservation.reservation_id, scope.tenant_id, scope.project_id, reservation.units)
+                        for scope in reservation.scopes
+                    ],
+                )
+            connection.commit()
+            return reservations
+
+    @staticmethod
+    def _request_matches_reservation(
+        request: BudgetReservationRequest,
+        reservation: BudgetReservation,
+    ) -> bool:
+        return (
+            request.reservation_id == reservation.reservation_id
+            and request.attempt_id == reservation.attempt_id
+            and request.tenant_id == reservation.tenant_id
+            and request.project_id == reservation.project_id
+            and request.units == reservation.units
+            and request.dimension is reservation.dimension
+            and request.scopes == reservation.scopes
+        )
+
     def _reserve(
         self,
         reservation_id: str,
@@ -1516,9 +1818,22 @@ class SQLiteUsageLedger:
         project_id: str,
         units: int,
         ttl_seconds: float,
+        dimension: BudgetDimension,
+        scopes: tuple[BudgetScope, ...],
     ) -> BudgetReservation:
         with self._authority._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            effective_scopes = scopes or (
+                BudgetScope(
+                    kind=BudgetScopeKind.INFERENCE,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                ),
+            )
+            if len(set(effective_scopes)) != len(effective_scopes):
+                raise ReceiptConflictError("budget reservation scopes are duplicated")
+            if effective_scopes[0].tenant_id != tenant_id or effective_scopes[0].project_id != project_id:
+                raise ReceiptConflictError("primary budget scope identity conflict")
             existing = connection.execute(
                 "SELECT payload FROM usage_reservations WHERE reservation_id = ? OR attempt_id = ?",
                 (reservation_id, attempt_id),
@@ -1531,36 +1846,48 @@ class SQLiteUsageLedger:
                     or reservation.tenant_id != tenant_id
                     or reservation.project_id != project_id
                     or reservation.units != units
+                    or reservation.dimension is not dimension
+                    or reservation.scopes != effective_scopes
                 ):
                     raise ReceiptConflictError("budget reservation identity conflict")
                 connection.commit()
                 return reservation
-            budget = connection.execute(
-                "SELECT limit_units, settled_units FROM usage_budgets WHERE tenant_id = ? AND project_id = ?",
-                (tenant_id, project_id),
-            ).fetchone()
-            if budget is None:
-                raise ReceiptConflictError("budget is not configured")
-            active = connection.execute(
-                "SELECT COALESCE(SUM(units), 0) FROM usage_reservations "
-                "WHERE tenant_id = ? AND project_id = ? AND state IN (?, ?)",
-                (
-                    tenant_id,
-                    project_id,
-                    ReservationState.RESERVED.value,
-                    ReservationState.PENDING_RECONCILIATION.value,
-                ),
-            ).fetchone()[0]
-            if budget[1] + active + units > budget[0]:
-                raise ReceiptConflictError("budget exhausted")
+            for scope in effective_scopes:
+                budget = connection.execute(
+                    "SELECT limit_units, settled_units FROM usage_budgets WHERE tenant_id = ? AND project_id = ?",
+                    (scope.tenant_id, scope.project_id),
+                ).fetchone()
+                if budget is None:
+                    raise ReceiptConflictError(
+                        "budget scope is not configured",
+                        BudgetAdmissionDisposition.NOT_CONFIGURED,
+                    )
+                active = connection.execute(
+                    "SELECT COALESCE(SUM(s.units), 0) FROM usage_reservation_scopes s "
+                    "JOIN usage_reservations r ON r.reservation_id = s.reservation_id "
+                    "WHERE s.tenant_id = ? AND s.project_id = ? AND r.state IN (?, ?)",
+                    (
+                        scope.tenant_id,
+                        scope.project_id,
+                        ReservationState.RESERVED.value,
+                        ReservationState.PENDING_RECONCILIATION.value,
+                    ),
+                ).fetchone()[0]
+                if budget[1] + active + units > budget[0]:
+                    raise ReceiptConflictError(
+                        "budget exhausted",
+                        BudgetAdmissionDisposition.EXHAUSTED,
+                    )
             reservation = BudgetReservation(
                 reservation_id=reservation_id,
                 attempt_id=attempt_id,
                 tenant_id=tenant_id,
                 project_id=project_id,
                 units=units,
+                dimension=dimension,
+                scopes=effective_scopes,
                 fencing_token=1,
-                expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+                expires_at=self._now() + timedelta(seconds=ttl_seconds),
             )
             connection.execute(
                 "INSERT INTO usage_reservations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1575,6 +1902,13 @@ class SQLiteUsageLedger:
                     reservation.expires_at.isoformat(),
                     reservation.model_dump_json(),
                 ),
+            )
+            connection.executemany(
+                "INSERT INTO usage_reservation_scopes VALUES (?, ?, ?, ?)",
+                [
+                    (reservation.reservation_id, scope.tenant_id, scope.project_id, units)
+                    for scope in reservation.scopes
+                ],
             )
             connection.commit()
             return reservation
@@ -1621,6 +1955,7 @@ class SQLiteUsageLedger:
                 reservation_id=reservation.reservation_id,
                 attempt_id=reservation.attempt_id,
                 actual_units=actual_units,
+                dimension=reservation.dimension,
                 state=state,
             )
             updated_reservation = reservation.model_copy(update={"state": state})
@@ -1633,10 +1968,10 @@ class SQLiteUsageLedger:
                 ),
             )
             if state is ReservationState.SETTLED:
-                connection.execute(
+                connection.executemany(
                     "UPDATE usage_budgets SET settled_units = settled_units + ? "
                     "WHERE tenant_id = ? AND project_id = ?",
-                    (actual_units, reservation.tenant_id, reservation.project_id),
+                    [(actual_units, scope.tenant_id, scope.project_id) for scope in reservation.scopes],
                 )
             connection.execute(
                 "INSERT INTO usage_settlements VALUES (?, ?, ?, ?)",
@@ -1694,6 +2029,7 @@ class SQLiteUsageLedger:
                 reservation_id=reservation.reservation_id,
                 attempt_id=reservation.attempt_id,
                 actual_units=actual_units,
+                dimension=reservation.dimension,
                 state=ReservationState.SETTLED,
             )
             updated = current.model_copy(
@@ -1711,9 +2047,9 @@ class SQLiteUsageLedger:
                     reservation.reservation_id,
                 ),
             )
-            connection.execute(
+            connection.executemany(
                 "UPDATE usage_budgets SET settled_units = settled_units + ? " "WHERE tenant_id = ? AND project_id = ?",
-                (actual_units, reservation.tenant_id, reservation.project_id),
+                [(actual_units, scope.tenant_id, scope.project_id) for scope in reservation.scopes],
             )
             connection.execute(
                 "INSERT INTO usage_settlements VALUES (?, ?, ?, ?)",
@@ -1742,6 +2078,7 @@ class SQLiteUsageLedger:
                     reservation_id=current.reservation_id,
                     attempt_id=current.attempt_id,
                     actual_units=0,
+                    dimension=current.dimension,
                     state=ReservationState.RELEASED,
                 )
                 updated = current.model_copy(
@@ -1781,4 +2118,6 @@ class SQLiteUsageLedger:
             and left.tenant_id == right.tenant_id
             and left.project_id == right.project_id
             and left.units == right.units
+            and left.dimension is right.dimension
+            and left.scopes == right.scopes
         )

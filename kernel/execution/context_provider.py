@@ -7,7 +7,7 @@ from typing import Optional
 
 from mote.contracts.model.inference import ResolvedInferenceTarget
 from mote.kernel.execution.context import BudgetVerdict, ExecutionContext
-from mote.kernel.inference.request import InferenceRequest
+from mote.kernel.execution.request import InferenceRequest
 
 
 class BaseContextProvider(ABC):

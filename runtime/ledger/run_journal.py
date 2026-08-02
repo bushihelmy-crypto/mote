@@ -18,11 +18,13 @@ crash-durability mechanics all live in the shared
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
-from mote.runtime.ledger import AppendOnlyLedger
+from mote.contracts.tool.identity import ToolInvocationIdentity
+from mote.runtime.ledger.append_ledger import AppendOnlyLedger, LedgerCommitReceipt
 from mote.runtime.session.workspace import SessionSpace, SessionWorkspace
 
 #: Filename of the append-only journal inside a session's ``ledger/`` space.
@@ -43,6 +45,10 @@ FAILED = "failed"
 
 class UnsupportedRunJournalRecord(RuntimeError):
     """A durable journal line does not use the current StepRecord schema."""
+
+
+class RunJournalLifecycleError(RuntimeError):
+    """A step attempts a non-monotonic or forked durable transition."""
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,15 @@ class StepRecord:
     ended_at: Optional[float] = None
     payload: Optional[str] = None
     success: bool = True
+    invocation_identity: ToolInvocationIdentity | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.started_at) not in {int, float} or not math.isfinite(self.started_at) or self.started_at < 0:
+            raise UnsupportedRunJournalRecord("started_at must be a finite non-negative number")
+        if self.ended_at is not None and (
+            type(self.ended_at) not in {int, float} or not math.isfinite(self.ended_at) or self.ended_at < 0
+        ):
+            raise UnsupportedRunJournalRecord("ended_at must be a finite non-negative number or null")
 
     def to_json(self) -> str:
         return json.dumps(
@@ -83,12 +98,15 @@ class StepRecord:
                 "ended_at": self.ended_at,
                 "payload": self.payload,
                 "success": self.success,
+                "invocation_identity": (
+                    None if self.invocation_identity is None else self.invocation_identity.to_payload()
+                ),
             },
             ensure_ascii=False,
         )
 
     @classmethod
-    def from_dict(cls, d: dict) -> "StepRecord":
+    def from_dict(cls, d: dict[str, object]) -> "StepRecord":
         names = {
             "step_id",
             "kind",
@@ -101,10 +119,63 @@ class StepRecord:
             "ended_at",
             "payload",
             "success",
+            "invocation_identity",
         }
         if set(d) != names:
             raise UnsupportedRunJournalRecord(f"[unsupported_run_journal_record] expected_fields={sorted(names)!r}")
-        return cls(**d)
+        if type(d["step_id"]) is not str or not d["step_id"]:
+            raise UnsupportedRunJournalRecord("step_id must be a non-empty string")
+        if type(d["kind"]) is not str or d["kind"] not in {KIND_THINK, KIND_TOOL, KIND_TIMER}:
+            raise UnsupportedRunJournalRecord("kind is not a supported run-step kind")
+        if type(d["effect"]) is not str or not d["effect"]:
+            raise UnsupportedRunJournalRecord("effect must be a non-empty string")
+        if type(d["status"]) is not str or d["status"] not in {STARTED, COMPLETED, FAILED}:
+            raise UnsupportedRunJournalRecord("status is not a supported lifecycle state")
+        seq = d["seq"]
+        if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
+            raise UnsupportedRunJournalRecord("seq must be a non-negative integer")
+        if type(d["name"]) is not str:
+            raise UnsupportedRunJournalRecord("name must be a string")
+        if d["tool_call_id"] is not None and type(d["tool_call_id"]) is not str:
+            raise UnsupportedRunJournalRecord("tool_call_id must be a string or null")
+        started_at = d["started_at"]
+        if not isinstance(started_at, (int, float)) or isinstance(started_at, bool):
+            raise UnsupportedRunJournalRecord("started_at must be a finite non-negative number")
+        canonical_started_at = float(started_at)
+        if not math.isfinite(canonical_started_at) or canonical_started_at < 0:
+            raise UnsupportedRunJournalRecord("started_at must be a finite non-negative number")
+        ended_at = d["ended_at"]
+        canonical_ended_at: float | None = None
+        if ended_at is not None:
+            if not isinstance(ended_at, (int, float)) or isinstance(ended_at, bool):
+                raise UnsupportedRunJournalRecord("ended_at must be a finite non-negative number or null")
+            canonical_ended_at = float(ended_at)
+            if not math.isfinite(canonical_ended_at) or canonical_ended_at < 0:
+                raise UnsupportedRunJournalRecord("ended_at must be a finite non-negative number or null")
+        if d["payload"] is not None and type(d["payload"]) is not str:
+            raise UnsupportedRunJournalRecord("payload must be a string or null")
+        if type(d["success"]) is not bool:
+            raise UnsupportedRunJournalRecord("success must be a boolean")
+        invocation_payload = d["invocation_identity"]
+        if invocation_payload is not None and not isinstance(invocation_payload, dict):
+            raise UnsupportedRunJournalRecord("invocation_identity must be an object or null")
+        invocation_identity = (
+            None if invocation_payload is None else ToolInvocationIdentity.from_payload(invocation_payload)
+        )
+        return cls(
+            step_id=d["step_id"],
+            kind=d["kind"],
+            effect=d["effect"],
+            status=d["status"],
+            seq=seq,
+            name=d["name"],
+            tool_call_id=d["tool_call_id"],
+            started_at=canonical_started_at,
+            ended_at=canonical_ended_at,
+            payload=d["payload"],
+            success=d["success"],
+            invocation_identity=invocation_identity,
+        )
 
 
 class RunJournal(AppendOnlyLedger[StepRecord]):
@@ -135,11 +206,36 @@ class RunJournal(AppendOnlyLedger[StepRecord]):
     # Base hooks
     # ------------------------------------------------------------------
 
-    def _parse_record(self, data: dict) -> StepRecord:
+    def _parse_record(self, data: dict[str, object]) -> StepRecord:
         return StepRecord.from_dict(data)
 
     def _record_key(self, record: StepRecord) -> str:
         return record.step_id
+
+    def _validate_transition(self, previous: StepRecord | None, record: StepRecord) -> None:
+        if previous is None:
+            if record.status != STARTED:
+                raise RunJournalLifecycleError(
+                    f"[run_journal_lifecycle] step={record.step_id} first_state={record.status}"
+                )
+            return
+        if previous.status != STARTED or record.status not in {COMPLETED, FAILED}:
+            raise RunJournalLifecycleError(
+                f"[run_journal_lifecycle] step={record.step_id} transition={previous.status}->{record.status}"
+            )
+        immutable = (
+            "kind",
+            "effect",
+            "seq",
+            "name",
+            "tool_call_id",
+            "started_at",
+            "invocation_identity",
+        )
+        if any(getattr(previous, field) != getattr(record, field) for field in immutable):
+            raise RunJournalLifecycleError(
+                f"[run_journal_lifecycle] step={record.step_id} terminal forks started identity"
+            )
 
     # ------------------------------------------------------------------
     # Reads
@@ -193,7 +289,8 @@ class RunJournal(AppendOnlyLedger[StepRecord]):
         seq: int = 0,
         tool_call_id: Optional[str] = None,
         payload: Optional[str] = None,
-    ) -> None:
+        invocation_identity: ToolInvocationIdentity | None = None,
+    ) -> LedgerCommitReceipt:
         """Record that a step is about to run. For an EXTERNAL step this MUST be
         durable before the body executes, so a mid-step crash is detectable.
 
@@ -202,7 +299,7 @@ class RunJournal(AppendOnlyLedger[StepRecord]):
         its wall-clock deadline here so a resume can compute the remaining wait
         from a step that is, by design, still ``started`` while it counts down.
         """
-        self.append(
+        return self.append(
             StepRecord(
                 step_id=step_id,
                 kind=kind,
@@ -213,36 +310,42 @@ class RunJournal(AppendOnlyLedger[StepRecord]):
                 tool_call_id=tool_call_id,
                 started_at=time.time(),
                 payload=payload,
+                invocation_identity=invocation_identity,
             )
         )
 
-    def record_completed(self, step_id: str, *, payload: Optional[str] = None, success: bool = True) -> None:
+    def record_completed(
+        self, step_id: str, *, payload: Optional[str] = None, success: bool = True
+    ) -> LedgerCommitReceipt:
         """Record a successful terminal, carrying the result forward for healing."""
-        self._terminal(step_id, COMPLETED, payload=payload, success=success)
+        return self._terminal(step_id, COMPLETED, payload=payload, success=success)
 
-    def record_failed(self, step_id: str, *, payload: Optional[str] = None) -> None:
+    def record_failed(self, step_id: str, *, payload: Optional[str] = None) -> LedgerCommitReceipt:
         """Record a failed terminal (the step ran but errored)."""
-        self._terminal(step_id, FAILED, payload=payload, success=False)
+        return self._terminal(step_id, FAILED, payload=payload, success=False)
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _terminal(self, step_id: str, status: str, *, payload: Optional[str], success: bool) -> None:
+    def _terminal(self, step_id: str, status: str, *, payload: Optional[str], success: bool) -> LedgerCommitReceipt:
         prior = self.get(step_id)
-        self.append(
+        if prior is None:
+            raise RunJournalLifecycleError(f"[run_journal_lifecycle] step={step_id} terminal_without_started")
+        return self.append(
             StepRecord(
                 step_id=step_id,
-                kind=prior.kind if prior is not None else KIND_TOOL,
-                effect=prior.effect if prior is not None else "external",
+                kind=prior.kind,
+                effect=prior.effect,
                 status=status,
-                seq=prior.seq if prior is not None else 0,
-                name=prior.name if prior is not None else "",
-                tool_call_id=prior.tool_call_id if prior is not None else None,
-                started_at=prior.started_at if prior is not None else time.time(),
+                seq=prior.seq,
+                name=prior.name,
+                tool_call_id=prior.tool_call_id,
+                started_at=prior.started_at,
                 ended_at=time.time(),
                 payload=payload,
                 success=success,
+                invocation_identity=prior.invocation_identity,
             )
         )
 
@@ -274,7 +377,21 @@ async def run_journaled_step(
     fold the short-circuit into this helper. This helper is entered only once
     the caller has decided the step must actually run.
     """
-    journal.record_started(step_id, kind, effect, name=name, seq=seq, tool_call_id=tool_call_id)
+    prior = journal.replay(step_id)
+    if prior is None:
+        journal.record_started(step_id, kind, effect, name=name, seq=seq, tool_call_id=tool_call_id)
+    elif prior.status != STARTED:
+        raise RunJournalLifecycleError(f"[run_journal_lifecycle] step={step_id} cannot_execute_from={prior.status}")
+    elif prior.effect == "external":
+        raise RunJournalLifecycleError(f"[run_journal_lifecycle] step={step_id} external_started_result_unknown")
+    elif (prior.kind, prior.effect, prior.seq, prior.name, prior.tool_call_id) != (
+        kind,
+        effect,
+        seq,
+        name,
+        tool_call_id,
+    ):
+        raise RunJournalLifecycleError(f"[run_journal_lifecycle] step={step_id} resumed definition mismatch")
     try:
         payload = await execute()
     except Exception as exc:
@@ -296,4 +413,5 @@ __all__ = [
     "KIND_TIMER",
     "JOURNAL_FILE_NAME",
     "UnsupportedRunJournalRecord",
+    "RunJournalLifecycleError",
 ]

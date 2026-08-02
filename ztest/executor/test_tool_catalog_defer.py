@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import threading
+
+import pytest
+
+from mote.contracts.tool import ToolEffect
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
-from mote.runtime.tools.tool_binding import BoundTool
+from mote.runtime.tools.tool_binding import ExecutableToolBinding
 from mote.runtime.tools.tool_catalog import NativeToolCatalog, XmlToolCatalog
 
 
 class Capability:
     def __init__(self, name: str) -> None:
         self.name = name
+
+    @staticmethod
+    def resolve_effect() -> ToolEffect:
+        return ToolEffect.PURE
 
 
 def _xml_definition(name: str, description: str) -> XmlToolDefinition[Capability]:
@@ -22,6 +31,7 @@ def _xml_definition(name: str, description: str) -> XmlToolDefinition[Capability
             "description": description,
             "parameters": {"value": "string"},
         },
+        source_identity=f"test:{name}",
         description=description,
         summary=description.splitlines()[0],
         search_text=description,
@@ -41,6 +51,7 @@ def _native_definition(name: str, description: str, *, category: str = "builtin"
                 "properties": {"value": {"type": "string"}},
             },
         },
+        source_identity=f"test:{name}",
         description=description,
         summary=description.splitlines()[0],
         search_text=description,
@@ -56,7 +67,7 @@ def _xml_catalog(*, revealed: set[str] | None = None) -> XmlToolCatalog:
         ("Convert", "Convert an image."),
     ):
         definition = _xml_definition(name, description)
-        catalog.register(BoundTool(definition, Capability(name)), [name])
+        catalog.register(ExecutableToolBinding(definition, Capability(name)), [name])
     return catalog
 
 
@@ -68,7 +79,7 @@ def _native_catalog(*, revealed: set[str] | None = None) -> NativeToolCatalog:
         ("Convert", "Convert an image."),
     ):
         definition = _native_definition(name, description)
-        catalog.register(BoundTool(definition, Capability(name)), [name])
+        catalog.register(ExecutableToolBinding(definition, Capability(name)), [name])
     return catalog
 
 
@@ -98,7 +109,7 @@ def test_native_dynamic_catalog_does_not_leak_hidden_schema() -> None:
     revealed: set[str] = set()
     catalog = NativeToolCatalog(deferred={"Convert"}, get_revealed=lambda: revealed)
     definition = _native_definition("Convert", "Convert an image.", category="mcp")
-    catalog.register(BoundTool(definition, Capability("Convert")), ["Convert"])
+    catalog.register(ExecutableToolBinding(definition, Capability("Convert")), ["Convert"])
 
     assert catalog.schemas_for("mcp") == {}
     revealed.add("Convert")
@@ -126,10 +137,66 @@ def test_deferred_menus_use_current_protocol_definition() -> None:
 def test_protocol_catalog_rejects_wrong_definition() -> None:
     xml = XmlToolCatalog()
     native_definition = _native_definition("Wrong", "Wrong protocol.")
-    xml.register(BoundTool(native_definition, Capability("Wrong")), ["Wrong"])
+    xml.register(ExecutableToolBinding(native_definition, Capability("Wrong")), ["Wrong"])
     try:
         xml.schemas_for(None)
     except TypeError as exc:
         assert "non-XML" in str(exc)
     else:
         raise AssertionError("wrong-protocol definition was not rejected")
+
+
+def test_mcp_generation_swap_rejects_builtin_alias_collision_without_mutation() -> None:
+    catalog = _native_catalog()
+    before = catalog.names()
+    generation = catalog.generation
+    definition = _native_definition("Remote", "Remote tool.", category="mcp")
+
+    with pytest.raises(ValueError, match="namespace conflict"):
+        catalog.replace_mcp(((ExecutableToolBinding(definition, Capability("Remote")), ("Read",)),))
+
+    assert catalog.names() == before
+    assert catalog.generation == generation
+
+
+def test_mcp_generation_swap_rejects_candidate_alias_collision_without_mutation() -> None:
+    catalog = _native_catalog()
+    generation = catalog.generation
+    first = ExecutableToolBinding(
+        _native_definition("First", "First remote.", category="mcp"),
+        Capability("First"),
+    )
+    second = ExecutableToolBinding(
+        _native_definition("Second", "Second remote.", category="mcp"),
+        Capability("Second"),
+    )
+
+    with pytest.raises(ValueError, match="namespace conflict"):
+        catalog.replace_mcp(((first, ("remote",)), (second, ("remote",))))
+
+    assert catalog.generation == generation
+    assert catalog.mcp_names() == []
+
+
+def test_mcp_generation_swap_publishes_only_complete_snapshots() -> None:
+    catalog = NativeToolCatalog()
+    old = ExecutableToolBinding(_native_definition("Old", "Old remote.", category="mcp"), Capability("Old"))
+    catalog.replace_mcp(((old, ("old:a", "old:b")),))
+    new = ExecutableToolBinding(_native_definition("New", "New remote.", category="mcp"), Capability("New"))
+    observed: set[frozenset[str]] = set()
+    ready = threading.Event()
+
+    def read_catalog() -> None:
+        ready.set()
+        for _ in range(10_000):
+            observed.add(frozenset(catalog.mcp_names()))
+
+    reader = threading.Thread(target=read_catalog)
+    reader.start()
+    ready.wait()
+    before = catalog.generation
+    catalog.replace_mcp(((new, ("new:a", "new:b")),))
+    reader.join()
+
+    assert observed <= {frozenset({"old:a", "old:b"}), frozenset({"new:a", "new:b"})}
+    assert catalog.generation == before + 1

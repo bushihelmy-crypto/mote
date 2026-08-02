@@ -21,6 +21,7 @@ from mote.contracts.runtime.models import (
     RuntimeProjectionRequest,
     RuntimeRef,
     RuntimeState,
+    validate_checkpoint_successor,
 )
 
 __all__ = [
@@ -44,4 +45,5 @@ __all__ = [
     "RuntimeProjectionRequest",
     "RuntimeRef",
     "RuntimeState",
+    "validate_checkpoint_successor",
 ]

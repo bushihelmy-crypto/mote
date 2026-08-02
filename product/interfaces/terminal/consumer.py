@@ -22,9 +22,11 @@ timing to share.
 
 from __future__ import annotations
 
+import json
 import sys
 from typing import Any
 
+from mote.contracts.async_work.codec import decode_async_work_observation
 from mote.product.i18n import keys as K
 from mote.product.i18n import t
 from mote.product.presentation.consumer import BaseConsumer
@@ -111,6 +113,10 @@ class PlainTerminalConsumer(BaseConsumer):
 
     def on_task_progress(self, ev: Any) -> None:
         self._print(f"  {ev.stage} {ev.status}{(': ' + ev.detail) if ev.detail else ''}")
+
+    def on_async_work_observed(self, ev: Any) -> None:
+        observation = decode_async_work_observation(json.loads(ev.observation_json))
+        self._print(f"  async-work {observation.phase.value}: " f"{observation.reference.reference}")
 
     def on_notice(self, ev: Any) -> None:
         self._print(ev.text)

@@ -15,7 +15,7 @@ from mote.contracts.runtime import (
     RuntimeState,
 )
 from mote.contracts.runtime.handoff import RuntimeHandoffIntent
-from mote.runtime.interactive import RuntimeHost
+from mote.runtime.interactive.host import RuntimeHost
 from mote.runtime.session import RuntimeCheckpointEvent, SessionLog, SessionMetaEvent
 from mote.runtime.session.replay import replay
 from mote.runtime.session.runtime_handoff import SessionRuntimeHandoffJournal

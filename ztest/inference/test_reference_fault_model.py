@@ -103,7 +103,7 @@ def _permit(
     now = datetime.now(timezone.utc)
     return WirePermit(
         attempt_id=attempt_id,
-        execution_taxonomy="unary_finite_attempt",
+        execution_taxonomy=ExecutionTaxonomy.UNARY_FINITE_ATTEMPT,
         owner_journal_id="journal-1",
         wire_unit="http-request",
         generation_id="generation-1",

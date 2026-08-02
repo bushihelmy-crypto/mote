@@ -26,8 +26,10 @@ from typing import Any
 import pytest
 
 from mote.contracts.config.tool import DurableConfig, RunJournalConfig, ToolResultLimitConfig
+from mote.contracts.ports.tool.deferred import DeferredResultKind, DeferredToolSettlement
 from mote.contracts.tool.errors import ToolError
 from mote.contracts.tool.execution import ToolExecutionKind
+from mote.contracts.tool.result import json_tool_payload
 from mote.orchestration.background_tasks.model import BgTaskResult
 from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.tools.base_tool import BaseTool
@@ -129,7 +131,7 @@ class StructuredResultTool(BaseTool):
     name = "Struct"
 
     async def call(self, *, ok: bool = False) -> ToolResult:
-        return ToolResult(output="structured", success=ok, data={"k": "v"})
+        return ToolResult(output="structured", success=ok, payload=json_tool_payload({"k": "v"}))
 
 
 class CapTool(BaseTool):
@@ -174,6 +176,30 @@ def fresh_catalog() -> ToolCatalog:
 # ---------------------------------------------------------------------------
 
 
+class _TestDeferredProjector:
+    def activate(self) -> None:
+        return None
+
+    def deactivate(self) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        return None
+
+    def classify(self, value: object) -> DeferredResultKind | None:
+        return DeferredResultKind.BACKGROUND_TASK if isinstance(value, BgTaskResult) else None
+
+    def settle(self, value: object, *, tool_name: str) -> DeferredToolSettlement:
+        if not isinstance(value, BgTaskResult):
+            raise TypeError("unsupported deferred result")
+        output = str(value.result) if value.result is not None else ""
+        return DeferredToolSettlement(
+            DeferredResultKind.BACKGROUND_TASK,
+            output,
+            value,
+        )
+
+
 def make_executor(
     *tools: BaseTool,
     session_id: str = "sess",
@@ -183,6 +209,8 @@ def make_executor(
     durable_config: DurableConfig | None = None,
     recovery_strategies: dict | None = None,
     workspace_store=None,
+    telemetry=None,
+    tool_call_policy=None,
 ) -> ToolExecutor:
     """Build a ToolExecutor with no registry lookup and inject bound instances.
 
@@ -204,8 +232,11 @@ def make_executor(
         journal_config=journal_config,
         durable_config=durable_config,
         recovery_strategies=recovery_strategies,
+        telemetry=telemetry,
+        tool_call_policy=tool_call_policy,
         workspace_store=workspace_store or SessionWorkspace(Path(tempfile.mkdtemp(prefix="mote-tool-test-"))),
         toolsets=(NativeToolset("test.native", definitions),),
         command_protocol="native",
+        deferred_result_projector=_TestDeferredProjector(),
     )
     return ex

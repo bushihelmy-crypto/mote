@@ -81,9 +81,10 @@ class TestAgentCatalog:
             AgentCatalog.from_types((NotARole,), _FakeAgentFactory())
 
     def test_role_subclass_and_alias_resolve(self):
+        from mote.contracts.agent import BaseAgent
         from mote.runtime.agent.role import Role
 
-        class MyAgent(Role):
+        class MyAgent(BaseAgent, Role):
             agent_name = "MyAgent"
             aliases = ["ma"]
 
@@ -146,7 +147,7 @@ class TestMCPToolAdapter:
         assert native["input_schema"] == mcp_schema["parameters"]
 
     def test_native_schema_defaults_when_no_parameters(self):
-        adapter = MCPToolAdapter.from_discovery(_FakeMCP(), DiscoveredMcpTool("bare", "", {}))
+        adapter = MCPToolAdapter.from_discovery(_FakeMCP(), DiscoveredMcpTool("bare", "", {}, "test:mcp-source"))
         native = adapter.native_definition().render(adapter)
         assert native["input_schema"] == {"type": "object", "properties": {}}
         assert native["description"] == ""
@@ -189,6 +190,7 @@ class TestMCPToolAdapter:
                     "type": "object",
                     "properties": {"items": {"type": "array", "items": {"type": "string"}}},
                 },
+                source_identity="test:mcp-source",
             ),
         )
         with pytest.raises(McpXmlSchemaError, match="items.*array"):
@@ -200,6 +202,7 @@ def _discovered(schema):
         name=schema["name"],
         description=schema.get("description", ""),
         input_schema=schema.get("parameters") or {},
+        source_identity="test:mcp-source",
     )
 
 
@@ -234,6 +237,7 @@ class TestMcpToolsets:
                         "type": "object",
                         "properties": {"payload": {"type": "object", "properties": {}}},
                     },
+                    source_identity="test:mcp-source",
                 ),
             )
         )

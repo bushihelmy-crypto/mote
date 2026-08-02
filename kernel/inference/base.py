@@ -13,7 +13,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from mote.contracts.model.inference import InferenceResult, ResolvedInferenceTarget
+from mote.contracts.conversation import Message
+from mote.contracts.events.envelope import JsonValue
+from mote.contracts.model.inference import InferenceAttemptFence, InferenceResult, ResolvedInferenceTarget
+from mote.contracts.model.invocation import CanonicalToolDefinition
+from mote.contracts.output import OutputBinding
 
 if TYPE_CHECKING:
     from mote.contracts.ports.conversation.message_store import MessageStore
@@ -44,17 +48,23 @@ class BaseInferenceEngine(ABC):
     @abstractmethod
     async def start(
         self,
-        req,
-        system_prompt,
-        tool_specs=None,
+        req: list[Message],
+        system_prompt: str,
+        tool_specs: tuple[CanonicalToolDefinition, ...] | None = None,
         *,
         target: ResolvedInferenceTarget,
         model_call_id: str,
         resume: bool = False,
-        output_binding=None,
-        output_schema=None,
-        output_run_id="",
-        schema_fingerprint="",
+        output_binding: OutputBinding | None = None,
+        output_schema: dict[str, JsonValue] | None = None,
+        output_run_id: str = "",
+        schema_fingerprint: str = "",
+        attempt: InferenceAttemptFence | None = None,
+        protocol_fingerprint: str = "",
+        vocabulary_fingerprint: str = "",
+        tool_projection_fingerprint: str = "",
+        prompt_section_set_fingerprint: str = "",
+        request_fingerprint: str = "",
     ) -> None:
         """Launch one think round.
 

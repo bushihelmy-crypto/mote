@@ -35,9 +35,11 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional, TypeAlias, TypedDict
 
 from mote.contracts.ports.task.operations import BackgroundTaskService
+from mote.contracts.service import HostedServicePayload, HostedServiceResult, ServiceExecutionSemantics
 from mote.contracts.task.models import TaskId
 
 if TYPE_CHECKING:
+    from mote.contracts.browser import BrowserProfileCommitReceipt, BrowserProfileSnapshot, BrowserStorageState
     from mote.contracts.file import (
         EditCommitOutcome,
         FileByteView,
@@ -51,11 +53,12 @@ if TYPE_CHECKING:
     from mote.contracts.interaction import ApprovalChoice, ApprovalRequest, AskUserQuestionAnswers, AskUserQuestionItem
     from mote.contracts.interaction.handoff import HandoffOutcome
     from mote.contracts.ports.artifact.store import ArtifactStore, ReliableArtifactPublisher
+    from mote.contracts.ports.file.operations import GeneratedTargetReservationPort
     from mote.contracts.ports.skill.registry import SkillCatalog
     from mote.runtime.config.device import DeviceConfig
     from mote.runtime.fileops.edit_plans import EditPlan, EditPlanRequest
-    from mote.runtime.interactive import RuntimeHost
-    from mote.runtime.sandbox import SandboxRuntime
+    from mote.runtime.interactive.host import RuntimeHost
+    from mote.runtime.sandbox.runtime import SandboxRuntime
     from mote.runtime.tools.tool_result import ToolResult
 
 # ---------------------------------------------------------------------------
@@ -72,7 +75,7 @@ Deactivate: TypeAlias = Callable[[], None]
 GetDefaultModel: TypeAlias = Callable[[], Optional[str]]
 
 # ---------------------------------------------------------------------------
-# Human I/O (only valid inside a MoteEnv)
+# Human I/O (available only while an explicit interaction Port is bound)
 # ---------------------------------------------------------------------------
 
 AskUser: TypeAlias = Callable[[str], Awaitable[str]]
@@ -101,6 +104,10 @@ SearchFiles: TypeAlias = Callable[..., "SearchResult"]
 PlanFileEdit: TypeAlias = Callable[["EditPlanRequest"], "Awaitable[EditPlan]"]
 CommitEditPlan: TypeAlias = Callable[..., "Awaitable[EditCommitOutcome]"]
 CommitGeneratedFiles: TypeAlias = Callable[..., "Awaitable[MutationResult]"]
+TryReserveGeneratedTargets: TypeAlias = Callable[
+    [tuple[str, ...]],
+    "GeneratedTargetReservationPort | None",
+]
 RecordFileGlimpsed: TypeAlias = Callable[[str], None]
 IsResourceVisible: TypeAlias = Callable[[str], bool]
 
@@ -117,8 +124,9 @@ GetBrowserCdpEndpoint: TypeAlias = Callable[[], str]
 # one. The store is encrypted at rest (reuses the vault key); the value never
 # rides the rollout when a profile is in use.
 GetBrowserProfile: TypeAlias = Callable[[], str]
-LoadBrowserProfile: TypeAlias = Callable[[str], Optional[dict]]
-SaveBrowserProfile: TypeAlias = Callable[[str, Optional[dict]], None]
+LoadBrowserProfile: TypeAlias = Callable[[str], Optional["BrowserProfileSnapshot"]]
+SaveBrowserProfile: TypeAlias = Callable[[str, "BrowserStorageState", Optional[int]], "BrowserProfileCommitReceipt"]
+GetBrowserProfileTarget: TypeAlias = Callable[[str], str]
 # Client TLS certificates for mutual-TLS logins: each dict is a Playwright
 # ``client_certificates`` entry (origin + PEM/PKCS#12 paths + optional
 # passphrase, which may still be a secret placeholder the tool expands).
@@ -209,7 +217,10 @@ DescribeDeferredTools: TypeAlias = Callable[[list[str]], dict[str, str]]
 # ---------------------------------------------------------------------------
 
 DescribeImage: TypeAlias = Callable[..., "Awaitable[str]"]
-InvokeService: TypeAlias = Callable[..., Awaitable[Any]]
+InvokeService: TypeAlias = Callable[
+    [HostedServicePayload, str, ServiceExecutionSemantics],
+    Awaitable[HostedServiceResult],
+]
 GraphRunLease: TypeAlias = Callable[[str], AsyncContextManager[None]]
 
 
@@ -241,6 +252,7 @@ class CapabilityMap(TypedDict):
     plan_file_edit: PlanFileEdit
     commit_edit_plan: CommitEditPlan
     commit_generated_files: CommitGeneratedFiles
+    try_reserve_generated_targets: TryReserveGeneratedTargets
     record_file_glimpsed: RecordFileGlimpsed
     is_resource_visible: IsResourceVisible
     get_browser_stealth: GetBrowserStealth
@@ -250,6 +262,7 @@ class CapabilityMap(TypedDict):
     get_browser_profile: GetBrowserProfile
     load_browser_profile: LoadBrowserProfile
     save_browser_profile: SaveBrowserProfile
+    get_browser_profile_target: GetBrowserProfileTarget
     get_browser_client_certs: GetBrowserClientCerts
     get_secret: GetSecret
     get_runtime_host: GetRuntimeHost

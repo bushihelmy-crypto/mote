@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS, ModelContextRebuiltEvent
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 from mote.runtime.telemetry.logging import logger
 from mote.runtime.vcs import collect_git_state, render_git_section
@@ -56,7 +56,8 @@ class GitContextSource:
     name = "git"
     # Render order in the turn-context bus (lowest first): git leads the block.
     priority = TurnContextPriority.GIT
-    save_to_context = True
+    # Repository state is time-varying request context, never durable history.
+    save_to_context = False
 
     def __init__(self, get_cwd: Optional[CwdProvider] = None) -> None:
         # The frozen, already-rendered snapshot text (None once captured off-repo
@@ -66,7 +67,7 @@ class GitContextSource:
         self._pending = False
         self._initialized = False
 
-    async def on_model_context_rebuilt(self, event: object) -> None:
+    async def on_model_context_rebuilt(self, event: ModelContextRebuiltEvent) -> None:
         """Refresh the snapshot after a committed model-context rebuild."""
 
         if isinstance(event, MODEL_CONTEXT_REBUILT_EVENTS):

@@ -15,17 +15,30 @@ Notification design (built around a ``<task-notification>`` envelope):
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from typing import TYPE_CHECKING, Callable, Coroutine, Optional, Protocol
+from uuid import uuid4
 from xml.sax.saxutils import escape as _escape_xml
 
 from mote.contracts.config.tool import ToolResultLimitConfig
 from mote.contracts.conversation import CauseBy, MessagePriority
 from mote.contracts.ports.task.operations import BackgroundWakeReason
+from mote.contracts.task.lifecycle import (
+    BackgroundTaskAcceptance,
+    BackgroundTaskAdmissionClosed,
+    BackgroundTaskDrainDisposition,
+    BackgroundTaskDrainReceipt,
+    BackgroundTaskOwner,
+    BackgroundTaskPinSnapshot,
+    BackgroundTaskPoolState,
+    LocalTaskReference,
+)
+from mote.contracts.task.models import AttemptId, TaskId
 from mote.orchestration.background_tasks.model import (
     BackgroundTaskNotification,
-    BgStatus,
     PollFactory,
+    TaskAttemptSettlement,
     TaskMeta,
     TaskType,
 )
@@ -34,13 +47,12 @@ from mote.orchestration.background_tasks.operation import (
     DeferredOperation,
     OperationCancelled,
     OperationFailed,
-    OperationPaused,
     OperationSucceeded,
     OperationTimedOut,
     StopDisposition,
     StopReason,
 )
-from mote.orchestration.background_tasks.status import PAUSE_STATUSES
+from mote.orchestration.background_tasks.status import BackgroundTaskStatus
 from mote.runtime.telemetry.logging import log_class, logger
 
 if TYPE_CHECKING:
@@ -52,23 +64,15 @@ if TYPE_CHECKING:
         """The two buffer slices the pool uses: ``push`` + ``wait_for_message``."""
 
 
+from mote.contracts.foundation.errors.report import ErrorReport, render_error_block
+from mote.contracts.task.errors import BackgroundTaskCancelledError, BackgroundTaskTimeoutError
 from mote.orchestration.background_tasks.constants import DEFAULT_MAX_CONCURRENCY as _DEFAULT_MAX_CONCURRENCY
 from mote.orchestration.background_tasks.constants import DEFAULT_TASK_TIMEOUT as _DEFAULT_TASK_TIMEOUT
 from mote.orchestration.background_tasks.constants import (
     DEFAULT_WAIT_COMPLETION_TIMEOUT as _DEFAULT_WAIT_COMPLETION_TIMEOUT,
 )
 from mote.orchestration.background_tasks.constants import MAX_TASK_OUTPUT_BYTES_DISPLAY as _OUTPUT_CAP_DISPLAY
-from mote.orchestration.background_tasks.delivery import (
-    make_progress_writer,
-    reset_progress_writer,
-    set_progress_writer,
-)
-from mote.runtime.errors import (
-    BackgroundTaskCancelledError,
-    BackgroundTaskTimeoutError,
-    ErrorReport,
-    render_error_block,
-)
+from mote.orchestration.background_tasks.delivery import make_progress_sink, reset_progress_sink, set_progress_sink
 from mote.runtime.events.context import bind_telemetry, current_telemetry
 from mote.runtime.resources.spill import enforce_tool_result_limit
 
@@ -98,6 +102,7 @@ class BackgroundTaskPool:
         limit_config: Optional[ToolResultLimitConfig] = None,
         on_terminal_result: Optional[Callable[[TaskMeta], None]] = None,
         retire_result: Optional[Callable[[str], None]] = None,
+        owner: BackgroundTaskOwner | None = None,
     ) -> None:
         self._msg_buffer = msg_buffer
         # Result-limit policy — the SAME contract the synchronous ToolExecutor
@@ -122,7 +127,7 @@ class BackgroundTaskPool:
         # pool is constructed.
         self._wake = wake
         # Push-once result survival + consume-driven GC. A task's whole-task
-        # terminal (graph result / agent summary / pause marker) is a push-once
+        # terminal result is a push-once
         # signal the model must eventually consume; the live notification can be
         # summarized away by autocompact, so ``on_terminal_result`` registers the
         # result as a re-projectable ResourceUnit and ``retire_result`` unloads it
@@ -142,6 +147,7 @@ class BackgroundTaskPool:
         self._operations: dict[str, DeferredOperation] = {}
         self._stop_tasks: set[asyncio.Task] = set()
         self._meta: dict[str, TaskMeta] = {}  # all tasks (running + completed)
+        self._attempt_history: dict[str, list[TaskAttemptSettlement]] = {}
         self._counter = 0
         # One-shot completion futures. Each waiter (wait_any / wait_all /
         # wait_for_completion) registers its own future via _next_completion;
@@ -150,6 +156,58 @@ class BackgroundTaskPool:
         # clear-then-wait ordering to get wrong (lost-wakeup-proof by design).
         self._completion_waiters: list[asyncio.Future] = []
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._owner = owner or BackgroundTaskOwner(
+            process_instance_id=uuid4().hex,
+            agent_id=session_id or uuid4().hex,
+            incarnation_id=uuid4().hex,
+        )
+        self._lifecycle_state = BackgroundTaskPoolState.ACTIVE
+        self._lifecycle_lock = threading.RLock()
+        self._work_pins: set[LocalTaskReference] = set()
+        self._settlement_tasks: set[asyncio.Task[None]] = set()
+        self._settlement_failures: list[str] = []
+        self._drain_task: asyncio.Task[None] | None = None
+
+    @property
+    def owner(self) -> BackgroundTaskOwner:
+        return self._owner
+
+    def _require_owner(self, owner: BackgroundTaskOwner) -> None:
+        if owner != self._owner:
+            raise RuntimeError("background-task owner/incarnation lost")
+
+    def _reserve_pin(self, task_id: str, attempt_id: AttemptId) -> LocalTaskReference:
+        reference = LocalTaskReference(self._owner, TaskId(task_id), attempt_id)
+        with self._lifecycle_lock:
+            if self._lifecycle_state is not BackgroundTaskPoolState.ACTIVE:
+                raise BackgroundTaskAdmissionClosed(self._lifecycle_state)
+            self._work_pins.add(reference)
+        return reference
+
+    def _release_pin(self, reference: LocalTaskReference) -> None:
+        with self._lifecycle_lock:
+            self._work_pins.discard(reference)
+
+    def close_admission(self, *, owner: BackgroundTaskOwner) -> BackgroundTaskPinSnapshot:
+        with self._lifecycle_lock:
+            self._require_owner(owner)
+            if self._lifecycle_state is BackgroundTaskPoolState.ACTIVE:
+                self._lifecycle_state = BackgroundTaskPoolState.DRAINING
+            return self._pin_snapshot_locked()
+
+    def pin_snapshot(self, *, owner: BackgroundTaskOwner) -> BackgroundTaskPinSnapshot:
+        with self._lifecycle_lock:
+            self._require_owner(owner)
+            return self._pin_snapshot_locked()
+
+    def _pin_snapshot_locked(self) -> BackgroundTaskPinSnapshot:
+        references = tuple(
+            sorted(
+                self._work_pins,
+                key=lambda ref: (str(ref.task_id), ref.attempt_id.value),
+            )
+        )
+        return BackgroundTaskPinSnapshot(self._owner, self._lifecycle_state, references)
 
     # ------------------------------------------------------------------
     # Public API
@@ -164,7 +222,7 @@ class BackgroundTaskPool:
         task_kind: Optional[str] = None,
         agent_id: Optional[str] = None,
         progress: bool = False,
-    ) -> str:
+    ) -> BackgroundTaskAcceptance:
         """Submit a poll factory for background execution.
 
         Args:
@@ -182,18 +240,21 @@ class BackgroundTaskPool:
                 (``report_progress``) are appended to the task's disk output.
         Returns a task_id like ``bg_1``, ``bg_2``, etc.
         """
-        deferred = operation if hasattr(operation, "execute") else CoroutineOperation(operation)
+        deferred = operation if isinstance(operation, DeferredOperation) else CoroutineOperation(operation)
         self._counter += 1
         task_id = f"bg_{self._counter}"
 
         meta = TaskMeta(
             task_id=task_id,
+            attempt_id=AttemptId(1),
             command_name=command_name,
-            status=BgStatus.PENDING,
+            status=BackgroundTaskStatus.PENDING,
             task_type=task_type,
             task_kind=task_kind,
             agent_id=agent_id,
         )
+        attempt_id = meta.attempt_id
+        reference = self._reserve_pin(task_id, attempt_id)
         self._meta[task_id] = meta
         self._operations[task_id] = deferred
 
@@ -203,8 +264,16 @@ class BackgroundTaskPool:
         use_progress = progress and self._output_store is not None
         telemetry = current_telemetry() if use_progress else None
         if use_progress:
-            self._output_store.init_output(task_id)
-            meta.output_path = self._output_store.get_output_path(task_id)
+            output_store = self._output_store
+            assert output_store is not None
+            try:
+                output_store.init_output(task_id)
+                meta.output_path = output_store.get_output_path(task_id)
+            except BaseException:
+                self._release_pin(reference)
+                self._meta.pop(task_id, None)
+                self._operations.pop(task_id, None)
+                raise
             # Capture the spawner's telemetry runtime now, before the
             # task is created) and hand it to the wrapper explicitly, rather than
             # leaning on the contextvar surviving the create_task boundary.
@@ -212,17 +281,35 @@ class BackgroundTaskPool:
         async def run_operation():
             coro = deferred.execute()
             if use_progress:
-                coro = self._with_progress(coro, task_id, telemetry)
+                coro = self._with_progress(coro, task_id, attempt_id, telemetry)
             if timeout is not None and timeout > 0:
                 coro = self._execute_with_timeout(deferred, coro, timeout)
             return await coro
 
-        coro = self._run_with_semaphore(run_operation, task_id, deferred)
+        coro = self._run_with_semaphore(
+            run_operation,
+            task_id,
+            attempt_id,
+            deferred,
+        )
 
-        task = asyncio.create_task(coro)
+        try:
+            task = asyncio.create_task(coro)
+        except BaseException:
+            self._release_pin(reference)
+            self._meta.pop(task_id, None)
+            self._operations.pop(task_id, None)
+            raise
         self._tasks[task_id] = task
-        task.add_done_callback(lambda t: self._on_done(task_id, command_name, t))
-        return task_id
+        task.add_done_callback(
+            lambda t, attempt_id=attempt_id: self._on_done(
+                task_id,
+                attempt_id,
+                command_name,
+                t,
+            )
+        )
+        return BackgroundTaskAcceptance(reference)
 
     def set_wake(self, wake: Optional[Callable[[], None]]) -> None:
         """Bind (or rebind) the runtime wake callback.
@@ -333,6 +420,13 @@ class BackgroundTaskPool:
         meta = self._meta.get(task_id)
         return meta.outcome if meta is not None else None
 
+    def get_attempt_history(
+        self,
+        task_id: str,
+    ) -> tuple[TaskAttemptSettlement, ...]:
+        """Return immutable settlements for retired attempts only."""
+        return tuple(self._attempt_history.get(task_id, ()))
+
     def list_tasks(self) -> list[TaskMeta]:
         """Return metadata for all tracked tasks (running + recently completed)."""
         return list(self._meta.values())
@@ -340,7 +434,7 @@ class BackgroundTaskPool:
     def mark_retrieved(self, task_id: str) -> None:
         """Record that the model has consumed a task's push-once result.
 
-        The consume tools (GetNodeState / resume / cancel) call this on a
+        The consume tools call this on a
         *successful* consume. It flips ``meta.retrieved``, retires the
         re-projected ResourceUnit (so it stops re-surfacing after compaction),
         and reaps the now-fully-consumed meta from the tracking dict — the "real
@@ -348,12 +442,6 @@ class BackgroundTaskPool:
         """
         meta = self._meta.get(task_id)
         if meta is None:
-            return
-        # A resumable pause is NOT consumed by mere inspection — its resume
-        # marker must keep re-surfacing until the task is actually resumed
-        # (``resubmit`` flips it to RUNNING first, so the resume path reaches
-        # here with a non-pause status and does retire the old marker).
-        if meta.status in PAUSE_STATUSES:
             return
         meta.retrieved = True
         if self._retire_result is not None:
@@ -366,18 +454,13 @@ class BackgroundTaskPool:
     def _maybe_reap_meta(self, task_id: str, meta: TaskMeta) -> None:
         """Drop a fully-consumed terminal task's meta so ``_meta`` stays bounded.
 
-        Reaped only when the task is genuinely done with: consumed
-        (``retrieved``), no longer running (absent from ``_tasks``), and not a
-        resumable pause (a pause keeps its snapshot for ``resume_tasks``, so it
-        survives even if ``retrieved`` — resume clears the pause first). This is
-        the shared reap point for both the consume path and the round-based
-        recycle.
+        Reaped only when the task is consumed (``retrieved``) and no longer
+        running (absent from ``_tasks``). This is the shared reap point for both
+        the consume path and the round-based recycle.
         """
         if not meta.retrieved:
             return
         if task_id in self._tasks:
-            return
-        if meta.status in PAUSE_STATUSES:
             return
         self._meta.pop(task_id, None)
 
@@ -393,7 +476,7 @@ class BackgroundTaskPool:
         operation = self._operations.get(task_id)
         meta = self._meta.get(task_id)
         if meta is not None:
-            meta.status = BgStatus.CANCELLED
+            meta.status = BackgroundTaskStatus.CANCELLED
         if operation is not None:
             stopper = asyncio.create_task(self._request_operation_stop(task_id, operation, StopReason.USER_CANCEL))
             self._stop_tasks.add(stopper)
@@ -426,7 +509,7 @@ class BackgroundTaskPool:
         for meta in self._meta.values():
             if meta.agent_id != agent_id:
                 continue
-            if meta.status in (BgStatus.PENDING, BgStatus.RUNNING):
+            if meta.status in (BackgroundTaskStatus.PENDING, BackgroundTaskStatus.RUNNING):
                 if self.cancel(meta.task_id):
                     cancelled.append(meta.task_id)
         return cancelled
@@ -438,8 +521,8 @@ class BackgroundTaskPool:
         *,
         timeout: Optional[float] = None,
         progress: bool = True,
-    ) -> str:
-        """Re-submit a poll factory under an existing task_id (for resume/retry).
+    ) -> BackgroundTaskAcceptance:
+        """Retry an operation under an existing model-visible task_id.
 
         Resets the task's status to RUNNING and attaches a fresh asyncio.Task.
         The existing generic ``TaskMeta`` is preserved.
@@ -460,13 +543,36 @@ class BackgroundTaskPool:
         if meta is None:
             raise ValueError(f"Unknown task_id: {task_id}")
 
-        meta.status = BgStatus.RUNNING
+        attempt_id = AttemptId(meta.attempt_id.value + 1)
+        reference = self._reserve_pin(task_id, attempt_id)
+
+        prior_active = meta.status in (
+            BackgroundTaskStatus.PENDING,
+            BackgroundTaskStatus.RUNNING,
+        )
+        retired_status = BackgroundTaskStatus.CANCELLED if prior_active else meta.status
+        retired_at = time.time() if prior_active else meta.end_time
+        self._attempt_history.setdefault(task_id, []).append(
+            TaskAttemptSettlement(
+                meta.attempt_id,
+                retired_status,
+                meta.result,
+                meta.error,
+                retired_at,
+            )
+        )
+        prior_task = self._tasks.get(task_id)
+        if prior_active and prior_task is not None and not prior_task.done():
+            prior_task.cancel()
+        meta.attempt_id = attempt_id
+
+        meta.status = BackgroundTaskStatus.RUNNING
         meta.start_time = time.time()
         meta.end_time = None
         meta.result = None
         meta.notified = False
-        # A resumed run produces a fresh terminal, so reset the push-once
-        # bookkeeping: retire the now-stale pointer (a pause marker or a prior
+        # A new attempt produces a fresh terminal, so reset the push-once
+        # bookkeeping: retire the now-stale prior result pointer
         # result) so it stops re-surfacing while the task runs again, and clear
         # the flags so the next terminal re-registers a fresh result pointer.
         if meta.registered_resource and self._retire_result is not None:
@@ -477,25 +583,41 @@ class BackgroundTaskPool:
         meta.registered_resource = False
         meta.retrieved = False
 
-        deferred = operation if hasattr(operation, "execute") else CoroutineOperation(operation)
+        deferred = operation if isinstance(operation, DeferredOperation) else CoroutineOperation(operation)
         use_progress = progress and self._output_store is not None
         telemetry = current_telemetry() if use_progress else None
 
         async def run_operation():
             coro = deferred.execute()
             if use_progress:
-                coro = self._with_progress(coro, task_id, telemetry)
+                coro = self._with_progress(coro, task_id, attempt_id, telemetry)
             if timeout is not None and timeout > 0:
                 coro = self._execute_with_timeout(deferred, coro, timeout)
             return await coro
 
-        coro = self._run_with_semaphore(run_operation, task_id, deferred)
+        coro = self._run_with_semaphore(
+            run_operation,
+            task_id,
+            attempt_id,
+            deferred,
+        )
 
-        task = asyncio.create_task(coro)
+        try:
+            task = asyncio.create_task(coro)
+        except BaseException:
+            self._release_pin(reference)
+            raise
         self._tasks[task_id] = task
         self._operations[task_id] = deferred
-        task.add_done_callback(lambda t: self._on_done(task_id, meta.command_name, t))
-        return task_id
+        task.add_done_callback(
+            lambda t, attempt_id=attempt_id: self._on_done(
+                task_id,
+                attempt_id,
+                meta.command_name,
+                t,
+            )
+        )
+        return BackgroundTaskAcceptance(reference)
 
     def adopt(
         self,
@@ -504,7 +626,7 @@ class BackgroundTaskPool:
         task_type: str = TaskType.COROUTINE,
         task_kind: Optional[str] = None,
         agent_id: Optional[str] = None,
-    ) -> str:
+    ) -> BackgroundTaskAcceptance:
         """Adopt an already-running ``asyncio.Task`` into the pool.
 
         Unlike :meth:`submit`, this does **not** wrap the task with a
@@ -528,15 +650,23 @@ class BackgroundTaskPool:
         meta = TaskMeta(
             task_id=task_id,
             command_name=command_name,
-            status=BgStatus.RUNNING,
+            status=BackgroundTaskStatus.RUNNING,
             task_type=task_type,
             task_kind=task_kind,
             agent_id=agent_id,
         )
+        reference = self._reserve_pin(task_id, meta.attempt_id)
         self._meta[task_id] = meta
         self._tasks[task_id] = task
-        task.add_done_callback(lambda t: self._on_done(task_id, command_name, t))
-        return task_id
+        task.add_done_callback(
+            lambda t, attempt_id=meta.attempt_id: self._on_done(
+                task_id,
+                attempt_id,
+                command_name,
+                t,
+            )
+        )
+        return BackgroundTaskAcceptance(reference)
 
     async def wait_all(self) -> None:
         """Block until every pending task has finished (or timed out)."""
@@ -544,31 +674,99 @@ class BackgroundTaskPool:
             await self._next_completion()
 
     async def aclose(self) -> None:
-        """Cancel and join every owned task, waiter, and output drain."""
+        """Close admission and settle this incarnation's owned work."""
+        receipt = await self.drain(owner=self._owner, timeout_seconds=5.0)
+        if not receipt.settled:
+            raise RuntimeError(f"background-task drain failed: {receipt.disposition.value}")
 
-        stop_calls = [
-            self._request_operation_stop(task_id, operation, StopReason.SHUTDOWN)
-            for task_id, operation in tuple(self._operations.items())
-        ]
-        if stop_calls:
-            await asyncio.gather(*stop_calls, return_exceptions=True)
-        tasks = tuple(self._tasks.values())
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        if self._stop_tasks:
-            await asyncio.gather(*tuple(self._stop_tasks), return_exceptions=True)
-            self._stop_tasks.clear()
-        self._tasks.clear()
+    async def drain(
+        self,
+        *,
+        owner: BackgroundTaskOwner,
+        timeout_seconds: float,
+    ) -> BackgroundTaskDrainReceipt:
+        """Bounded, idempotent cancellation and cleanup for one incarnation."""
+        try:
+            self.close_admission(owner=owner)
+        except RuntimeError as exc:
+            return BackgroundTaskDrainReceipt(
+                owner,
+                BackgroundTaskDrainDisposition.OWNER_LOST,
+                (),
+                str(exc),
+            )
+
+        async def settle() -> None:
+            stop_calls = [
+                self._request_operation_stop(task_id, operation, StopReason.SHUTDOWN)
+                for task_id, operation in tuple(self._operations.items())
+            ]
+            if stop_calls:
+                await asyncio.gather(*stop_calls)
+            tasks = tuple(self._tasks.values())
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if self._settlement_tasks:
+                await asyncio.gather(*tuple(self._settlement_tasks))
+            if self._stop_tasks:
+                await asyncio.gather(*tuple(self._stop_tasks), return_exceptions=True)
+                self._stop_tasks.clear()
+            if self._output_store is not None:
+                await self._output_store.aclose()
+
+        if self._drain_task is None:
+            self._drain_task = asyncio.create_task(
+                settle(),
+                name=f"background-task-drain-{self._owner.incarnation_id}",
+            )
+        done, _ = await asyncio.wait({self._drain_task}, timeout=timeout_seconds)
+        if not done:
+            snapshot = self.pin_snapshot(owner=owner)
+            return BackgroundTaskDrainReceipt(
+                owner,
+                BackgroundTaskDrainDisposition.DRAINING_TIMEOUT,
+                snapshot.references,
+            )
+        try:
+            await self._drain_task
+        except Exception as exc:  # noqa: BLE001 - typed cleanup settlement
+            snapshot = self.pin_snapshot(owner=owner)
+            return BackgroundTaskDrainReceipt(
+                owner,
+                BackgroundTaskDrainDisposition.CLEANUP_FAILED,
+                snapshot.references,
+                f"{type(exc).__name__}: {exc}",
+            )
+
+        with self._lifecycle_lock:
+            if self._settlement_failures:
+                return BackgroundTaskDrainReceipt(
+                    owner,
+                    BackgroundTaskDrainDisposition.CLEANUP_FAILED,
+                    self._pin_snapshot_locked().references,
+                    "; ".join(self._settlement_failures),
+                )
+            if self._work_pins:
+                return BackgroundTaskDrainReceipt(
+                    owner,
+                    BackgroundTaskDrainDisposition.CLEANUP_FAILED,
+                    self._pin_snapshot_locked().references,
+                    "work pins remain after cleanup",
+                )
+            self._lifecycle_state = BackgroundTaskPoolState.CLOSED
         waiters, self._completion_waiters = self._completion_waiters, []
         for waiter in waiters:
             if not waiter.done():
                 waiter.cancel()
         self._wake = None
-        if self._output_store is not None:
-            await self._output_store.aclose()
+        return BackgroundTaskDrainReceipt(
+            owner,
+            BackgroundTaskDrainDisposition.SETTLED,
+            (),
+        )
 
     # ------------------------------------------------------------------
     # Internal
@@ -599,14 +797,17 @@ class BackgroundTaskPool:
         self,
         runner: Callable[[], Coroutine],
         task_id: str,
+        attempt_id: AttemptId,
         operation: DeferredOperation | None = None,
     ):
         """Acquire concurrency capacity before creating the operation coroutine."""
         try:
             async with self._semaphore:
                 meta = self._meta.get(task_id)
-                if meta is not None and meta.status == BgStatus.PENDING:
-                    meta.status = BgStatus.RUNNING
+                if meta is None or meta.attempt_id != attempt_id:
+                    return OperationCancelled("stale_attempt")
+                if meta.status == BackgroundTaskStatus.PENDING:
+                    meta.status = BackgroundTaskStatus.RUNNING
                     meta.start_time = time.time()
                 return await runner()
         finally:
@@ -668,7 +869,13 @@ class BackgroundTaskPool:
             await asyncio.gather(execution, return_exceptions=True)
             return outcome
 
-    async def _with_progress(self, coro: Coroutine, task_id: str, telemetry=None):
+    async def _with_progress(
+        self,
+        coro: Coroutine,
+        task_id: str,
+        attempt_id: AttemptId,
+        telemetry=None,
+    ):
         """Run *coro* with the bggraph progress writer bound to this task.
 
         The writer renders each ``report_progress`` event and appends it to the
@@ -689,18 +896,25 @@ class BackgroundTaskPool:
         assert store is not None, "_with_progress requires an output store"
         meta = self._meta.get(task_id)
         command_name = meta.command_name if meta is not None else ""
-        writer = make_progress_writer(
-            lambda line: store.append(task_id, line),
-            task_id=task_id,
+
+        def append_if_current(line: str) -> None:
+            current = self._meta.get(task_id)
+            if current is not None and current.attempt_id == attempt_id:
+                store.append(task_id, line)
+
+        reference = LocalTaskReference(self._owner, TaskId(task_id), attempt_id)
+        sink = make_progress_sink(
+            append_if_current,
+            reference=reference,
             command_name=command_name,
             deliver=self.deliver,
         )
-        token = set_progress_writer(writer)
+        token = set_progress_sink(sink)
         try:
             with bind_telemetry(telemetry):
                 return await coro
         finally:
-            reset_progress_writer(token)
+            reset_progress_sink(token)
 
     @staticmethod
     def _build_xml(
@@ -745,7 +959,7 @@ class BackgroundTaskPool:
         except Exception as exc:  # noqa: BLE001 — best-effort wake
             logger.debug(f"BackgroundTaskPool: runtime wake failed (delivery already queued): {exc}")
 
-    def deliver(self, notification: BackgroundTaskNotification) -> None:
+    def deliver(self, notification: BackgroundTaskNotification) -> bool:
         """Single delivery choke point for a background-task notification.
 
         Pushes *notification* into the agent's inbox at ``NEXT`` priority (so
@@ -764,12 +978,16 @@ class BackgroundTaskPool:
         producers can race the same task's terminal. Best-effort: a delivery or
         wake failure must never break the pipeline.
         """
+        meta = self._meta.get(notification.task_id)
+        if meta is None or notification.attempt_id != meta.attempt_id:
+            return False
         try:
             self._msg_buffer.push(notification, priority=MessagePriority.NEXT)
         except Exception as exc:  # noqa: BLE001 — delivery must never break the pipeline
             logger.debug(f"BackgroundTaskPool: terminal notification delivery failed: {exc}")
-            return
+            return False
         self._wake_runtime()
+        return True
 
     def _limit_block(self, output: str, command_name: str, task_id: str) -> str:
         """Apply the shared result-limit policy to a terminal text block.
@@ -803,7 +1021,13 @@ class BackgroundTaskPool:
             store=self._output_store.store if self._output_store is not None else None,
         )
 
-    def _on_done(self, task_id: str, command_name: str, task: asyncio.Task) -> None:
+    def _on_done(
+        self,
+        task_id: str,
+        attempt_id: AttemptId,
+        command_name: str,
+        task: asyncio.Task,
+    ) -> None:
         """Synchronous callback invoked by the event loop when a task finishes.
 
         Pushes the structured completion notification directly into the
@@ -813,15 +1037,20 @@ class BackgroundTaskPool:
         straight to the queue the react loop observes.
         """
 
+        meta = self._meta.get(task_id)
+        if meta is None or meta.attempt_id != attempt_id or self._tasks.get(task_id) is not task:
+            self._release_pin(LocalTaskReference(self._owner, TaskId(task_id), attempt_id))
+            return
+
         status: str
         operation_outcome = None
         result: Optional[str] = None
         summary: str
-        error_dict: Optional[dict] = None
+        error_report: ErrorReport | None = None
 
         if task.cancelled():
             operation_outcome = OperationCancelled()
-            status = BgStatus.CANCELLED
+            status = BackgroundTaskStatus.CANCELLED
             meta = self._meta.get(task_id)
             if meta is not None and meta._output_capped:
                 summary = f"{command_name} was killed because its output exceeded the disk size limit."
@@ -832,36 +1061,36 @@ class BackgroundTaskPool:
             # Synthesize a typed error so a cancellation surfaces the same
             # structured <error> block as every other terminal outcome.
             report = ErrorReport.from_exception(BackgroundTaskCancelledError(cancel_msg))
-            error_dict = report.as_dict()
+            error_report = report
             result = self._limit_block(render_error_block(report), command_name, task_id)
         else:
             exc = task.exception()
             if exc is not None:
                 if isinstance(exc, asyncio.TimeoutError):
                     operation_outcome = OperationTimedOut()
-                    status = BgStatus.TIMEOUT
+                    status = BackgroundTaskStatus.TIMEOUT
                     summary = f"{command_name} timed out after exceeding the time limit."
                     # Route timeout through the shared contract too (it was a
                     # bypass before — error_dict stayed None), so the model gets
                     # the uniform block + machine-readable report.
                     report = ErrorReport.from_exception(BackgroundTaskTimeoutError(summary))
-                    error_dict = report.as_dict()
+                    error_report = report
                     result = self._limit_block(render_error_block(report), command_name, task_id)
                 else:
                     operation_outcome = OperationFailed(exc)
-                    status = BgStatus.FAILED
+                    status = BackgroundTaskStatus.FAILED
                     # Normalize through the shared error contract instead of
                     # dumping a raw traceback: the model gets a uniform <error>
                     # block (code/recovery/structured detail), and the machine-
                     # readable report rides along on the notification's `error`.
                     report = ErrorReport.from_exception(exc)
-                    error_dict = report.as_dict()
+                    error_report = report
                     result = self._limit_block(render_error_block(report), command_name, task_id)
                     summary = f"{command_name} failed."
             else:
                 raw = task.result()
                 meta = self._meta.get(task_id)
-                if meta is not None and meta.status == BgStatus.CANCELLED:
+                if meta is not None and meta.status == BackgroundTaskStatus.CANCELLED:
                     raw = OperationCancelled()
                 # Compatibility factories are normalized by CoroutineOperation;
                 # unwrap their successful value before applying the pool's
@@ -871,26 +1100,21 @@ class BackgroundTaskPool:
                     raw = raw.output
                 if isinstance(raw, OperationFailed):
                     operation_outcome = raw
-                    status = BgStatus.FAILED
+                    status = BackgroundTaskStatus.FAILED
                     report = ErrorReport.from_exception(raw.error)
-                    error_dict = report.as_dict()
+                    error_report = report
                     result = self._limit_block(render_error_block(report), command_name, task_id)
                     summary = f"{command_name} failed."
-                elif isinstance(raw, OperationPaused):
-                    operation_outcome = raw
-                    status = BgStatus.STALLED if raw.reason == "stall" else BgStatus.WAITING_FOR_ROUTE
-                    result = raw.reason
-                    summary = f"{command_name} paused, awaiting a decision."
                 elif isinstance(raw, OperationTimedOut):
                     operation_outcome = raw
-                    status = BgStatus.TIMEOUT
+                    status = BackgroundTaskStatus.TIMEOUT
                     summary = f"{command_name} timed out."
                     report = ErrorReport.from_exception(BackgroundTaskTimeoutError(summary))
-                    error_dict = report.as_dict()
+                    error_report = report
                     result = self._limit_block(render_error_block(report), command_name, task_id)
                 elif isinstance(raw, OperationCancelled):
                     operation_outcome = raw
-                    status = BgStatus.CANCELLED
+                    status = BackgroundTaskStatus.CANCELLED
                     meta = self._meta.get(task_id)
                     if meta is not None and meta._output_capped:
                         summary = f"{command_name} was killed because its output exceeded the disk size limit."
@@ -899,11 +1123,11 @@ class BackgroundTaskPool:
                         summary = f"{command_name} was cancelled."
                         reason = raw.reason
                     report = ErrorReport.from_exception(BackgroundTaskCancelledError(reason))
-                    error_dict = report.as_dict()
+                    error_report = report
                     result = self._limit_block(render_error_block(report), command_name, task_id)
                 else:
                     operation_outcome = OperationSucceeded(raw)
-                    status = BgStatus.SUCCESS
+                    status = BackgroundTaskStatus.SUCCESS
                     # A whole-task result is a tool output like any other, so it
                     # rides the SAME size-limit primitive the ToolExecutor uses
                     # on the synchronous path: under the threshold it is inlined
@@ -924,7 +1148,7 @@ class BackgroundTaskPool:
             meta.status = status
             meta.end_time = time.time()
             meta.result = result
-            meta.error = error_dict
+            meta.error = error_report
             meta.notified = True
 
         output_path = meta.output_path if meta is not None else None
@@ -943,10 +1167,11 @@ class BackgroundTaskPool:
             content=body,
             cause_by=CauseBy.RUN_COMMAND,
             task_id=task_id,
+            attempt_id=attempt_id,
             command_name=command_name,
             status=status,
             result=result,
-            error=error_dict,
+            error=error_report.as_dict() if error_report is not None else None,
             task_terminal=True,
         )
 
@@ -956,7 +1181,9 @@ class BackgroundTaskPool:
         # so this terminal always gets through — including the interruption case
         # (timeout / external cancel) where the coroutine never reached its own
         # terminal code. The agent sees exactly one terminal, no dedup needed.
-        self.deliver(notification)
+        terminal_settled = self.deliver(notification)
+        if not terminal_settled:
+            self._settlement_failures.append(f"notification delivery failed for {task_id} attempt {attempt_id.value}")
 
         # Register the push-once result for post-compaction re-projection. This
         # runs AFTER deliver (the live notification is the model's first sight of
@@ -976,18 +1203,48 @@ class BackgroundTaskPool:
                 self._on_terminal_result(meta)
             except Exception as exc:  # noqa: BLE001 — registration is best-effort
                 logger.debug(f"BackgroundTaskPool: on_terminal_result failed for {task_id}: {exc}")
+                terminal_settled = False
+                self._settlement_failures.append(
+                    f"terminal result registration failed for {task_id} attempt "
+                    f"{attempt_id.value}: {type(exc).__name__}: {exc}"
+                )
 
-        # Resolve every registered one-shot completion future (fan-out
-        # broadcast). Iterate a snapshot so a re-entrant completion is safe;
-        # each resolved/cancelled future removes itself via _discard_waiter.
+        if not terminal_settled:
+            return
+
+        assert meta is not None, "current attempt metadata disappeared during completion"
+        settlement = asyncio.create_task(
+            self._settle_completed_attempt(task_id, attempt_id, task, meta),
+            name=f"background-task-settle-{task_id}-{attempt_id.value}",
+        )
+        self._settlement_tasks.add(settlement)
+        settlement.add_done_callback(self._record_settlement)
+
+    def _record_settlement(self, task: asyncio.Task[None]) -> None:
+        self._settlement_tasks.discard(task)
+        if task.cancelled():
+            self._settlement_failures.append("attempt settlement was cancelled")
+            return
+        failure = task.exception()
+        if failure is not None:
+            self._settlement_failures.append(f"{type(failure).__name__}: {failure}")
+
+    async def _settle_completed_attempt(
+        self,
+        task_id: str,
+        attempt_id: AttemptId,
+        task: asyncio.Task,
+        meta: TaskMeta,
+    ) -> None:
+        """Flush attempt-owned resources before releasing its work pin."""
+        reference = LocalTaskReference(self._owner, TaskId(task_id), attempt_id)
+        if self._output_store is not None:
+            await self._output_store.flush(task_id)
+        if self._tasks.get(task_id) is task:
+            self._tasks.pop(task_id, None)
+            self._operations.pop(task_id, None)
+            self._maybe_reap_meta(task_id, meta)
+        self._release_pin(reference)
         for fut in list(self._completion_waiters):
             if not fut.done():
                 fut.set_result(None)
-
-        # Remove from tracking dict, then reap the meta if the task was already
-        # consumed before its terminal (a cancel of a running task marks
-        # ``retrieved`` before ``_on_done`` fires) — keeps ``_meta`` bounded.
-        self._tasks.pop(task_id, None)
-        self._operations.pop(task_id, None)
-        if meta is not None:
-            self._maybe_reap_meta(task_id, meta)

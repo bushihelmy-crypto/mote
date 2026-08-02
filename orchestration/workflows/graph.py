@@ -1,6 +1,6 @@
 """``WorkflowBuilder`` builder — langgraph-style declarative API.
 
-Compiles to an async ``executor(**initial_state) -> BgTaskResult`` whose ``poll``
+Compiles to an async executor returning ``WorkflowDeferredResult`` whose poll
 is the frontier-scheduler driver coroutine.  See :mod:`engine` for execution.
 """
 
@@ -8,16 +8,15 @@ from __future__ import annotations
 
 import types
 import typing
-from collections import defaultdict
 from typing import Any, Awaitable, Callable, Optional, Union
 
+from mote.contracts.workflow.definition_source import TrustedWorkflowBlueprintSource, WorkflowDefinitionSource
 from mote.kernel.tools.docstrings import first_line
 from mote.kernel.tools.spec_adapter import annotation_to_json_schema
 from mote.orchestration.workflows.base_node import BaseNode, _parse_params_from_docstring
 from mote.orchestration.workflows.channels import NoOutput, derive_output_fields, derive_reducers
-from mote.orchestration.workflows.deferred import BgTaskResult
-from mote.orchestration.workflows.definition import freeze_builder
-from mote.orchestration.workflows.engine import _build_executor, _run_driver
+from mote.orchestration.workflows.deferred import WorkflowDeferredResult
+from mote.orchestration.workflows.definition import WorkflowDefinitionCompiler
 from mote.orchestration.workflows.engine import resume as _resume
 from mote.orchestration.workflows.engine import resume_skip as _resume_skip
 from mote.orchestration.workflows.engine import resume_skip_and_from as _rsaf
@@ -89,6 +88,7 @@ class WorkflowBuilder:
         output_contract: Any = None,
         output_engine_factory: Optional[Callable[..., Any]] = None,
         output: type[NoOutput] | None = None,
+        definition_version: int = 1,
     ):
         """Build an empty graph.
 
@@ -107,6 +107,9 @@ class WorkflowBuilder:
                 node runs, not by cycle depth.
         """
         self.command_name = command_name
+        if type(definition_version) is not int or definition_version < 1:
+            raise ValueError("workflow definition_version must be a positive integer")
+        self.definition_version = definition_version
         self.state_schema = state_schema
         self.max_restarts = max_restarts
         self.recursion_limit = recursion_limit
@@ -127,6 +130,22 @@ class WorkflowBuilder:
         # at compile time alongside reducers; empty means "no declared output",
         # so the run result falls back to the whole state (see engine).
         self._output_fields: set[str] = set()
+        self._definition_id = ""
+        self._definition_source: WorkflowDefinitionSource | None = None
+
+    def trusted_blueprint(self, blueprint_id: str, blueprint_version: int) -> "WorkflowBuilder":
+        """Bind this hand-authored graph to a Product-approved durable blueprint."""
+        if self._definition_source is not None:
+            raise RuntimeError("Workflow definition source is already bound")
+        self._definition_source = TrustedWorkflowBlueprintSource(blueprint_id, blueprint_version)
+        return self
+
+    def bind_definition_source(self, source: WorkflowDefinitionSource) -> "WorkflowBuilder":
+        """Bind a compiler-produced, callable-free durable definition source."""
+        if self._definition_source is not None:
+            raise RuntimeError("Workflow definition source is already bound")
+        self._definition_source = source
+        return self
 
     # --- node registration ---
 
@@ -134,6 +153,8 @@ class WorkflowBuilder:
         self,
         name: str,
         params: Optional[dict[str, dict]] = None,
+        *,
+        implementation_id: str | None = None,
     ):
         """Decorator: register a node. ``description`` is taken from the docstring.
 
@@ -142,7 +163,12 @@ class WorkflowBuilder:
         """
 
         def decorator(fn):
-            self.add_node(name, fn, params=params)
+            self.add_node(
+                name,
+                fn,
+                params=params,
+                implementation_id=implementation_id,
+            )
             return fn
 
         return decorator
@@ -152,6 +178,8 @@ class WorkflowBuilder:
         name: str,
         fn: Union[Callable, BaseNode, type],
         params: Optional[dict[str, dict]] = None,
+        *,
+        implementation_id: str | None = None,
     ) -> None:
         """Imperatively register a node.
 
@@ -181,6 +209,7 @@ class WorkflowBuilder:
         self._nodes[name] = _NodeDef(
             name=name,
             fn=actual_fn,
+            implementation_id=implementation_id or "",
             description=desc,
             params=auto_params,
         )
@@ -208,8 +237,17 @@ class WorkflowBuilder:
         from_node: str,
         router: Callable[[GraphState], str],
         mapping: dict[str, str],
+        *,
+        implementation_id: str | None = None,
     ) -> None:
-        self._conditional_edges.append(_ConditionalEdge(from_node, router, mapping))
+        self._conditional_edges.append(
+            _ConditionalEdge(
+                from_node,
+                router,
+                mapping,
+                implementation_id or "",
+            )
+        )
 
     def add_llm_edges(self, from_node: str, prompt: str, mapping: dict[str, str]) -> None:
         """Register an LLM-in-the-loop edge.
@@ -240,7 +278,7 @@ class WorkflowBuilder:
 
     def build(self):
         """Freeze this mutable declaration into a reusable definition."""
-        return freeze_builder(self)
+        return WorkflowDefinitionCompiler.compile(self)
 
     def _prepare(self) -> None:
         """Compile-time preparation shared by :meth:`compile` and :meth:`arun`:
@@ -253,18 +291,22 @@ class WorkflowBuilder:
         if not self._output_fields and not self._no_output:
             raise ValueError("workflow must declare an Output field or output=NoOutput")
 
-    def compile(self) -> Callable[..., Awaitable[BgTaskResult]]:
-        """Validate and compile to an async ``executor(**kwargs) -> BgTaskResult``."""
-        self._prepare()
-        return _build_executor(self)
+    def compile(self) -> Callable[..., Awaitable[WorkflowDeferredResult]]:
+        """Compile through the one canonical immutable definition."""
+        return self.build().compile()
 
     # --- foreground run ---
 
-    async def arun(self, *, run_state: Optional["GraphRunState"] = None, **initial_state) -> GraphState:
+    async def arun(
+        self,
+        *,
+        run_state: Optional["GraphRunState"] = None,
+        **initial_state,
+    ) -> GraphState | GraphPause:
         """Prepare, then run the graph **inline** and return the final state.
 
-        This is simply ``await`` on the frontier driver — no ``BgTaskResult``
-        wrapper, so it runs on the calling task rather than being submitted to the
+        This is simply ``await`` on the frontier driver — no deferred wrapper,
+        so it runs on the calling task rather than being submitted to the
         background pool (which is what :meth:`compile`'s executor does). Running on
         the live task is what lets a dispatched tool's approval / AskUserQuestion
         prompt surface on the interactive channel.
@@ -278,29 +320,14 @@ class WorkflowBuilder:
         Raises the engine's terminal error (``GraphBatchFailureError`` etc.) on
         failure; on success the returned state carries every node's result.
         """
-        self._prepare()
-        state = self.state_schema(**initial_state)
-        if run_state is None:
-            run_state = GraphRunState.for_graph(self)
-        terminal = await _run_driver(
-            self,
-            state,
-            execute_nodes=self._get_entry_nodes(),
-            completed=set(),
-            trigger_count=defaultdict(set),
-            initial_params=dict(initial_state),
-            run_state=run_state,
-        )
-        if isinstance(terminal, GraphPause):
-            return terminal
-        return state
+        return await self.build().arun(run_state=run_state, **initial_state)
 
     # --- resume (delegates to engine) ---
 
-    def resume(self, state: GraphState, from_nodes: list[str], run_state: Any = None) -> BgTaskResult:
+    def resume(self, state: GraphState, from_nodes: list[str], run_state: Any = None) -> WorkflowDeferredResult:
         return _resume(self, state, from_nodes, run_state)
 
-    def resume_skip(self, state: GraphState, skip_nodes: list[str], run_state: Any = None) -> BgTaskResult:
+    def resume_skip(self, state: GraphState, skip_nodes: list[str], run_state: Any = None) -> WorkflowDeferredResult:
         return _resume_skip(self, state, skip_nodes, run_state)
 
     def resume_skip_and_from(
@@ -309,7 +336,7 @@ class WorkflowBuilder:
         skip_nodes: list[str],
         from_nodes: list[str],
         run_state: Any = None,
-    ) -> BgTaskResult:
+    ) -> WorkflowDeferredResult:
         return _rsaf(self, state, skip_nodes, from_nodes, run_state)
 
     @property

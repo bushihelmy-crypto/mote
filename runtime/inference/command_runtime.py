@@ -42,7 +42,7 @@ class EmbeddedServiceCommandRuntime:
         provider_quota: ProviderQuotaAuthorityPort,
         credential_health: CredentialHealthAuthorityPort,
         permit_verifier: WirePermitVerifier,
-        transports: (BoundCommandTransportResolver | ProviderTransferPartTransportResolver),
+        transports: BoundCommandTransportResolver | ProviderTransferPartTransportResolver,
         generations: GatewayGenerationOwner,
         permit_audience: str,
         epoch_provider: Callable[[], tuple[int, int]],
@@ -68,13 +68,13 @@ class EmbeddedServiceCommandRuntime:
         self._epoch_provider = epoch_provider
         self._event_capacity = event_capacity
         self._clock_skew_guard_seconds = clock_skew_guard_seconds
-        self._queue = FairAdmissionQueue(capacity=queue_capacity)
+        self._queue = FairAdmissionQueue[_CommandExecution](capacity=queue_capacity)
         self._bulkheads = BulkheadController(
             global_limit=global_in_flight,
             provider_limit=provider_in_flight,
             endpoint_limit=endpoint_in_flight,
         )
-        self._dispatcher = Dispatcher(
+        self._dispatcher = Dispatcher[_CommandExecution](
             queue=self._queue,
             bulkheads=self._bulkheads,
             identity_resolver=self._identity,
@@ -169,14 +169,18 @@ class EmbeddedServiceCommandRuntime:
         if not self._executions:
             self._idle.set()
 
-    async def _dispatch(self, entry: QueueEntry, permit: BulkheadPermit) -> None:
+    async def _dispatch(
+        self,
+        entry: QueueEntry["_CommandExecution"],
+        permit: BulkheadPermit,
+    ) -> None:
         await entry.payload.dispatch(local_deadline=entry.deadline)
 
-    async def _dispatch_timeout(self, entry: QueueEntry) -> None:
+    async def _dispatch_timeout(self, entry: QueueEntry["_CommandExecution"]) -> None:
         await entry.payload.dispatch_timeout()
 
     @staticmethod
-    def _identity(entry: QueueEntry) -> BulkheadIdentity:
+    def _identity(entry: QueueEntry["_CommandExecution"]) -> BulkheadIdentity:
         transport = entry.payload.transport
         return BulkheadIdentity(
             provider=transport.provider,

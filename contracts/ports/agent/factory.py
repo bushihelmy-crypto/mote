@@ -17,13 +17,13 @@ from typing import Protocol, TypeVar
 
 from mote.contracts.agent import AgentBuilder, AgentConstructionRequest
 
-AgentT = TypeVar("AgentT")
+DeclarationT_contra = TypeVar("DeclarationT_contra", contravariant=True)
 
 
-class AgentFactory(Protocol):
+class AgentFactory(Protocol[DeclarationT_contra]):
     """Bind a Product-private Agent declaration to its child builder."""
 
-    def child_builder(self, agent_cls: object, /) -> AgentBuilder[AgentConstructionRequest, str]:
+    def child_builder(self, agent_cls: DeclarationT_contra, /) -> AgentBuilder[AgentConstructionRequest, str]:
         """Return a builder with the concrete Agent class already bound."""
         ...
 

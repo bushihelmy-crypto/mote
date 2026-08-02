@@ -5,19 +5,28 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Generic, TypeVar
 from uuid import uuid4
 
 from mote.contracts.conversation import UserMessage
 from mote.contracts.execution.models import InferenceCheckpointState, MutationStatus
 from mote.contracts.model.inference import InferenceAttemptFence
+from mote.contracts.ports.conversation.turn_context_bus import TurnContextCollector
 from mote.contracts.ports.execution.checkpoint import InferenceCheckpointPort
 from mote.contracts.ports.execution.transaction import ExecutionTransactionPort
+from mote.contracts.ports.output.evaluation import OutputEngine
+from mote.contracts.tool.catalog import ToolBindingSnapshot
+from mote.kernel.commands import CommandChannel
 from mote.kernel.commands.contracts import HistoryProjection
+from mote.kernel.execution.context_provider import BaseContextProvider
+from mote.kernel.execution.request import InferenceRequest
+from mote.kernel.inference.base import BaseInferenceEngine
 from mote.kernel.telemetry.events import span
 
+OutputT = TypeVar("OutputT")
 
-class InferenceService:
+
+class InferenceService(Generic[OutputT]):
     """Prepare and start one model request behind a recoverable checkpoint."""
 
     def __init__(
@@ -25,13 +34,13 @@ class InferenceService:
         *,
         is_active: Callable[[], bool],
         checkpoint: InferenceCheckpointPort,
-        context_provider: Any,
-        inference_engine: Any,
-        output_engine: Any,
+        context_provider: BaseContextProvider,
+        inference_engine: BaseInferenceEngine,
+        output_engine: OutputEngine[OutputT],
         transaction: ExecutionTransactionPort,
-        set_channel: Callable[[Any], None],
-        set_tool_snapshot: Callable[[Any], None],
-        turn_context_bus: Any = None,
+        set_channel: Callable[[CommandChannel], None],
+        set_tool_snapshot: Callable[[ToolBindingSnapshot | None], None],
+        turn_context_bus: TurnContextCollector | None = None,
         get_cwd: Callable[[], str] | None = None,
     ) -> None:
         self._is_active = is_active
@@ -118,12 +127,9 @@ class InferenceService:
         return True
 
     @staticmethod
-    def _request_fingerprint(request) -> str:
+    def _request_fingerprint(request: InferenceRequest) -> str:
         payload = {
-            "messages": [
-                message.model_dump(mode="json") if hasattr(message, "model_dump") else message
-                for message in request.req
-            ],
+            "messages": [message.model_dump(mode="json") for message in request.req],
             "system_prompt": request.system_prompt,
             "tools": request.tool_specs,
             "schema_fingerprint": request.schema_fingerprint,

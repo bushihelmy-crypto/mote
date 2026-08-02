@@ -12,7 +12,7 @@ from mote.contracts.file.errors import ReadCursorError, SnapshotDurabilityError
 from mote.contracts.file.identity import FileSnapshot
 from mote.contracts.file.views import ReadCursorKind
 from mote.runtime.fileops.cursor_registry import DurableCursorRegistry
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, FileMutationArtifactRepository
 from mote.runtime.fileops.resource_limits import MAX_READ_MANIFEST_BYTES
 
 _MANIFEST_FORMAT = 1
@@ -40,7 +40,7 @@ class ReadCursorStore:
 
     def __init__(
         self,
-        artifacts: ArtifactRepository,
+        artifacts: FileMutationArtifactRepository,
         registry: DurableCursorRegistry,
     ) -> None:
         self.artifacts = artifacts

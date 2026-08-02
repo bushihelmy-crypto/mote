@@ -4,27 +4,102 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Generic, Protocol, TypeGuard, TypeVar
+from types import MappingProxyType
+from typing import Callable, Generic, Mapping, Protocol, TypeVar
 
-from mote.contracts.agent import AgentBuilder, AgentConstructionRequest, RunnableAgent, is_text_runnable_agent
+from mote.contracts.agent import AgentBuilder, AgentConstructionRequest, ApprovedDeclaration, RunnableAgent
+from mote.contracts.ports.agent.composition import RoutingStrategyFactory
+from mote.contracts.ports.conversation.compaction_policy import CompactionPolicyExtensionSpec
+from mote.contracts.ports.conversation.prompt_policy import PromptPolicyExtensionSpec
+from mote.contracts.ports.model.routing import RoutingPolicy
+from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicyExtensionSpec
 from mote.contracts.ports.task.operations import BackgroundTaskServiceFactory
+from mote.contracts.ports.tool.deferred import DeferredResultProjectorFactory
+from mote.contracts.ports.tool.policy import ToolCallPolicyExtensionSpec
 from mote.contracts.tool import CommandProtocol
 from mote.kernel.output import OutputContract, text_output_contract
 from mote.product.agents.background_tasks import build_background_task_pool
 from mote.product.agents.defaults import DEFAULT_DEFERRED_TOOLS, DEFAULT_TOOLS
+from mote.product.agents.deferred_projection import build_deferred_result_projector
 from mote.product.code_map import ProductCodeMapIndexerFactory
+from mote.product.extensions.sources import ExtensionSourcePolicy
 from mote.product.lsp.factory import ProductLspServiceFactory
 from mote.product.paths import RuntimePaths, default_runtime_paths
 from mote.product.skills import ProductSkillServiceFactory
 from mote.product.toolsets import builtin_toolsets
+from mote.runtime.agent.component_projection import AgentComponentProjection
+from mote.runtime.agent.components.action import ActionComponentInputs
+from mote.runtime.agent.components.cognition import CognitionComponentInputs
+from mote.runtime.agent.components.context import ContextComponentInputs
+from mote.runtime.agent.components.integrations import IntegrationComponentInputs
+from mote.runtime.agent.components.policy import PolicyComponentInputs
+from mote.runtime.agent.components.session import SessionComponentInputs
+from mote.runtime.agent.components.watching import WatchingComponentInputs
 from mote.runtime.agent.role_schema import RoleSchema
 from mote.runtime.agent.role_state import RoleState
 from mote.runtime.agent.wiring import AgentDependencies, AgentWiring
+from mote.runtime.config.hook import HookConfig
+from mote.runtime.config.mcp import MCPServerConfig
 from mote.runtime.tools.provider import AnyToolset
 
 DepsT = TypeVar("DepsT")
 OutputT = TypeVar("OutputT")
 AgentT = TypeVar("AgentT")
+
+
+@dataclass(frozen=True, slots=True)
+class _ProductRoutingStrategyFactory(RoutingStrategyFactory):
+    builders: Mapping[str, Callable[[], RoutingPolicy]]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "builders", MappingProxyType(dict(self.builders)))
+
+    def build(self, name: str) -> RoutingPolicy | None:
+        builder = self.builders.get(name)
+        return builder() if builder is not None else None
+
+
+@dataclass(frozen=True, slots=True)
+class _ProductAgentComponentProjection(AgentComponentProjection):
+    action_inputs: ActionComponentInputs
+    cognition_inputs: CognitionComponentInputs
+    context_inputs: ContextComponentInputs
+    integration_inputs: IntegrationComponentInputs
+    policy_inputs: PolicyComponentInputs
+    session_inputs: SessionComponentInputs
+    watching_inputs: WatchingComponentInputs
+    config_root: Path
+    workspace_root: Path
+
+    def action(self) -> ActionComponentInputs:
+        return self.action_inputs
+
+    def cognition(self) -> CognitionComponentInputs:
+        return self.cognition_inputs
+
+    def context(self) -> ContextComponentInputs:
+        return self.context_inputs
+
+    def integrations(self) -> IntegrationComponentInputs:
+        return self.integration_inputs
+
+    def policy(self) -> PolicyComponentInputs:
+        return self.policy_inputs
+
+    def session(self) -> SessionComponentInputs:
+        return self.session_inputs
+
+    def watching(self) -> WatchingComponentInputs:
+        return self.watching_inputs
+
+    def watched_config_paths(self) -> list[str]:
+        return [str(path) for path in self.watching_inputs.watched_config_files]
+
+    def user_config_root(self) -> Path:
+        return self.config_root
+
+    def session_workspace_root(self) -> Path:
+        return self.workspace_root
 
 
 class _RootAgentClass(Protocol[DepsT, OutputT]):
@@ -35,22 +110,16 @@ class _RootAgentClass(Protocol[DepsT, OutputT]):
         role_schema: RoleSchema,
         state: RoleState,
         wiring: AgentWiring[DepsT, OutputT],
-    ) -> RunnableAgent[OutputT]:
-        ...
+    ) -> RunnableAgent[OutputT]: ...
 
 
 class _ChildAgentClass(Protocol):
     def __call__(
         self,
         *,
-        parent_session_id: str | None,
+        state: RoleState,
         wiring: AgentWiring[None, str],
-    ) -> RunnableAgent[str]:
-        ...
-
-
-def _is_child_agent_class(candidate: object) -> TypeGuard[_ChildAgentClass]:
-    return isinstance(candidate, type) and callable(candidate)
+    ) -> RunnableAgent[str]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,13 +148,10 @@ class _RootBuilder(Generic[DepsT, OutputT]):
 @dataclass(frozen=True, slots=True)
 class _ChildBuilder:
     factory: "CodingAgentFactory"
-    agent_cls: object
+    agent_cls: _ChildAgentClass
 
     def build(self, request: AgentConstructionRequest) -> RunnableAgent[str]:
-        agent = self.factory.construct_child(self.agent_cls, request)
-        if not is_text_runnable_agent(agent):
-            raise TypeError(f"agent factory returned non-runnable {type(agent).__name__!r}")
-        return agent
+        return self.factory.construct_child(self.agent_cls, request)
 
 
 class CodingAgentFactory:
@@ -96,14 +162,15 @@ class CodingAgentFactory:
         *,
         toolsets_factory: Callable[[str | CommandProtocol], tuple[AnyToolset, ...]] = builtin_toolsets,
         background_task_pool_builder: BackgroundTaskServiceFactory = build_background_task_pool,
-        routing_strategy_builders_factory: Callable[[], dict[str, Callable[[], object]]] = dict,
+        deferred_result_projector_factory: DeferredResultProjectorFactory = build_deferred_result_projector,
+        routing_strategy_builders_factory: Callable[[], dict[str, Callable[[], RoutingPolicy]]] = dict,
         skill_service_factory: ProductSkillServiceFactory | None = None,
         code_map_indexer_factory: ProductCodeMapIndexerFactory | None = None,
         paths: RuntimePaths | None = None,
         cwd: Path | None = None,
         watched_config_files: tuple[Path, ...] = (),
-        hook_config: Any = None,
-        mcp_servers: tuple[Any, ...] = (),
+        hooks: ApprovedDeclaration[HookConfig] | None = None,
+        mcp: ApprovedDeclaration[tuple[MCPServerConfig, ...]] | None = None,
         primary_config_path: Path | None = None,
         config_secret_predicate: Callable[[str], bool] | None = None,
         user_config_root: Path | None = None,
@@ -113,19 +180,30 @@ class CodingAgentFactory:
         secrets_root: Path | None = None,
         oauth_root: Path | None = None,
         lsp_service_factory: ProductLspServiceFactory | None = None,
+        tool_policy_extensions: tuple[ToolCallPolicyExtensionSpec, ...] = (),
+        prompt_policy_extensions: tuple[PromptPolicyExtensionSpec, ...] = (),
+        compaction_policy_extensions: tuple[CompactionPolicyExtensionSpec, ...] = (),
+        run_completion_policy_extensions: tuple[RunCompletionPolicyExtensionSpec, ...] = (),
     ) -> None:
         self._toolsets_factory = toolsets_factory
         self._background_task_pool_builder = background_task_pool_builder
+        self._deferred_result_projector_factory = deferred_result_projector_factory
         self._routing_strategy_builders_factory = routing_strategy_builders_factory
         default_paths = paths or default_runtime_paths()
         self._cwd = cwd
-        self._skill_service_factory = skill_service_factory or ProductSkillServiceFactory()
+        self._skill_service_factory = skill_service_factory or ProductSkillServiceFactory(
+            default_paths.user_config_root,
+            source_policy=ExtensionSourcePolicy(
+                user_root=default_paths.user_config_root,
+                builtin_roots=(default_paths.package_data_root,),
+            ),
+        )
         self._code_map_indexer_factory = code_map_indexer_factory or ProductCodeMapIndexerFactory(
             codemap_root=default_paths.codemap_root
         )
         self._watched_config_files = tuple(watched_config_files)
-        self._hook_config = hook_config
-        self._mcp_servers = tuple(mcp_servers)
+        self._hooks = hooks
+        self._mcp = mcp
         self._primary_config_path = primary_config_path
         self._config_secret_predicate = config_secret_predicate
         self._user_config_root = user_config_root or default_paths.user_config_root
@@ -135,6 +213,10 @@ class CodingAgentFactory:
         self._secrets_root = secrets_root or default_paths.secrets_root
         self._oauth_root = oauth_root or default_paths.oauth_root
         self._lsp_service_factory = lsp_service_factory or ProductLspServiceFactory()
+        self._tool_policy_extensions = tuple(tool_policy_extensions)
+        self._prompt_policy_extensions = tuple(prompt_policy_extensions)
+        self._compaction_policy_extensions = tuple(compaction_policy_extensions)
+        self._run_completion_policy_extensions = tuple(run_completion_policy_extensions)
 
     def dependencies(
         self,
@@ -146,26 +228,48 @@ class CodingAgentFactory:
     ) -> AgentDependencies[DepsT, OutputT]:
         """Build the complete immutable Product dependency definition."""
 
+        resolved_toolsets = toolsets if toolsets is not None else self._toolsets_factory(command_protocol)
+        routing_factory = _ProductRoutingStrategyFactory(self._routing_strategy_builders_factory())
+        projection = _ProductAgentComponentProjection(
+            action_inputs=ActionComponentInputs(
+                session_workspace_root=self._session_workspace_root,
+                secrets_root=self._secrets_root,
+                browser_profiles_root=self._browser_profiles_root,
+                oauth_root=self._oauth_root,
+                toolsets=resolved_toolsets,
+                tool_policy_extensions=self._tool_policy_extensions,
+                background_task_pool_builder=self._background_task_pool_builder,
+                deferred_result_projector_factory=self._deferred_result_projector_factory,
+                mcp_servers=self._mcp.value if self._mcp is not None else (),
+            ),
+            cognition_inputs=CognitionComponentInputs(routing_factory),
+            context_inputs=ContextComponentInputs(
+                skill_service_factory=self._skill_service_factory,
+                code_map_indexer_factory=self._code_map_indexer_factory,
+                compaction_policy_extensions=self._compaction_policy_extensions,
+            ),
+            integration_inputs=IntegrationComponentInputs(
+                approved_hooks=self._hooks,
+                lsp_service_factory=self._lsp_service_factory,
+                secrets_root=self._secrets_root,
+                browser_profiles_root=self._browser_profiles_root,
+                sandbox_ca_root=self._sandbox_ca_root,
+                primary_config_path=self._primary_config_path,
+                config_secret_predicate=self._config_secret_predicate,
+            ),
+            policy_inputs=PolicyComponentInputs(
+                prompt_extensions=self._prompt_policy_extensions,
+                completion_extensions=self._run_completion_policy_extensions,
+            ),
+            session_inputs=SessionComponentInputs(self._secrets_root),
+            watching_inputs=WatchingComponentInputs(self._watched_config_files, self._hooks),
+            config_root=self._user_config_root,
+            workspace_root=self._session_workspace_root,
+        )
         return AgentDependencies(
             deps=deps,
             output_contract=output_contract,
-            toolsets=(toolsets if toolsets is not None else self._toolsets_factory(command_protocol)),
-            skill_service_factory=self._skill_service_factory,
-            code_map_indexer_factory=self._code_map_indexer_factory,
-            hook_config=self._hook_config,
-            mcp_servers=self._mcp_servers,
-            primary_config_path=self._primary_config_path,
-            config_secret_predicate=self._config_secret_predicate,
-            watched_config_files=self._watched_config_files,
-            user_config_root=self._user_config_root,
-            session_workspace_root=self._session_workspace_root,
-            browser_profiles_root=self._browser_profiles_root,
-            sandbox_ca_root=self._sandbox_ca_root,
-            secrets_root=self._secrets_root,
-            oauth_root=self._oauth_root,
-            lsp_service_factory=self._lsp_service_factory,
-            background_task_pool_builder=self._background_task_pool_builder,
-            routing_strategy_builders=self._routing_strategy_builders_factory(),
+            component_projection=projection,
         )
 
     def root_builder(
@@ -173,12 +277,10 @@ class CodingAgentFactory:
     ) -> AgentBuilder[RootAgentRequest[DepsT, OutputT], OutputT]:
         return _RootBuilder(agent_cls)
 
-    def child_builder(self, agent_cls: object, /) -> AgentBuilder[AgentConstructionRequest, str]:
+    def child_builder(self, agent_cls: _ChildAgentClass, /) -> AgentBuilder[AgentConstructionRequest, str]:
         return _ChildBuilder(self, agent_cls)
 
-    def construct_child(self, agent_cls: object, request: AgentConstructionRequest) -> object:
-        if not _is_child_agent_class(agent_cls):
-            raise TypeError("child Agent declaration must be a constructible class")
+    def construct_child(self, agent_cls: _ChildAgentClass, request: AgentConstructionRequest) -> RunnableAgent[str]:
         role_schema = RoleSchema(
             tools=list(DEFAULT_TOOLS),
             deferred_tools=list(DEFAULT_DEFERRED_TOOLS),
@@ -191,9 +293,14 @@ class CodingAgentFactory:
             )
         )
         agent = agent_cls(
-            parent_session_id=request.parent_session_id,
+            state=RoleState(
+                session_id=request.logical_agent_id,
+                parent_session_id=request.parent_session_id,
+            ),
             wiring=wiring,
         )
+        if not isinstance(agent, RunnableAgent):
+            raise TypeError(f"agent factory returned non-runnable {type(agent).__name__!r}")
         return agent
 
 

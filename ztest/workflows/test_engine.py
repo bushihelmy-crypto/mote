@@ -7,26 +7,56 @@ source), conditional routing, cycles bounded by ``recursion_limit``, independent
 parallel failure, auto-retries, and the LLM-route pause sentinel.
 
 ``report_progress`` is a no-op outside a progress context, so the driver coroutine
-(``BgTaskResult.poll_factory()``) can be awaited directly without a pool / disk sink.
+(``WorkflowDeferredResult.poll_factory()``) can be awaited directly without a pool / disk sink.
 """
+
 from __future__ import annotations
 
 import asyncio
+from typing import Annotated, Any
 
 import pytest
 
-from mote.orchestration.workflows import END, START, GraphBatchFailureError, GraphRecursionError, WorkflowBuilder
-from mote.orchestration.workflows.deferred import BgTaskResult
-from mote.orchestration.workflows.types import GraphPause, PauseReason
+from mote.orchestration.workflows import END, START, GraphBatchFailureError, GraphRecursionError, Output
+from mote.orchestration.workflows import WorkflowBuilder as _WorkflowBuilder
+from mote.orchestration.workflows.control import PauseReason
+from mote.orchestration.workflows.deferred import WorkflowDeferredResult
+from mote.orchestration.workflows.types import GraphPause
 
 from .conftest import S, boom_node, flaky_node, gated_node, non_retryable_flaky_node, sync_node
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _run(graph: WorkflowBuilder, **inputs):
+class EngineState(S):
+    """Explicit output surface for the scheduler's heterogeneous test graphs."""
+
+    a: Annotated[Any, Output] = None
+    b: Annotated[Any, Output] = None
+    c: Annotated[Any, Output] = None
+    tts: Annotated[Any, Output] = None
+    render: Annotated[Any, Output] = None
+    merge: Annotated[Any, Output] = None
+    fast: Annotated[Any, Output] = None
+    slow: Annotated[Any, Output] = None
+    seed: Annotated[Any, Output] = None
+    big: Annotated[Any, Output] = None
+    small: Annotated[Any, Output] = None
+    good: Annotated[Any, Output] = None
+    entry: Annotated[Any, Output] = None
+    taken: Annotated[Any, Output] = None
+    skipped: Annotated[Any, Output] = None
+    nextstep: Annotated[Any, Output] = None
+
+
+def WorkflowBuilder(name: str, **options) -> _WorkflowBuilder:
+    options.pop("state_schema", None)
+    return _WorkflowBuilder(name, state_schema=EngineState, **options)
+
+
+async def _run(graph: _WorkflowBuilder, **inputs):
     res = await graph.compile()(**inputs)
-    assert isinstance(res, BgTaskResult)
+    assert isinstance(res, WorkflowDeferredResult)
     return await res.poll_factory()
 
 
@@ -72,7 +102,11 @@ class TestFanOut:
         g = WorkflowBuilder("waitslow", state_schema=S)
         g.add_node("a", sync_node(lambda s: 1, field="a"))
         g.add_node("fast", sync_node(lambda s: "fast", field="fast"))
-        g.add_node("slow", gated_node(slow, lambda s: "slow", field="slow"))
+        g.add_node(
+            "slow",
+            gated_node(slow, lambda s: "slow", field="slow"),
+            implementation_id="test.waitslow.slow/v1",
+        )
         g.add_node("merge", sync_node(lambda s: [s.fast, s.slow], field="merge"))
         g.add_edge(START, "a")
         g.add_edge("a", "fast")
@@ -106,7 +140,11 @@ class TestWaitingEdgeMerge:
 
         g = WorkflowBuilder("foldmerge", state_schema=S)
         # 'a' is the slow single-edge source; b/c are the join sources.
-        g.add_node("a", gated_node(slow, lambda s: "A", field="a"))
+        g.add_node(
+            "a",
+            gated_node(slow, lambda s: "A", field="a"),
+            implementation_id="test.foldmerge.a/v1",
+        )
         g.add_node("b", sync_node(lambda s: "B", field="b"))
         g.add_node("c", sync_node(lambda s: "C", field="c"))
         g.add_node("merge", sync_node(merge_fn, field="merge"))
@@ -197,7 +235,7 @@ class TestCycle:
         g = WorkflowBuilder("andcyc", state_schema=S, recursion_limit=50)
         g.add_node("a", sync_node(lambda s: s.x, field="a"))
         g.add_node("fast", sync_node(lambda s: (getattr(s, "fast", None) or 0) + 1, field="fast"))
-        g.add_node("slow", slow_node)
+        g.add_node("slow", slow_node, implementation_id="test.andcyc.slow/v1")
         g.add_node("merge", sync_node(merge_fn, field="merge"))
 
         g.add_edge(START, "a")
@@ -235,7 +273,11 @@ class TestCycle:
 class TestFailure:
     async def test_single_failure_raises_batch(self):
         g = WorkflowBuilder("fail", state_schema=S)
-        g.add_node("a", boom_node(ValueError("nope")))
+        g.add_node(
+            "a",
+            boom_node(ValueError("nope")),
+            implementation_id="test.failure.a/v1",
+        )
         g.add_edge(START, "a")
         g.add_edge("a", END)
         with pytest.raises(GraphBatchFailureError) as ei:
@@ -246,7 +288,11 @@ class TestFailure:
         """One branch fails; the independent branch still completes."""
         g = WorkflowBuilder("failpar", state_schema=S)
         g.add_node("a", sync_node(lambda s: 1, field="a"))
-        g.add_node("bad", boom_node(ValueError("bad branch")))
+        g.add_node(
+            "bad",
+            boom_node(ValueError("bad branch")),
+            implementation_id="test.failure.bad/v1",
+        )
         g.add_node("good", sync_node(lambda s: "good-done", field="good"))
         g.add_edge(START, "a")
         g.add_edge("a", "bad")
@@ -402,7 +448,11 @@ class TestStall:
         g = WorkflowBuilder("stall", state_schema=S)
         g.add_node("entry", sync_node(lambda s: "e", field="entry"))
         g.add_node("a", sync_node(lambda s: "a", field="a"))
-        g.add_node("b", gated_node(never, lambda s: "b", field="b"))
+        g.add_node(
+            "b",
+            gated_node(never, lambda s: "b", field="b"),
+            implementation_id="test.stall.b/v1",
+        )
         g.add_node("c", sync_node(lambda s: "c", field="c"))
         g.add_edge(START, "entry")
         # entry routes only to ``a`` (``b`` is never entered).

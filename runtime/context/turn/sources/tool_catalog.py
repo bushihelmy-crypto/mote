@@ -22,8 +22,8 @@ resets the incremental frontier, so the next turn re-sends the full catalog.
 Tool removals are reconciled from the live catalog during every render; no
 correctness state depends on lossy telemetry.
 
-Duck-typed (mirrors :class:`SkillListingContextSource`): it holds callables so
-the low ``context`` layer never imports the executor or the command channel.
+It holds callables returning narrow Protocols, so the low ``context`` layer
+never imports the executor or the command channel.
 """
 
 from __future__ import annotations
@@ -31,16 +31,12 @@ from __future__ import annotations
 import json
 from typing import Callable, Optional, Protocol
 
-from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS, ModelContextRebuiltEvent
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 
 
 class _CatalogExecutor(Protocol):
-    """The tool-schema slice this source reads off the executor (duck-typed).
-
-    Structural only — keeps the low ``context`` layer from importing the executor;
-    any object exposing these two dynamic-schema getters satisfies it.
-    """
+    """The exact dynamic tool-schema query slice consumed by this source."""
 
     def mcp_tool_schemas(self) -> Optional[dict]: ...
 
@@ -48,7 +44,7 @@ class _CatalogExecutor(Protocol):
 
 
 class _CatalogChannel(Protocol):
-    """The command-channel slice this source consults (duck-typed)."""
+    """The exact command-channel query slice consumed by this source."""
 
     def wants_tool_catalog(self) -> bool: ...
 
@@ -74,18 +70,18 @@ class ToolCatalogContextSource:
         # Names already surfaced in a prior turn — the incremental frontier.
         self._sent_names: set[str] = set()
 
-    async def on_model_context_rebuilt(self, event: object) -> None:
+    async def on_model_context_rebuilt(self, event: ModelContextRebuiltEvent) -> None:
         """Reset the incremental frontier after a committed context rebuild."""
 
         if isinstance(event, MODEL_CONTEXT_REBUILT_EVENTS):
             self._sent_names = set()
 
     async def render(self, *, cwd: Optional[str] = None) -> Optional[str]:
-        channel = self._get_channel() if self._get_channel else None
+        channel = self._get_channel()
         if channel is None:
             return None
 
-        executor = self._get_executor() if self._get_executor else None
+        executor = self._get_executor()
         if executor is None:
             return None
 

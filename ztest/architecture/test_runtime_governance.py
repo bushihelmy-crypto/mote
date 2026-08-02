@@ -1,4 +1,5 @@
 """Final Runtime package-governance gates."""
+
 from __future__ import annotations
 
 import ast
@@ -160,14 +161,11 @@ def test_governance_public_surfaces_are_owner_scoped() -> None:
     assert not hasattr(tasks, "build_background_task_pool")
     assert background_contracts.__all__ == [
         "CommandName",
+        "AttemptId",
         "CompletedInlineTaskResultPointer",
-        "CompletedStoredTaskResultPointer",
+        "CompletedArtifactTaskResultPointer",
         "FailedTaskResultPointer",
         "InlineTaskOutput",
-        "PausedTaskResultPointer",
-        "PauseReason",
-        "SessionId",
-        "StoredTaskOutput",
         "TaskFailure",
         "TaskId",
         "TaskResultPointer",
@@ -179,6 +177,7 @@ def test_governance_public_surfaces_are_owner_scoped() -> None:
         "BackgroundTaskBuildContext",
         "BackgroundTaskService",
         "BackgroundTaskServiceFactory",
+        "BackgroundWakeReason",
         "TaskOutputLocationPort",
         "TaskResultRegistry",
     ]

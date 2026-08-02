@@ -12,6 +12,7 @@ import mote.runtime.events as ev
 from mote.contracts.events.conversation import PROMPT_REJECTED, PromptRejectedEvent
 from mote.contracts.events.task import TASK_PROGRESS, TaskProgressEvent
 from mote.contracts.events.telemetry import RECOVERY, RESOURCE_REPORT, RecoveryEvent, ResourceReportEvent
+from mote.contracts.task.progress import ProgressPhase
 
 
 def test_recovery_event_classvars_and_fields():
@@ -40,9 +41,15 @@ def test_recovery_event_classvars_and_fields():
 def test_task_progress_event_classvars_and_fields():
     assert TaskProgressEvent.name == TASK_PROGRESS == "task_progress"
     assert not hasattr(TaskProgressEvent, "is_control")
-    e = TaskProgressEvent(task_id="bg_1", stage="split", status="running", detail="x")
-    assert (e.task_id, e.stage, e.status, e.detail) == ("bg_1", "split", "running", "x")
-    assert TaskProgressEvent().detail == ""
+    e = TaskProgressEvent.activity(
+        run_id="run-1",
+        definition_id="definition-1",
+        stage="split",
+        phase=ProgressPhase.RUNNING,
+        detail="x",
+    )
+    assert e.progress.identity.execution_id == "run-1"
+    assert (e.stage, e.status, e.detail) == ("split", "running", "x")
 
 
 def test_resource_report_event_uses_name_underscore():

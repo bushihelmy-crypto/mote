@@ -10,6 +10,7 @@ from typing import Any
 from mote.contracts.artifact import ArtifactRef
 from mote.contracts.conversation import Message
 from mote.contracts.conversation.fields import CACHE_INTENT, IMAGES, PDFS
+from mote.contracts.model.inference import FinalizedGenerateRequest
 from mote.contracts.model.invocation import (
     CanonicalMessage,
     CanonicalToolCall,
@@ -19,7 +20,6 @@ from mote.contracts.model.invocation import (
     ImageDescriptionInput,
     ImageDescriptionOutput,
     ModelInvocation,
-    ModelOperation,
     RequestRequirements,
     ResolvedModelResponse,
     ResponseMode,
@@ -27,6 +27,7 @@ from mote.contracts.model.invocation import (
     WebSearchInput,
     WebSearchOutput,
 )
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.ports.model.gateway import ModelRoute
 from mote.kernel.telemetry.events import current_span_id
 
@@ -38,7 +39,7 @@ async def generate(
     model_call_id: str,
     task: str,
     system_prompt: str = "",
-    tools: list[dict] | None = None,
+    tools: list[dict] | tuple[CanonicalToolDefinition, ...] | None = None,
     output_schema: dict | None = None,
     response_mode: ResponseMode = ResponseMode.TEXT,
     stream: bool = True,
@@ -46,7 +47,9 @@ async def generate(
     trace_id: str = "",
 ) -> tuple[GenerateOutput, ResolvedModelResponse]:
     canonical_messages, needs_vision, needs_pdf = canonical_messages_from(messages)
-    canonical_tools = tuple(canonical_tool(tool) for tool in tools or ())
+    canonical_tools = tuple(
+        tool if isinstance(tool, CanonicalToolDefinition) else canonical_tool(tool) for tool in tools or ()
+    )
     invocation = ModelInvocation(
         model_call_id=model_call_id,
         routing_decision_id=route.routing_decision_id,
@@ -81,6 +84,29 @@ async def generate(
     if not isinstance(output, GenerateOutput):
         raise TypeError("generate route returned a non-generate output")
     return output, response
+
+
+async def generate_finalized(
+    route: ModelRoute,
+    request: FinalizedGenerateRequest,
+    *,
+    model_call_id: str,
+) -> tuple[GenerateOutput, ResolvedModelResponse]:
+    """Execute the one typed Kernel→Runtime generate operation."""
+
+    return await generate(
+        route,
+        request.messages,
+        model_call_id=model_call_id,
+        task=request.task,
+        system_prompt=request.system_prompt,
+        tools=request.tools,
+        output_schema=request.output_schema,
+        response_mode=request.response_mode,
+        stream=request.stream,
+        resume=request.resume,
+        trace_id=request.trace_id,
+    )
 
 
 async def web_search(
@@ -151,7 +177,7 @@ async def describe_image(
 def canonical_messages_from(
     value: Any,
 ) -> tuple[tuple[CanonicalMessage, ...], bool, bool]:
-    items = value if isinstance(value, list) else [value]
+    items = value if isinstance(value, (list, tuple)) else [value]
     messages: list[CanonicalMessage] = []
     needs_vision = False
     needs_pdf = False
@@ -265,5 +291,6 @@ __all__ = [
     "canonical_tool",
     "describe_image",
     "generate",
+    "generate_finalized",
     "web_search",
 ]

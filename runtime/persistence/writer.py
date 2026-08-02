@@ -28,8 +28,8 @@ or a test that calls ``asyncio.run`` per call so each gets a fresh loop),
 This keeps the primitive usable from synchronous call sites and sidesteps the
 "worker lazy-bound to the first loop then orphaned" trap.
 
-Leaf module: imports only stdlib + ``common.logs`` (same discipline as
-``common/events``). It must never import roles/context/executor/session.
+Leaf module: imports only stdlib plus the Runtime logging contract (same discipline as
+``runtime/events``). It must never import roles/context/executor/session.
 """
 
 from __future__ import annotations

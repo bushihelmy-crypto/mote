@@ -2,16 +2,8 @@
 
 import pytest
 
-from mote.contracts.task.models import (
-    CommandName,
-    CompletedInlineTaskResultPointer,
-    CompletedStoredTaskResultPointer,
-    InlineTaskOutput,
-    PausedTaskResultPointer,
-    PauseReason,
-    StoredTaskOutput,
-    TaskId,
-)
+from mote.contracts.task.codec import decode_task_result_pointer
+from mote.contracts.task.models import CommandName, CompletedInlineTaskResultPointer, InlineTaskOutput, TaskId
 from mote.orchestration.background_tasks.result_pointer import render_task_result_pointer
 
 
@@ -28,31 +20,14 @@ def test_inline_result_is_rendered_and_escaped():
     assert "<result>value &lt; 5 &amp; &gt; 1</result>" in out
 
 
-def test_stored_result_uses_opaque_locator():
-    pointer = CompletedStoredTaskResultPointer(
-        TaskId("bg_3"),
-        CommandName("media"),
-        "finished",
-        StoredTaskOutput("task-output:session:bg_3"),
-    )
-    out = render_task_result_pointer(pointer)
-    assert "<result-ref>task-output:session:bg_3</result-ref>" in out
-    assert "/tmp/" not in out and "file://" not in out
-
-
-def test_stored_result_rejects_filesystem_path():
-    with pytest.raises(ValueError):
-        StoredTaskOutput("/tmp/result.txt")
-
-
-def test_pause_is_a_distinct_variant():
-    out = render_task_result_pointer(
-        PausedTaskResultPointer(
-            TaskId("bg_5"),
-            CommandName("pipeline"),
-            "awaiting decision",
-            PauseReason("waiting_for_route"),
+def test_removed_pause_pointer_fails_closed() -> None:
+    with pytest.raises(ValueError, match="shape"):
+        decode_task_result_pointer(
+            {
+                "kind": "paused",
+                "task_id": "bg_5",
+                "command_name": "pipeline",
+                "summary": "awaiting decision",
+                "reason": "waiting_for_route",
+            }
         )
-    )
-    assert "<status>paused</status>" in out
-    assert "<pause-reason>waiting_for_route</pause-reason>" in out

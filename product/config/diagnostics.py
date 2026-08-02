@@ -11,10 +11,11 @@ model *type* passed in by the caller, so it never imports the loader or the
 - :func:`unknown_key_paths` — walk a merged dict against the model schema and
   report dotted paths that no field accepts (recursing into nested models). Used
   by the loader on every load (unknown keys raise
-  :class:`~mote.runtime.errors.UnknownConfigKeysError`).
+  :class:`~mote.contracts.config.errors.UnknownConfigKeysError`).
 - redaction helpers (:func:`_is_secret`, :func:`_render_value`) — shared with the
   reporting/CLI layer in :mod:`.report` (``python -m mote.product.config.report``).
 """
+
 from __future__ import annotations
 
 import typing

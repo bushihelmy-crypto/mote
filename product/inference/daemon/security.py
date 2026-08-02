@@ -138,6 +138,7 @@ class SharedHandshakeAuthority:
             session_id=secrets.token_urlsafe(24),
             protocol_version=negotiation.protocol_version,
             socket_generation=self._socket_generation,
+            application_id=handshake.application_id,
             caller=handshake.caller,
             principal=InferencePrincipal(
                 tenant_id=handshake.tenant_id,

@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from mote.contracts.events.envelope import EventEnvelope, JsonValue
 from mote.contracts.events.file.facts import FileTransactionCommittedEvent
 from mote.contracts.events.telemetry import DiagnosticsEvent
+from mote.contracts.ports.events.telemetry import TelemetryEmitter
 from mote.runtime.config.lsp import LspConfig
 from mote.runtime.lsp.format import format_diagnostics
 from mote.runtime.lsp.manager import LspServerManager
@@ -16,7 +17,13 @@ from mote.runtime.telemetry.logging import logger
 class LspService:
     """LSP diagnostics for one Role session."""
 
-    def __init__(self, config: LspConfig, root_path: str, *, telemetry=None) -> None:
+    def __init__(
+        self,
+        config: LspConfig,
+        root_path: str,
+        *,
+        telemetry: TelemetryEmitter[DiagnosticsEvent] | None = None,
+    ) -> None:
         self._manager = LspServerManager(config, root_path)
         self._telemetry = telemetry
 

@@ -10,15 +10,16 @@ emit only newly-appeared teammates (tracked by ``_sent_ids``), and a
 ``PostCompactEvent`` resets the frontier so the next turn re-sends everything.
 When no plane is bound it self-suppresses (returns None).
 """
+
 from __future__ import annotations
 
 import asyncio
 from typing import List, Optional
 
+from mote.contracts.events.conversation import PostCompactEvent
 from mote.contracts.ports.agent.team_roster import TeamRosterMember
 from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
 from mote.runtime.context.turn import TeamContextSource
-from mote.runtime.events import PostCompactEvent
 
 
 def run(coro):

@@ -1,146 +1,173 @@
-"""BrowserProfileStore — durable, encrypted browser-login persistence.
+"""Encrypted, revisioned and crash-safe browser profile store."""
 
-A *profile* is a named, on-disk copy of a Playwright ``storage_state``
-(``{cookies, origins}``) — the whole logged-in session for a browser. Where the
-session-resume path keeps ``storage_state`` only for the lifetime of one session
-(and, before this store, wrote it *plaintext* into ``rollout.jsonl``), a profile
-promotes that login to a **durable identity** that outlives any single session:
-once a role logs in under a profile name, later sessions reuse it with no
-re-login (login ladder rung L0 — "reuse the persisted profile").
-
-Security: the ``storage_state`` carries session cookies, so it is stored
-**encrypted at rest**, reusing the very same AES-256-GCM cipher + ``vault.key``
-that protects the secret vault (via an injected :class:`VaultCipher`). Files are
-created ``0600`` (owner-only) from the start. Because the key is masked from the
-sandbox, an encrypted profile is cryptographically useless to a confined command
-even if it could read the bytes.
-
-Best-effort by contract: every read/write failure (missing dir, corrupt file,
-wrong key, unwritable home) is logged and swallowed — a profile problem yields a
-clean ephemeral browser, never a broken turn. The cipher itself is built lazily
-(on first load/save) via an injected factory, so a role that never uses a
-profile never even generates the vault key.
-"""
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import os
-import re
+import tempfile
+import unicodedata
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Iterator
 
+from mote.contracts.browser import (
+    BrowserProfileCommitReceipt,
+    BrowserProfileConflictError,
+    BrowserProfileError,
+    BrowserProfileNotFoundError,
+    BrowserProfileSnapshot,
+    BrowserStorageState,
+    decode_browser_storage_state,
+)
 from mote.runtime.secrets.cipher import VaultCipher
-from mote.runtime.telemetry.logging import logger
 
-#: Profile names come from a config knob (``role_schema.browser_profile``), but
-#: they still name a file — sanitize to a conservative slug so a stray value can
-#: never traverse out of the profile directory or collide with metadata files.
-_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_SCHEMA = "mote.browser-profile/v1"
 
 
-def _slug(name: str) -> str:
-    """Reduce a profile name to a filesystem-safe slug (no path traversal)."""
-    slug = _SAFE_NAME_RE.sub("_", name.strip())
-    slug = slug.strip("._")  # never a hidden/relative-looking name
-    return slug
+def canonical_profile_subject(name: str) -> tuple[str, str]:
+    display = unicodedata.normalize("NFKC", name).strip()
+    if not display or display in {".", ".."} or "/" in display or "\\" in display or "\x00" in display:
+        raise BrowserProfileError("browser profile name is not a valid subject")
+    return hashlib.sha256(display.encode("utf-8")).hexdigest(), display
+
+
+def decode_storage_state(value: object) -> BrowserStorageState:
+    try:
+        return decode_browser_storage_state(value)
+    except ValueError as error:
+        raise BrowserProfileError(str(error)) from error
 
 
 class BrowserProfileStore:
-    """Encrypted, durable store of named Playwright ``storage_state`` profiles.
-
-    One file per profile under ``~/.mote/browser_profiles/<slug>.profile``, the
-    JSON ``storage_state`` encrypted with the injected :class:`VaultCipher`. The
-    cipher is resolved lazily through ``cipher_factory`` so construction is free
-    (no key generated) until a profile is actually loaded or saved.
-    """
-
-    #: Extension for an encrypted profile blob (distinct from plain ``.json`` so
-    #: the file is never mistaken for a readable document).
     _SUFFIX = ".profile"
 
-    def __init__(
-        self,
-        cipher_factory: Callable[[], VaultCipher],
-        *,
-        root: Optional[Path] = None,
-    ) -> None:
+    def __init__(self, cipher_factory: Callable[[], VaultCipher], *, root: Path) -> None:
         self._cipher_factory = cipher_factory
-        self._cipher: Optional[VaultCipher] = None
-        if root is None:
-            raise ValueError("BrowserProfileStore requires an explicit root")
+        self._cipher: VaultCipher | None = None
         self._root = Path(root)
 
-    # --- internals ---------------------------------------------------------
-
     def _get_cipher(self) -> VaultCipher:
-        """Build (once) and cache the vault cipher — lazy, key generated on demand."""
         if self._cipher is None:
             self._cipher = self._cipher_factory()
         return self._cipher
 
     def path_for(self, name: str) -> Path:
-        """The on-disk path a profile *name* maps to (may not yet exist)."""
-        return self._root / f"{_slug(name)}{self._SUFFIX}"
+        subject_id, _ = canonical_profile_subject(name)
+        return self._root / f"{subject_id}{self._SUFFIX}"
 
-    # --- public API (all best-effort) --------------------------------------
+    @contextmanager
+    def _claim(self, subject_id: str) -> Iterator[None]:
+        self._root.mkdir(parents=True, exist_ok=True)
+        lock_path = self._root / f"{subject_id}.lock"
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
-    def load(self, name: str) -> Optional[Dict[str, Any]]:
-        """Return the decrypted ``storage_state`` for *name*, or ``None``.
-
-        ``None`` on any miss/failure (no such profile, unreadable file, wrong
-        key, malformed JSON) — the caller then launches a clean session.
-        """
-        if not name:
-            return None
+    def load(self, name: str) -> BrowserProfileSnapshot:
+        subject_id, display = canonical_profile_subject(name)
         path = self.path_for(name)
         try:
             token = path.read_bytes()
-        except OSError:
-            return None  # no such profile yet — normal on first use
+        except FileNotFoundError as exc:
+            raise BrowserProfileNotFoundError(display) from exc
         try:
-            plaintext = self._get_cipher().decrypt(token)
-            data = json.loads(plaintext.decode("utf-8"))
-        except Exception as exc:  # noqa: BLE001 — corrupt/wrong-key => clean start
-            logger.warning(f"BrowserProfileStore: could not load profile {name!r}: {exc}")
-            return None
-        return data if isinstance(data, dict) else None
+            raw = json.loads(self._get_cipher().decrypt(token).decode("utf-8"))
+        except Exception as exc:
+            raise BrowserProfileError("browser profile authentication or decoding failed") from exc
+        if type(raw) is not dict or set(raw) != {
+            "schema",
+            "subject_id",
+            "display_name",
+            "revision",
+            "content_digest",
+            "storage_state",
+        }:
+            raise BrowserProfileError("browser profile envelope has an invalid shape")
+        if raw["schema"] != _SCHEMA or raw["subject_id"] != subject_id or raw["display_name"] != display:
+            raise BrowserProfileError("browser profile identity or schema mismatch")
+        if type(raw["revision"]) is not int or raw["revision"] < 1 or type(raw["content_digest"]) is not str:
+            raise BrowserProfileError("browser profile revision is invalid")
+        state = decode_storage_state(raw["storage_state"])
+        digest = self._digest(state)
+        if digest != raw["content_digest"]:
+            raise BrowserProfileError("browser profile content digest mismatch")
+        return BrowserProfileSnapshot(subject_id, display, raw["revision"], digest, state)
 
-    def save(self, name: str, storage_state: Optional[Dict[str, Any]]) -> None:
-        """Encrypt and persist *storage_state* under *name* (best-effort).
+    def save(
+        self, name: str, storage_state: BrowserStorageState, *, expected_revision: int | None
+    ) -> BrowserProfileCommitReceipt:
+        if not isinstance(storage_state, BrowserStorageState):
+            raise BrowserProfileError("storage state must be the canonical typed DTO")
+        subject_id, display = canonical_profile_subject(name)
+        with self._claim(subject_id):
+            path = self.path_for(name)
+            if path.exists():
+                current = self.load(name)
+                if expected_revision != current.revision:
+                    raise BrowserProfileConflictError("browser profile revision changed")
+                revision = current.revision + 1
+            else:
+                if expected_revision is not None:
+                    raise BrowserProfileConflictError("browser profile does not exist at expected revision")
+                revision = 1
+            digest = self._digest(storage_state)
+            envelope = {
+                "schema": _SCHEMA,
+                "subject_id": subject_id,
+                "display_name": display,
+                "revision": revision,
+                "content_digest": digest,
+                "storage_state": storage_state.to_payload(),
+            }
+            token = self._get_cipher().encrypt(
+                json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            )
+            self._atomic_replace(path, token)
+            return BrowserProfileCommitReceipt(subject_id, revision, digest)
 
-        A ``None`` or empty ``storage_state`` is ignored (nothing to persist);
-        an existing profile is left untouched rather than clobbered with empty.
-        """
-        if not name or not storage_state:
-            return
-        path = self.path_for(name)
+    def forget(self, name: str, *, expected_revision: int) -> None:
+        subject_id, _ = canonical_profile_subject(name)
+        with self._claim(subject_id):
+            current = self.load(name)
+            if current.revision != expected_revision:
+                raise BrowserProfileConflictError("browser profile revision changed")
+            self.path_for(name).unlink()
+            self._fsync_directory()
+
+    @staticmethod
+    def _digest(state: BrowserStorageState) -> str:
+        encoded = json.dumps(state.to_payload(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _atomic_replace(self, path: Path, token: bytes) -> None:
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=self._root)
         try:
-            plaintext = json.dumps(storage_state).encode("utf-8")
-            token = self._get_cipher().encrypt(plaintext)
-        except Exception as exc:  # noqa: BLE001 — serialize/encrypt failure is non-fatal
-            logger.warning(f"BrowserProfileStore: could not encrypt profile {name!r}: {exc}")
-            return
-        try:
-            self._root.mkdir(parents=True, exist_ok=True)
-            # Owner-only from creation (like vault.key): open 0600 rather than
-            # write-then-chmod so cookies are never briefly world-readable.
-            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "wb", closefd=True) as stream:
+                stream.write(token)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            self._fsync_directory()
+        except BaseException:
             try:
-                os.write(fd, token)
-            finally:
-                os.close(fd)
-            os.chmod(path, 0o600)
-        except OSError as exc:
-            logger.warning(f"BrowserProfileStore: could not write profile {name!r}: {exc}")
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+            raise
 
-    def forget(self, name: str) -> None:
-        """Delete the profile named *name* if present (best-effort)."""
-        if not name:
-            return
+    def _fsync_directory(self) -> None:
+        fd = os.open(self._root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
-            self.path_for(name).unlink(missing_ok=True)
-        except OSError as exc:
-            logger.warning(f"BrowserProfileStore: could not forget profile {name!r}: {exc}")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
-__all__ = ["BrowserProfileStore"]
+__all__ = ["BrowserProfileStore", "canonical_profile_subject", "decode_storage_state"]

@@ -25,15 +25,15 @@ from mote.runtime.agent.components import (
     session_component_specs,
     watching_component_specs,
 )
-from mote.runtime.artifacts import ArtifactRepositoryBlobStore, DurableArtifactStore
+from mote.runtime.artifacts import ContentAddressedArtifactBlobStore, DurableArtifactStore
 from mote.runtime.fileops.edit_plans import WholeFileEditPlanRequest
 from mote.runtime.fileops.identity import path_token
 from mote.runtime.interactive.canvas.svg import render_canvas_svg
 from mote.runtime.interactive.checkpoint_codec import encode_inline_json
 from mote.runtime.projections import artifact_representation_set_digest
-from mote.runtime.projections.session import SESSION_PROJECTION_SUBSCRIPTION
 from mote.runtime.session import MessageEvent
 from mote.runtime.session import log as session_log_module
+from mote.runtime.session.projection import SESSION_PROJECTION_SUBSCRIPTION
 from mote.runtime.session.replay import replay
 
 
@@ -217,7 +217,7 @@ def test_artifact_store_wiring_uses_workspace_artifact_repository(role):
     assert isinstance(store, ArtifactStore)
     workspace_root = role.session_log.workspace_root
     assert store.index_path == workspace_root / ".artifacts" / "artifacts.sqlite3"
-    assert isinstance(store._blobs, ArtifactRepositoryBlobStore)
+    assert isinstance(store._blobs, ContentAddressedArtifactBlobStore)
     bundle = role.components._graph.get(ARTIFACT_REPOSITORY_BUNDLE)
     assert store._blobs._repository is bundle.repository
     assert bundle.repository is not role.file_operations.artifacts

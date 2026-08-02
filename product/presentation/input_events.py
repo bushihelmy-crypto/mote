@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TypeGuard
-
 from mote.contracts.events.agent import BudgetEvent
 from mote.contracts.events.conversation import ContextCompactedEvent, MessageAppendedEvent
 from mote.contracts.events.model import (
@@ -40,7 +38,7 @@ PresentationInputEvent = (
     | ToolInvocationStartedEvent
 )
 
-_PRESENTATION_INPUT_TYPES = (
+PRESENTATION_INPUT_TYPES: tuple[type[PresentationInputEvent], ...] = (
     BudgetEvent,
     ContextCompactedEvent,
     MessageAppendedEvent,
@@ -62,10 +60,4 @@ _PRESENTATION_INPUT_TYPES = (
 )
 
 
-def is_presentation_input(event: object) -> TypeGuard[PresentationInputEvent]:
-    """Narrow the heterogeneous telemetry spine at the Product edge."""
-
-    return isinstance(event, _PRESENTATION_INPUT_TYPES)
-
-
-__all__ = ["PresentationInputEvent", "is_presentation_input"]
+__all__ = ["PRESENTATION_INPUT_TYPES", "PresentationInputEvent"]

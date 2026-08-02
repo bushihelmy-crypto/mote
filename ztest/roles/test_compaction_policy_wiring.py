@@ -17,7 +17,7 @@ from .conftest import FakeLLM
 
 def _context() -> Context:
     llm = FakeLLM()
-    return Context(config=offline_config())
+    return Context()
 
 
 def test_compaction_policy_extension_factory_runs_once_per_role(tmp_path, monkeypatch):

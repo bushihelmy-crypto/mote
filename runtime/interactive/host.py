@@ -1,4 +1,5 @@
 """ManagedRuntimeHost — identity, lifecycle, access, revision and fencing."""
+
 from __future__ import annotations
 
 import asyncio
@@ -30,6 +31,7 @@ from mote.contracts.runtime import (
     RuntimeProjectionIntent,
     RuntimeRef,
     RuntimeState,
+    validate_checkpoint_successor,
 )
 from mote.contracts.runtime.errors import (
     ManagedRuntimeAliasConflictError,
@@ -365,16 +367,25 @@ class RuntimeHost:
 
     def stage_checkpoint(self, checkpoint: RuntimeCheckpoint, *, alias: str | None = None) -> None:
         """Stage one durable checkpoint for lazy restoration by ``ensure``."""
+        if alias is not None and alias != checkpoint.alias:
+            raise ManagedRuntimeStateError(
+                "checkpoint alias override does not match its durable identity",
+                runtime=f"{checkpoint.kind}:{alias}",
+            )
         readable = RuntimeRef(
             runtime_id=checkpoint.runtime_id,
             kind=checkpoint.kind,
-            alias=alias or checkpoint.alias,
+            alias=checkpoint.alias,
         ).readable
         if readable in self._by_alias:
             raise ManagedRuntimeStateError(
                 "cannot stage a checkpoint for a running runtime",
                 runtime=readable,
             )
+        try:
+            validate_checkpoint_successor(self._staged_checkpoints.get(readable), checkpoint)
+        except ValueError as exc:
+            raise ManagedRuntimeStateError(str(exc), runtime=readable) from exc
         self._staged_checkpoints[readable] = checkpoint
 
     async def create(

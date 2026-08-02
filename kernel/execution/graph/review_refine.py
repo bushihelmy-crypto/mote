@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from mote.contracts.model.turn import ModelTurn
 from mote.contracts.output.completion import CompletionKind
+from mote.contracts.ports.execution.model_turn_completion import ModelTurnCompletionPolicy
 from mote.kernel.execution.graph.core import AgentGraph, EffectKind, End, NodeId, Transition
 from mote.kernel.execution.graph.nodes import (
     BudgetNode,
@@ -30,7 +31,7 @@ class ReviewInterpretNode(ExecutionNode, Generic[OutputT]):
     effect_kind = EffectKind.PURE
     allowed_targets = frozenset({NodeId.VALIDATE_OUTPUT})
 
-    def __init__(self, completion_policy: Any) -> None:
+    def __init__(self, completion_policy: ModelTurnCompletionPolicy) -> None:
         self._completion_policy = completion_policy
 
     async def run(
@@ -44,7 +45,10 @@ class ReviewInterpretNode(ExecutionNode, Generic[OutputT]):
             raise RuntimeError(completion.reason or "completion policy rejected model turn")
         if completion.kind is not CompletionKind.VALIDATE_CANDIDATE:
             raise RuntimeError("review/refine graph requires a terminal output candidate; tool actions are disabled")
-        state.turn = CandidateSelection(state.turn, completion.candidate_index or 0)
+        candidate_index = completion.candidate_index
+        if candidate_index is None:
+            raise RuntimeError("validated completion is missing its candidate index")
+        state.turn = CandidateSelection(state.turn, candidate_index)
         return Transition(NodeId.VALIDATE_OUTPUT)
 
 

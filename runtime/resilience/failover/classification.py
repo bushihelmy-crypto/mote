@@ -12,7 +12,7 @@ from mote.contracts.model.failover import (
     QuotaObservation,
     Retryability,
 )
-from mote.runtime.errors import is_retryable
+from mote.runtime.resilience.error_classification import is_retryable
 
 _REASON_BY_CODE = {
     ErrorCode.LLM_CONNECTION: FailureReason.CONNECTION,

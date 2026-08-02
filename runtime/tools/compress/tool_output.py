@@ -14,6 +14,7 @@ never modified so a failed command's exit signal is preserved.
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 
 from mote.contracts.config.tool import PERSISTED_OUTPUT_OPEN_TAG, ToolResultLimitConfig
 from mote.runtime.resources import spill as tool_result_limit
@@ -69,8 +70,7 @@ def compress_tool_result(
         f"compress_tool_result: compressed {name} output via {outcome.label} "
         f"({outcome.original_chars} -> {outcome.compressed_chars} chars)"
     )
-    result.output = f"{marker}\n{outcome.text}"
-    return result
+    return replace(result, output=f"{marker}\n{outcome.text}")
 
 
 def _command_for_compression(name: str, args: dict) -> str | None:

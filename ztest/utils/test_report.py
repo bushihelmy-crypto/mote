@@ -13,6 +13,7 @@ and the :class:`ReporterSubscriber` (when wired) reconstructs the legacy
 * ``async_report`` under bound telemetry emits the event (with the role) and the
   async CM exit emits the END_MARKER.
 """
+
 from __future__ import annotations
 
 import os
@@ -25,11 +26,11 @@ from pydantic import BaseModel
 import mote.runtime.telemetry.reporting as report_mod
 from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
 from mote.runtime.events import (
+    AllTelemetryBinding,
     LLMStreamCommittedEvent,
     LLMStreamDeltaEvent,
     LLMStreamDiscardedEvent,
     ResourceReportEvent,
-    TelemetryBinding,
     TelemetryManifest,
     TelemetryRuntime,
     bind_telemetry,
@@ -66,7 +67,7 @@ def _make_telemetry(recorder: _Recorder) -> TelemetryRuntime:
     telemetry = TelemetryRuntime(
         TelemetryManifest(
             (
-                TelemetryBinding(
+                AllTelemetryBinding(
                     TelemetrySubscriptionSpec(
                         identity=TelemetryIdentity("mote.test.resource_report"),
                         capacity=16,

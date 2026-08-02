@@ -30,7 +30,7 @@ def test_runtime_checkpoint_recorder_satisfies_sink_protocol(tmp_path):
 @pytest.mark.asyncio
 async def test_runtime_checkpoint_recorder_appends_replayable_last_state(tmp_path):
     log = SessionLog("runtime-checkpoint", base_dir=str(tmp_path))
-    await log.append(SessionMetaEvent(session_id="runtime-checkpoint"))
+    await log.append(SessionMetaEvent("runtime-checkpoint", "test.runtime", ()))
     recorder = RuntimeCheckpointRecorder(log)
 
     await recorder.persist(_checkpoint(1), reason="write-commit")

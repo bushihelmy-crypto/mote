@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from mote.runtime.artifacts.ports import ArtifactMetadataSource, ArtifactPinSource, ArtifactRootSource
-from mote.runtime.artifacts.repository import ArtifactRepository
+from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
 from mote.runtime.artifacts.store import DurableArtifactStore
 
 
@@ -15,7 +15,7 @@ class ArtifactGarbageCollector:
     def __init__(
         self,
         store: DurableArtifactStore,
-        repository: ArtifactRepository,
+        repository: ContentAddressedArtifactStore,
         *,
         root_sources: tuple[ArtifactRootSource, ...] = (),
         pin_sources: tuple[ArtifactPinSource, ...] = (),

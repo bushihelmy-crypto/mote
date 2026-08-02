@@ -29,6 +29,7 @@ def builtin_service_gateway(
     breaker_config: BreakerConfig | None = None,
     admission_controller: ResourceAdmissionController | None = None,
     service_call_journal: ServiceCallJournal | None = None,
+    activate_reconciliation: bool = False,
 ) -> ServiceGateway:
     if admission_controller is not None and breaker_config is not None:
         raise ValueError("admission_controller already owns its breaker configuration")
@@ -38,7 +39,7 @@ def builtin_service_gateway(
         build_media_service_snapshot(multimodal),
         build_web_search_service_snapshot(web_search, model_profile_gateway or model_gateway),
     )
-    return RuntimeServiceGateway(
+    gateway = RuntimeServiceGateway(
         ServiceFailoverPlanner(snapshot),
         ProductServiceEndpointResolver(
             MediaServiceEndpointResolver(multimodal, providers),
@@ -47,6 +48,9 @@ def builtin_service_gateway(
         admission_controller=(admission_controller or ResourceAdmissionController(breaker_config=breaker_config)),
         service_call_journal=service_call_journal,
     )
+    if activate_reconciliation:
+        gateway.activate_reconciliation()
+    return gateway
 
 
 __all__ = ["builtin_service_gateway"]

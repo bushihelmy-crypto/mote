@@ -1,4 +1,4 @@
-"""Unified status enum for background tasks and graph nodes.
+"""Process-local BackgroundTask lifecycle status.
 
 This is a LEAF module (stdlib only), safe to import from anywhere without
 risking circular imports.
@@ -6,11 +6,14 @@ risking circular imports.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
 
+from mote.contracts.task.status import ExecutionStatusProjection, ExecutionStatusSource
 
-class BgStatus(str, Enum):
-    """Unified status values for background tasks and graph nodes."""
+
+class BackgroundTaskStatus(str, Enum):
+    """Status owned exclusively by one Agent's process-local task pool."""
 
     PENDING = "pending"
     RUNNING = "running"
@@ -19,21 +22,34 @@ class BgStatus(str, Enum):
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"
     SKIPPED = "skipped"
-    WAITING_FOR_ROUTE = "waiting_for_route"
-    STALLED = "stalled"
 
 
-# Statuses where a task paused mid-run awaiting a model decision — resumable,
-# NOT terminal. A pause keeps its state snapshot for ``resume_tasks`` and stays
-# cancellable. Two reasons share this shape (see ``bggraph.types.PauseReason``):
-# ``WAITING_FOR_ROUTE`` (frontier hit an LLM edge — pick a route) and
-# ``STALLED`` (frontier drained with a blocked AND-join — a deadlock the model
-# must break). Keeping the set here (the leaf status module) lets the resume /
-# cancel gates test "is this a resumable pause?" from one authoritative place
-# instead of re-listing the members.
-PAUSE_STATUSES = frozenset({BgStatus.WAITING_FOR_ROUTE, BgStatus.STALLED})
-
-# Whole-task *terminal* statuses — a task that has genuinely finished (as opposed
-# to a resumable pause). Single authoritative source so the attachment generator,
+# Whole-task *terminal* statuses. Single authoritative source so the attachment generator,
 # the push-once result registration, and any reap gate all agree on "done".
-TERMINAL_STATUSES = frozenset({BgStatus.SUCCESS, BgStatus.FAILED, BgStatus.CANCELLED, BgStatus.TIMEOUT})
+TERMINAL_STATUSES = frozenset(
+    {
+        BackgroundTaskStatus.SUCCESS,
+        BackgroundTaskStatus.FAILED,
+        BackgroundTaskStatus.CANCELLED,
+        BackgroundTaskStatus.TIMEOUT,
+    }
+)
+
+
+def project_background_task_status(
+    status: BackgroundTaskStatus,
+) -> ExecutionStatusProjection:
+    return ExecutionStatusProjection(
+        ExecutionStatusSource.BACKGROUND_TASK,
+        status.value,
+    )
+
+
+def decode_background_task_status(
+    payload: Mapping[str, object],
+) -> BackgroundTaskStatus:
+    projection = ExecutionStatusProjection.from_payload(
+        payload,
+        expected_source=ExecutionStatusSource.BACKGROUND_TASK,
+    )
+    return BackgroundTaskStatus(projection.value)

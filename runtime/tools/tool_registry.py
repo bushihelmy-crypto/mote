@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from mote.runtime.tools.definition_compiler import compile_tool_catalog_identity, compile_tool_definition
 from mote.runtime.tools.definitions import native_definition, xml_definition
 from mote.runtime.tools.provider import NativeToolset, XmlToolset
 
@@ -53,8 +53,15 @@ class ToolCatalog:
                     raise ValueError(f"tool dispatch name '{dispatch_name}' belongs to both '{owner}' and '{name}'")
                 owners[dispatch_name] = name
         ordered = tuple(unique[name] for name in sorted(unique))
-        identity = "\n".join(_tool_type_identity(tool_type) for tool_type in ordered)
-        version = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        compiled = tuple(
+            compile_tool_definition(
+                definition := native_definition(tool_type),
+                object.__new__(tool_type),
+                approval_identity="none",
+            )
+            for tool_type in ordered
+        )
+        version = compile_tool_catalog_identity(compiled)
         return cls(version=version, _types=ordered)
 
     def get(self, name: str) -> type | None:
@@ -75,21 +82,6 @@ class ToolCatalog:
                 raise ValueError(f"tool name '{name}' already belongs to '{existing.__name__}'")
             merged[name] = tool_type
         return type(self).from_types(merged.values())
-
-
-def _tool_type_identity(tool_type: type) -> str:
-    try:
-        source = inspect.getsource(tool_type)
-    except (OSError, TypeError):
-        source = ""
-    source_digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
-    return ":".join(
-        (
-            getattr(tool_type, "name", "") or tool_type.__name__,
-            str(getattr(tool_type, "definition_version", "1")),
-            source_digest,
-        )
-    )
 
 
 def _included_types(catalog: ToolCatalog, include: frozenset[str] | None) -> tuple[type, ...]:

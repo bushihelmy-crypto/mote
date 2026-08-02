@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TypeVar
 
+from mote.contracts.ports.agent.composition import RoutingStrategyFactory
 from mote.kernel.execution import ExecutionEngine
 from mote.kernel.inference.base import BaseInferenceEngine
 from mote.kernel.inference.engine import InferenceEngine
@@ -26,8 +28,9 @@ from mote.runtime.agent.component_keys import (
     TURN_CONTEXT_BUS,
 )
 from mote.runtime.agent.components.context_provider import ContextProvider
-from mote.runtime.durable import InferenceJournal, make_durable_backend
+from mote.runtime.durable import InferenceJournal, JsonlBackend
 from mote.runtime.durable.inference_checkpoint import InferenceCheckpoint
+from mote.runtime.events.context import observe_event_sync
 from mote.runtime.models.gateway import LLMRouter
 from mote.runtime.models.inference_port import RuntimeModelInferencePort
 from mote.runtime.models.output_snapshots import bind_output_snapshot_accumulator
@@ -43,12 +46,19 @@ from mote.runtime.tools.snapshots import RuntimeToolSnapshotManager
 OutputT = TypeVar("OutputT")
 
 
+@dataclass(frozen=True, slots=True)
+class CognitionComponentInputs:
+    routing_strategy_factory: RoutingStrategyFactory | None = None
+
+
 def cognition_component_specs(
     execution_engine_factory_key: ComponentKey[Callable[[], ExecutionEngine[OutputT]]],
+    *,
+    inputs: CognitionComponentInputs = CognitionComponentInputs(),
 ) -> list[ComponentSpec]:
     """Return the complete, uniquely owned cognition graph fragment."""
     return [
-        ComponentSpec(ROUTER, _build_router),
+        ComponentSpec(ROUTER, lambda ctx: _build_router(ctx, inputs.routing_strategy_factory)),
         ComponentSpec(
             INFERENCE_PORT,
             lambda ctx: RuntimeModelInferencePort(router=ctx.dep(ROUTER), role=ctx.role),
@@ -71,7 +81,7 @@ def cognition_component_specs(
     ]
 
 
-def _build_router(ctx) -> LLMRouter:
+def _build_router(ctx, routing_strategy_factory: RoutingStrategyFactory | None) -> LLMRouter:
     role = ctx.role
     model_gateway = role._components.current_runtime_composition().gateway
     agent_config = (
@@ -87,13 +97,11 @@ def _build_router(ctx) -> LLMRouter:
             raise RuntimeError(f"semantic routing default route {agent_config.default_route!r} is unavailable")
         fallback = DeterministicRoutingPolicy(catalog.default_route_id)
         if agent_config.strategy == "squilla":
-            builder = role.wiring.dependencies.routing_strategy_builders.get("squilla")
-            if builder is None:
+            built = routing_strategy_factory.build("squilla") if routing_strategy_factory is not None else None
+            if built is None:
                 raise RuntimeError(
-                    "routing strategy 'squilla' is Product-owned and must be injected "
-                    "through routing_strategy_builders"
+                    "routing strategy 'squilla' is Product-owned and must be injected " "through RoutingStrategyFactory"
                 )
-            built = builder()
             policy = ClassMappedRoutingPolicy(built, dict(catalog.class_routes))
         else:
             policy = fallback
@@ -128,8 +136,8 @@ def _build_flow_engine(ctx: BuildContext, inference_engine: BaseInferenceEngine)
     executor = ctx.dep(EXECUTOR)
     lease = role._components.current_output_lease()
     durable_runner = None
-    if executor.durable_config.enabled and executor.journal is not None:
-        durable_runner = InferenceJournal(make_durable_backend(executor.durable_config, executor.journal))
+    if executor.durable_config.enabled and executor.durable_config.backend == "jsonl" and executor.journal is not None:
+        durable_runner = InferenceJournal(JsonlBackend(executor.journal))
     checkpoint = InferenceCheckpoint(
         journal_runner=durable_runner,
         memory=ctx.dep(CONTEXT_MANAGER),
@@ -178,6 +186,7 @@ def _build_default_think_engine(ctx: BuildContext) -> BaseInferenceEngine:
         config=ctx.role.config,
         inference_port=ctx.dep(INFERENCE_PORT),
         snapshot_scope=bind_output_snapshot_accumulator,
+        output_observer=observe_event_sync,
         reporter_factory=ThoughtReporter,
     )
 
@@ -211,7 +220,6 @@ def _build_think_subsystems_factory(ctx) -> Callable[[], InferenceSubsystems]:
             model_name=role.default_model_name or "",
             response_language=response_language,
             executor=ctx.dep(EXECUTOR),
-            skill_manager=ctx.dep(SKILL_MANAGER),
             turn_context_bus=ctx.dep(TURN_CONTEXT_BUS),
             command_channel=ctx.dep(COMMAND_CHANNEL),
         )

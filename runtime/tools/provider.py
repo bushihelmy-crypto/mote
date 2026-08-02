@@ -216,10 +216,14 @@ class Toolset(DefinitionSource[DefinitionT], Generic[DefinitionT, AgentDepsT]):
         if self._approval_mutating_only and not bool(getattr(definition.capability_type, "mutates_filesystem", False)):
             return None
         context = self._bound_context
+        policy_identity = (
+            f"mote.toolset-approval/v1:{self.identity.id}:{self.identity.version}:"
+            f"mutating-only={str(self._approval_mutating_only).lower()}"
+        )
         if context is None:
-            return BoundApprovalPolicy(lambda _arguments: True)
+            return BoundApprovalPolicy(policy_identity, lambda _arguments: True)
         policy = self._approval_policy
-        return BoundApprovalPolicy(lambda arguments: policy(context, definition, arguments))
+        return BoundApprovalPolicy(policy_identity, lambda arguments: policy(context, definition, arguments))
 
     def approval_applies(self, definition: ToolDefinition) -> bool:
         return self._approval_policy is not None and (

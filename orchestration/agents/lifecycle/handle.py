@@ -22,10 +22,18 @@ so an EPHEMERAL child can never leak its cap slot.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Generic, Optional, TypeVar
+from types import TracebackType
+from typing import Generic, Optional, TypeVar
 
+from mote.contracts.agent import RunnableAgent
 from mote.contracts.conversation import Message
 from mote.contracts.output import RunOutcome
+from mote.contracts.ports.agent.control import (
+    ChildReleaseDisposition,
+    ChildReleaseError,
+    ChildReleasePort,
+    ResidencyReservationPort,
+)
 from mote.orchestration.agents.identity.path import AgentPath
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime, AgentStatus, is_final
 from mote.runtime.telemetry.logging import logger
@@ -40,10 +48,10 @@ class ChildAgentHandle(Generic[OutputT]):
         self,
         runtime: AgentRuntime[OutputT],
         *,
-        control: Any,
+        control: ChildReleasePort,
         agent_id: str,
         agent_path: Optional[AgentPath] = None,
-        residency_slot: Optional[Any] = None,
+        residency_slot: ResidencyReservationPort | None = None,
         poll_interval: float = 0.01,
         timeout_seconds: Optional[float] = None,
     ):
@@ -70,6 +78,11 @@ class ChildAgentHandle(Generic[OutputT]):
     @property
     def runtime(self) -> AgentRuntime[OutputT]:
         return self._runtime
+
+    @property
+    def agent(self) -> RunnableAgent[OutputT]:
+        """Contracts-owned execution view; orchestration runtime stays private."""
+        return self._runtime.role
 
     @property
     def session_id(self) -> str:
@@ -128,23 +141,16 @@ class ChildAgentHandle(Generic[OutputT]):
         """Release the cap slot and clean up the child role. Idempotent."""
         if self._closed:
             return
-        self._closed = True
-        # Free the live-incarnation slot first (idempotent; no-op once committed
-        # or rolled back) so the cap frees even on the exception path.
-        if self._residency_slot is not None:
-            try:
+        receipt = await asyncio.shield(self._control.release_child(self._agent_id))
+        if receipt.disposition in {
+            ChildReleaseDisposition.SETTLED,
+            ChildReleaseDisposition.ALREADY_TERMINAL,
+        }:
+            if self._residency_slot is not None:
                 self._residency_slot.rollback()
-            except Exception as exc:  # noqa: BLE001 — slot release is best-effort
-                logger.warning(f"ChildAgentHandle: slot release of {self._agent_id} failed: {exc}")
-        # Release the registry slot next so the cap frees even if cleanup hangs.
-        try:
-            self._control.release_child(self._agent_id)
-        except Exception as exc:  # noqa: BLE001 — release is best-effort
-            logger.warning(f"ChildAgentHandle: release of {self._agent_id} failed: {exc}")
-        try:
-            await self._runtime.role.cleanup()
-        except Exception as exc:  # noqa: BLE001 — teardown is best-effort
-            logger.warning(f"ChildAgentHandle: cleanup of {self._agent_id} failed: {exc}")
+            self._closed = True
+            return
+        raise ChildReleaseError(receipt)
 
     async def __aenter__(self) -> "ChildAgentHandle[OutputT]":
         return self
@@ -153,7 +159,7 @@ class ChildAgentHandle(Generic[OutputT]):
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
-        traceback: object | None,
+        traceback: TracebackType | None,
     ) -> bool:
         await self.aclose()
         return False

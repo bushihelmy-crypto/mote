@@ -8,6 +8,7 @@ user prompt assembly (placeholder substitution + cache-boundary removal +
 memory/reminder injection), each ``_make_*`` section builder, and the full
 collect_context() integration through the duck-typed fakes in conftest.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -298,11 +299,12 @@ class TestMakeEnvSection:
 # --------------------------------------------------------------------------
 class TestCollectContext:
     def _subsystems(self, **overrides):
+        config = overrides.get("config", make_config())
         return InferenceSubsystems(
-            config=overrides.get("config", make_config()),
+            config=config,
             model_name=overrides.get("model_name", "test-model"),
+            response_language=overrides.get("response_language", config.models.response_language),
             executor=overrides.get("executor", FakeExecutor()),
-            skill_manager=overrides.get("skill_manager", FakeSkillManager()),
             command_channel=overrides.get("command_channel"),
         )
 

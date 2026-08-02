@@ -6,11 +6,19 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from mote.contracts.artifact import ArtifactRef
-from mote.contracts.tool.result import FileChange, ToolMedia
-from mote.runtime.errors import ErrorReport
+from mote.contracts.async_work.submission import AsyncWorkSubmissionReceipt
+from mote.contracts.foundation.errors.report import ErrorReport
+from mote.contracts.tool.result import (
+    ArtifactToolPayload,
+    FileChange,
+    InlineBinaryToolPayload,
+    JsonToolPayload,
+    ToolMedia,
+    ToolPayload,
+)
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ToolResult:
     """Structured result from a tool execution.
 
@@ -19,7 +27,9 @@ class ToolResult:
             result carries media, this is the textual summary/placeholder that
             goes into the tool_result message (e.g. "Read image (42KB)").
         success: Whether the tool execution succeeded.
-        data: Optional raw structured data for hooks/downstream consumers.
+        payload: Optional canonical durable value for replay/downstream consumers.
+        execution_value: Process-local execution/control value. It is never
+            serialized into a durable receipt.
         media: Structured media artifacts this tool produced, each a
             ``ToolMedia(artifact, kind, ref, mime)``. The single
             authoritative field for media — the producer stamps local ``ref``
@@ -47,9 +57,7 @@ class ToolResult:
             signal, ending via the same kill switch the End tool uses.
         retention: Optional lifecycle hint for *this* result, set by the tool
             (the model-facing counterpart to the static ``reconstructable``
-            ClassVar). One of the ``RETENTION_*`` values in
-            ``common.const.message`` (e.g. "erasable" / "pin"), or ``None`` for
-            default. The executor carries it verbatim onto the tool_result
+            ClassVar), or ``None`` for the default. The executor carries it onto the tool_result
             message's metadata; the compaction layer is the sole interpreter.
             This is pure plumbing here — the field only exists so a tool can
             express intent; how a tool populates it is the tool's concern.
@@ -65,14 +73,40 @@ class ToolResult:
 
     output: str
     success: bool = True
-    data: Any = field(default=None, repr=False)
-    media: list[ToolMedia] = field(default_factory=list)
-    artifacts: list[ArtifactRef] = field(default_factory=list)
-    file_changes: list[FileChange] = field(default_factory=list)
+    payload: ToolPayload | None = field(default=None, repr=False)
+    execution_value: object | None = field(default=None, repr=False)
+    async_work_submission: AsyncWorkSubmissionReceipt | None = None
+    media: tuple[ToolMedia, ...] = field(default_factory=tuple)
+    artifacts: tuple[ArtifactRef, ...] = field(default_factory=tuple)
+    file_changes: tuple[FileChange, ...] = field(default_factory=tuple)
     error: Optional[ErrorReport] = None
     terminate: bool = False
     retention: Optional[str] = None
     resource_path: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if type(self.output) is not str:
+            raise ValueError("tool result output must be a string")
+        if type(self.success) is not bool or type(self.terminate) is not bool:
+            raise ValueError("tool result flags must be booleans")
+        if self.payload is not None and not isinstance(
+            self.payload,
+            (JsonToolPayload, InlineBinaryToolPayload, ArtifactToolPayload),
+        ):
+            raise ValueError("tool result payload is not a canonical durable variant")
+        for name in ("retention", "resource_path"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not str or not value):
+                raise ValueError(f"tool result {name} must be a non-empty string or null")
+        object.__setattr__(self, "media", tuple(self.media))
+        object.__setattr__(self, "artifacts", tuple(self.artifacts))
+        object.__setattr__(self, "file_changes", tuple(self.file_changes))
+        if any(not isinstance(item, ToolMedia) for item in self.media):
+            raise ValueError("tool result media contains an invalid item")
+        if any(not isinstance(item, ArtifactRef) for item in self.artifacts):
+            raise ValueError("tool result artifacts contains an invalid item")
+        if any(not isinstance(item, FileChange) for item in self.file_changes):
+            raise ValueError("tool result file_changes contains an invalid item")
 
     @classmethod
     def from_tool_return(cls, raw: Any) -> "ToolResult":

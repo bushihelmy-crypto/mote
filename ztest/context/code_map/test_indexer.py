@@ -102,7 +102,7 @@ def test_refresh_updates_only_changed_file(tmp_path):
         # a.py stops importing b, starts importing os.
         apath = _write(tmp_path, "a.py", "import os\n")
         idx.refresh([apath])
-        assert idx.importers(["b"]) == []
+        assert idx.importers(["b"]) == ()
         assert set(idx.importers(["os"])) == {apath}
     finally:
         idx.close()
@@ -117,7 +117,7 @@ def test_refresh_deletes_vanished_file(tmp_path):
         assert set(idx.importers(["b"])) == {apath}
         os.remove(apath)
         idx.refresh([apath])
-        assert idx.importers(["b"]) == []
+        assert idx.importers(["b"]) == ()
     finally:
         idx.close()
 
@@ -239,7 +239,7 @@ def test_symbols_in_best_effort_on_store_error(tmp_path):
                 pass
 
         idx._map._store = _Boom()  # type: ignore[assignment]
-        assert idx.symbols_in("whatever.py") == []
+        assert idx.symbols_in("whatever.py") == ()
     finally:
         idx.close()
 
@@ -271,7 +271,7 @@ def test_module_summary_of_best_effort_on_store_error(tmp_path):
                 pass
 
         idx._map._store = _Boom()  # type: ignore[assignment]
-        assert idx.module_summary_of("whatever.py") == ""
+        assert idx.module_summary_of("whatever.py") is None
     finally:
         idx.close()
 
@@ -287,7 +287,7 @@ def test_references_to_finds_cross_file_and_intra_file(tmp_path):
     try:
         idx.scan_all()
         refs = idx.references_to(os.path.abspath(other), "thing")
-        paths = {p for p, _ in refs}
+        paths = {reference.path for reference in refs}
         assert os.path.abspath(other) in paths  # intra-file run() -> thing()
         assert os.path.abspath(consumer) in paths  # cross-file import site
     finally:
@@ -306,7 +306,7 @@ def test_references_to_best_effort_on_store_error(tmp_path):
                 pass
 
         idx._map = _Boom()  # type: ignore[assignment]
-        assert idx.references_to("whatever.py", "thing") == []
+        assert idx.references_to("whatever.py", "thing") == ()
     finally:
         pass
 

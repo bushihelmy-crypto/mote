@@ -21,6 +21,8 @@ from mote.contracts.model.failover import (
     Retryability,
 )
 from mote.contracts.service import (
+    MediaGenerationPayload,
+    MediaGenerationResult,
     ServiceAcceptance,
     ServiceAccepted,
     ServiceCompleted,
@@ -32,14 +34,24 @@ from mote.contracts.service import (
     ServiceReceipt,
     ServiceResponse,
 )
-from mote.product.config.multimodal import MultimodalConfig
+from mote.product.config.multimodal import MultimodalConfig, VideoGenerationConfig
 from mote.product.media_generation.errors import MediaGenerationError
-from mote.product.media_generation.registry import MediaProvider, MediaProviderRegistry
+from mote.product.media_generation.registry import MediaKind, MediaProvider, MediaProviderConfig, MediaProviderRegistry
 from mote.runtime.resilience.admission import AdmissionRejectedError
 from mote.runtime.resilience.failover.classification import classify_failure
 from mote.runtime.service_gateway.snapshot import ServiceFailoverGroup, ServiceRuntimeSnapshot
 
-_KINDS = ("image", "audio", "music", "video")
+_KINDS: tuple[MediaKind, ...] = ("image", "audio", "music", "video")
+
+
+def _config_for_kind(multimodal: MultimodalConfig, kind: MediaKind) -> MediaProviderConfig:
+    if kind == "image":
+        return multimodal.image_generation
+    if kind == "audio":
+        return multimodal.audio_generation
+    if kind == "music":
+        return multimodal.music_generation
+    return multimodal.video_generation
 
 
 class MediaServiceEndpointAdapter:
@@ -78,8 +90,8 @@ class MediaServiceEndpointAdapter:
             receipt=ServiceReceipt(
                 provider_operation_id=operation_id,
                 state={
-                    "filename": str(item.get("filename") or _default_filename(self._provider.kind)),
-                    "item": item,
+                    "filename": item.filename or _default_filename(self._provider.kind),
+                    "item": item.model_dump(mode="json", exclude_none=True),
                 },
                 poll_after_seconds=3.0,
             )
@@ -96,7 +108,7 @@ class MediaServiceEndpointAdapter:
         try:
             completed = await self._provider.poll_once(
                 receipt.provider_operation_id,
-                state,
+                str(state.get("filename") or ""),
                 timeout_seconds=timeout_seconds,
             )
         except MediaGenerationError as exc:
@@ -137,8 +149,8 @@ class MediaServiceEndpointAdapter:
             receipt=ServiceReceipt(
                 provider_operation_id=operation_id,
                 state={
-                    "filename": str(item.get("filename") or _default_filename(self._provider.kind)),
-                    "item": item,
+                    "filename": item.filename or _default_filename(self._provider.kind),
+                    "item": item.model_dump(mode="json", exclude_none=True),
                 },
                 poll_after_seconds=3.0,
             )
@@ -203,7 +215,7 @@ class MediaServiceEndpointResolver:
         if not endpoint.capability.startswith("media.generate."):
             return None
         kind = _kind_for_capability(endpoint.capability)
-        config = getattr(self._multimodal, f"{kind}_generation")
+        config = _config_for_kind(self._multimodal, kind)
         expected_slot = _credential_slot_id(kind, str(config.api_key))
         if credential_slot_id != expected_slot:
             return None
@@ -228,7 +240,7 @@ def build_media_service_snapshot(
     credential_slots: list[tuple[str, tuple[str, ...]]] = []
     revisions: list[str] = []
     for kind in _KINDS:
-        config = getattr(multimodal, f"{kind}_generation")
+        config = _config_for_kind(multimodal, kind)
         if not config.base_url or not config.api_key:
             continue
         provider = str(config.provider or "openai")
@@ -274,33 +286,44 @@ def build_media_service_snapshot(
     )
 
 
-def _invocation_item(invocation: ServiceInvocation) -> dict[str, Any]:
-    item = invocation.payload.get("item")
-    if not isinstance(item, dict):
-        raise ValueError("media service invocation requires an object payload.item")
-    return cast(dict[str, Any], dict(item))
+def _invocation_item(invocation: ServiceInvocation):
+    payload = invocation.payload
+    if not isinstance(payload, MediaGenerationPayload):
+        raise ValueError("media endpoint requires a MediaGenerationPayload")
+    if f"media.generate.{payload.media_kind.value}" != invocation.capability:
+        raise ValueError("media payload kind does not match endpoint capability")
+    return payload.item
 
 
-def _kind_for_capability(capability: str) -> str:
+def _kind_for_capability(capability: str) -> MediaKind:
     prefix = "media.generate."
     if not capability.startswith(prefix):
         raise ValueError(f"unsupported media capability {capability!r}")
     kind = capability.removeprefix(prefix)
-    if kind not in _KINDS:
-        raise ValueError(f"unsupported media kind {kind!r}")
-    return kind
+    if kind == "image":
+        return "image"
+    if kind == "audio":
+        return "audio"
+    if kind == "music":
+        return "music"
+    if kind == "video":
+        return "video"
+    raise ValueError(f"unsupported media kind {kind!r}")
 
 
-def _credential_slot_id(kind: str, api_key: str) -> str:
+def _credential_slot_id(kind: MediaKind, api_key: str) -> str:
     return f"media.{kind}.credential.{_fingerprint(api_key)}"
 
 
-def _config_revision(kind: str, config: Any) -> str:
-    models = (
-        str(getattr(config, "model", "")),
-        str(getattr(config, "text_to_video_model", "")),
-        str(getattr(config, "reference_guided_video_model", "")),
-    )
+def _config_revision(kind: MediaKind, config: MediaProviderConfig) -> str:
+    if kind == "video":
+        if not isinstance(config, VideoGenerationConfig):
+            raise ValueError("video media kind requires VideoGenerationConfig")
+        models = ("", config.text_to_video_model, config.reference_guided_video_model)
+    else:
+        if isinstance(config, VideoGenerationConfig):
+            raise ValueError(f"{kind} media kind cannot use VideoGenerationConfig")
+        models = (config.model, "", "")
     return _fingerprint("\0".join((kind, str(config.provider), str(config.base_url), *models)))
 
 
@@ -308,7 +331,7 @@ def _fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
 
 
-def _default_filename(kind: str) -> str:
+def _default_filename(kind: MediaKind) -> str:
     return {
         "image": "image.png",
         "audio": "audio.mp3",
@@ -396,9 +419,7 @@ def _failure(
         credential_verdict=(
             CredentialVerdict.QUARANTINE
             if reason is FailureReason.AUTH_REJECTED
-            else CredentialVerdict.REVOKE
-            if reason is FailureReason.BILLING_EXHAUSTED
-            else CredentialVerdict.NEUTRAL
+            else CredentialVerdict.REVOKE if reason is FailureReason.BILLING_EXHAUSTED else CredentialVerdict.NEUTRAL
         ),
         quota_observation=(
             QuotaObservation.RETRY_AFTER if reason is FailureReason.RATE_LIMITED else QuotaObservation.NONE
@@ -406,13 +427,19 @@ def _failure(
         http_compatibility_class=(
             HttpCompatibilityClass.AUTHENTICATION
             if status == 401
-            else HttpCompatibilityClass.PERMISSION
-            if status == 403
-            else HttpCompatibilityClass.QUOTA
-            if status == 429
-            else HttpCompatibilityClass.UNAVAILABLE
-            if isinstance(status, int) and status >= 500
-            else HttpCompatibilityClass.INTERNAL
+            else (
+                HttpCompatibilityClass.PERMISSION
+                if status == 403
+                else (
+                    HttpCompatibilityClass.QUOTA
+                    if status == 429
+                    else (
+                        HttpCompatibilityClass.UNAVAILABLE
+                        if isinstance(status, int) and status >= 500
+                        else HttpCompatibilityClass.INTERNAL
+                    )
+                )
+            )
         ),
     )
 

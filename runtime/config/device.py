@@ -7,17 +7,18 @@ capability. The first backend is Android over adb, so the fields describe how to
 reach an adb device; ``backend`` selects the concrete backend (``auto`` picks
 the only real one — Android — when adb is reachable, else a null backend).
 """
+
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from mote.contracts.config.base import ConfigModel
 
 
-class DeviceConfig(BaseModel):
+class DeviceConfig(ConfigModel):
     """Settings for the DeviceUse tool's pluggable device backend."""
-
-    model_config = ConfigDict(extra="forbid")
 
     # Which backend drives the "device". ``auto`` (default) selects the Android
     # adb backend when adb is available, else a null (no-device) backend. Set

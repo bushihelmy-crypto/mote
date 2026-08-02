@@ -11,7 +11,7 @@ from mote.contracts.file.identity import FileSnapshot
 from mote.contracts.file.views import ByteViewMode, FileByteView, ReadCursorKind, ReadViewStatus
 from mote.runtime.fileops.capture import ManagedSnapshotCapture
 from mote.runtime.fileops.identity import path_token
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, FileMutationArtifactRepository
 from mote.runtime.fileops.read_cursors import OpenReadCursor, ReadCursorStore
 
 _DEFAULT_RAW_BYTES = 4 * 1_024
@@ -26,7 +26,7 @@ class ByteViewService:
     def __init__(
         self,
         *,
-        artifacts: ArtifactRepository,
+        artifacts: FileMutationArtifactRepository,
         capture: ManagedSnapshotCapture,
         cursors: ReadCursorStore,
     ) -> None:

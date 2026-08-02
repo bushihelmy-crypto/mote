@@ -13,7 +13,9 @@ from mote.contracts.ports.events.subscription import (
 )
 from mote.runtime.events import EventFabric, SubscriptionBinding, SubscriptionManifest
 from mote.runtime.events.backends import SQLiteSubscriptionStateStore
-from mote.runtime.projections.session import (
+from mote.runtime.session.events import ContextCompactedFact, MessageEvent, RoutingDecisionFact, SessionMetaEvent
+from mote.runtime.session.log import SessionLog
+from mote.runtime.session.projection import (
     SESSION_PROJECTION_SUBSCRIPTION,
     ContextCompactionSourceError,
     SessionLiveProjection,
@@ -21,14 +23,18 @@ from mote.runtime.projections.session import (
     SessionProjectionState,
     reduce_session_envelope,
 )
-from mote.runtime.session.events import ContextCompactedFact, MessageEvent, RoutingDecisionFact, SessionMetaEvent
-from mote.runtime.session.log import SessionLog
 from mote.runtime.session.replay import replay
 
 
 def _log(tmp_path) -> SessionLog:
     log = SessionLog("projection", base_dir=str(tmp_path))
-    log.commit_offline(SessionMetaEvent(session_id="projection"))
+    log.commit_offline(
+        SessionMetaEvent(
+            session_id="projection",
+            role_class="test.session-projection/v1",
+            toolset_manifest=(),
+        )
+    )
     return log
 
 
@@ -100,7 +106,7 @@ def test_replay_restores_latest_routing_state(tmp_path) -> None:
                 "recent_decisions": [
                     {
                         "decision_id": "decision-1",
-                        "selected_route_id": "strong",
+                        "selected_route_id": {"kind": "semantic", "name": "strong"},
                         "final_class": "R3",
                         "turn_id": 2,
                     }
@@ -186,7 +192,13 @@ async def test_live_projection_restores_then_reduces_new_commits(tmp_path) -> No
 async def test_live_projection_rejects_another_session_stream(tmp_path) -> None:
     source = _log(tmp_path / "source")
     other = SessionLog("other", base_dir=str(tmp_path / "other"))
-    other.commit_offline(SessionMetaEvent(session_id="other"))
+    other.commit_offline(
+        SessionMetaEvent(
+            session_id="other",
+            role_class="test.session-projection/v1",
+            toolset_manifest=(),
+        )
+    )
     projection = SessionLiveProjection(source.stream_id)
 
     with pytest.raises(ValueError, match="another stream"):

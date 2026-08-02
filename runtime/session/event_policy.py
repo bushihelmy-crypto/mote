@@ -1,50 +1,14 @@
 """Session-owned policy for observation facts eligible for rollout persistence."""
+
 from __future__ import annotations
 
-from typing import TypeAlias
+from typing import get_args
 
-from mote.contracts.events.conversation import (
-    ContextCompactedEvent,
-    HistoryEditedEvent,
-    MessageAppendedEvent,
-    PromptRejectedEvent,
-)
-from mote.contracts.events.model import ModelCallFinishedEvent, RoutingDecisionEvent
-from mote.contracts.events.output import (
-    OutputAcceptedEvent,
-    OutputCandidateReceivedEvent,
-    OutputCommitStartedEvent,
-    OutputCommittedEvent,
-    OutputMigratedEvent,
-    OutputPublicationQueuedEvent,
-    OutputPublishedEvent,
-    OutputValidationRejectedEvent,
-)
-from mote.contracts.events.session import TurnEndEvent
-
-EventType: TypeAlias = type[object]
+from mote.contracts.ports.session.facts import RolloutSourceEvent
 
 # Persistence is a session policy, orthogonal to whether CLI/logging/telemetry
 # also consume the same fact.
-ROLLOUT_EVENT_TYPES: frozenset[EventType] = frozenset(
-    {
-        MessageAppendedEvent,
-        ModelCallFinishedEvent,
-        ContextCompactedEvent,
-        HistoryEditedEvent,
-        OutputCandidateReceivedEvent,
-        OutputValidationRejectedEvent,
-        OutputAcceptedEvent,
-        OutputCommitStartedEvent,
-        OutputMigratedEvent,
-        OutputCommittedEvent,
-        OutputPublicationQueuedEvent,
-        OutputPublishedEvent,
-        PromptRejectedEvent,
-        RoutingDecisionEvent,
-        TurnEndEvent,
-    }
-)
+ROLLOUT_EVENT_TYPES: frozenset[type[RolloutSourceEvent]] = frozenset(get_args(RolloutSourceEvent))
 
 
 def is_rollout_event(event: object) -> bool:

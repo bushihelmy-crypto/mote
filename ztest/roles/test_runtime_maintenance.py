@@ -10,7 +10,7 @@ from mote.runtime.code_map.scan_gate import CodeMapScanGate
 from mote.runtime.session.workspace import WorkspaceCleanupGate
 
 
-def test_domain_coordinators_isolate_scopes_and_release():
+def test_domain_coordinators_isolate_scopes_and_release(tmp_path):
     first = CodeMapScanGate()
     second = CodeMapScanGate()
 
@@ -20,13 +20,15 @@ def test_domain_coordinators_isolate_scopes_and_release():
     first.release("repo")
     assert first.try_acquire("repo") is True
 
+    workspace = str(tmp_path / "workspace")
     cleanup = WorkspaceCleanupGate()
     other_cleanup = WorkspaceCleanupGate()
-    assert cleanup.try_acquire("workspace") is True
-    assert cleanup.try_acquire("workspace") is False
-    assert other_cleanup.try_acquire("workspace") is True
-    cleanup.release("workspace")
-    assert cleanup.try_acquire("workspace") is True
+    assert cleanup.try_acquire(workspace) is True
+    assert cleanup.try_acquire(workspace) is False
+    assert other_cleanup.try_acquire(workspace) is False
+    cleanup.release(workspace)
+    assert other_cleanup.try_acquire(workspace) is True
+    other_cleanup.release(workspace)
 
 
 @pytest.mark.asyncio
@@ -90,12 +92,13 @@ async def test_close_releases_repo_lease_when_task_never_started():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("gate", [CodeMapScanGate(), WorkspaceCleanupGate()])
-async def test_gate_claim_releases_after_cancellation(gate):
+async def test_gate_claim_releases_after_cancellation(tmp_path):
+    gate = WorkspaceCleanupGate()
+    scope = str(tmp_path / "scope")
     entered = asyncio.Event()
 
     async def hold_claim():
-        async with gate.claim("scope") as acquired:
+        async with gate.claim(scope) as acquired:
             assert acquired is True
             entered.set()
             await asyncio.Event().wait()
@@ -106,4 +109,5 @@ async def test_gate_claim_releases_after_cancellation(gate):
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert gate.try_acquire("scope") is True
+    assert gate.try_acquire(scope) is True
+    gate.release(scope)

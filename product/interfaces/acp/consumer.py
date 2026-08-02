@@ -22,12 +22,14 @@ must pass deltas through untouched rather than buffering into completed blocks.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional
+from collections.abc import Iterable, Mapping
+from typing import Optional
 
 from mote.product.interfaces.acp import wire as acp
 from mote.product.presentation.consumer import Sink, SinkConsumer
 from mote.product.presentation.events import Capabilities
 from mote.product.presentation.events.events import ViewEvent
+from mote.product.presentation.wire_types import WireMapping
 
 # An editor client: streams tokens, renders markdown, gates tool calls via the
 # permission request. ``images`` off — ACP image content needs inline base64 we
@@ -63,11 +65,11 @@ class AcpConsumer(SinkConsumer):
     def wire_state(self) -> acp.AcpWireState:
         return self._state
 
-    def _fold(self, ev: ViewEvent) -> Iterable[Dict[str, Any]]:
+    def _fold(self, ev: ViewEvent) -> Iterable[WireMapping]:
         return acp.to_acp_updates(ev, self._state)
 
 
-def build_acp_consumer(config: Any = None) -> AcpConsumer:
+def build_acp_consumer(config: object = None) -> AcpConsumer:
     """Registry builder — a bare consumer (server rebinds session/sink per connection).
 
     ``build_consumers`` constructs one at app-wire time with a placeholder id; the

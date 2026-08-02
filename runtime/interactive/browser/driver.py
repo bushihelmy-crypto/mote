@@ -1,4 +1,5 @@
 """Managed Runtime adapter for the persistent Playwright browser session."""
+
 from __future__ import annotations
 
 import base64
@@ -6,6 +7,8 @@ import json
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from mote.contracts.browser import BrowserProfileSnapshot
+from mote.contracts.events.envelope import thaw_json
 from mote.contracts.interaction.handoff import (
     DriverHandoffHandle,
     DriverHandoffResult,
@@ -22,7 +25,7 @@ from mote.contracts.runtime import (
 )
 from mote.contracts.surface import SurfaceDescriptor, SurfaceFrame, SurfaceInput, SurfacePresentationMode
 from mote.runtime.interactive.browser.session import BrowserSession
-from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
+from mote.runtime.interactive.checkpoint_codec import BROWSER_CHECKPOINT_CODEC, BrowserCheckpointState
 from mote.runtime.interactive.observation import SurfaceObservationHub
 
 
@@ -49,6 +52,7 @@ class BrowserRuntimeDriver:
         client_certs: Optional[List[Dict[str, Any]]] = None,
         storage_state: dict[str, Any] | None = None,
         persist_storage_state: bool = True,
+        profile_snapshot: BrowserProfileSnapshot | None = None,
     ) -> None:
         self._session_kwargs = {
             "session_key": session_key,
@@ -62,6 +66,7 @@ class BrowserRuntimeDriver:
         }
         self._storage_state = storage_state
         self._persist_storage_state = persist_storage_state
+        self.profile_snapshot = profile_snapshot
         self._session: BrowserSession | None = None
         self._handoff_id: str | None = None
         self._surface_sequence = 0
@@ -82,22 +87,20 @@ class BrowserRuntimeDriver:
             raise RuntimeError("browser runtime is already started")
         restore = None
         if checkpoint is not None:
-            payload = decode_inline_json(checkpoint, codec="browser-state+json@1")
-            if not isinstance(payload, dict):
-                raise ValueError("browser checkpoint payload must be an object")
-            restore = payload
+            restore = BROWSER_CHECKPOINT_CODEC.decode(checkpoint)
         storage_state = self._storage_state
         if storage_state is None and restore is not None:
-            candidate = restore.get("storage_state")
-            storage_state = candidate if isinstance(candidate, dict) else None
+            candidate = restore.storage_state
+            thawed = thaw_json(candidate) if candidate is not None else None
+            storage_state = thawed if isinstance(thawed, dict) else None
         session = BrowserSession(**self._session_kwargs)
         self._session = session
         try:
             await session.start(storage_state=storage_state)
             if restore is not None:
                 await session.restore_state(
-                    restore.get("urls", []),
-                    restore.get("active", 0),
+                    list(restore.urls),
+                    restore.active,
                     storage_state,
                 )
         except BaseException:
@@ -114,13 +117,12 @@ class BrowserRuntimeDriver:
         if state is None:
             raise RuntimeError("browser logical state is unavailable")
         urls, active, storage_state = state
-        return encode_inline_json(
-            {
-                "urls": urls,
-                "active": active,
-                "storage_state": (storage_state if self._persist_storage_state else None),
-            },
-            codec="browser-state+json@1",
+        return BROWSER_CHECKPOINT_CODEC.encode(
+            BrowserCheckpointState(
+                tuple(urls),
+                active,
+                storage_state if self._persist_storage_state else None,
+            ),
             fidelity=CheckpointFidelity.LOGICAL,
             sensitivity="secret",
         )

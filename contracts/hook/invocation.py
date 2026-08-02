@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import TypeAlias
 
 from mote.contracts.authorization import PermissionMode
+from mote.contracts.file.identity import FileChangeAttribution, FileChangeKind, FileVersion
+from mote.contracts.tool.identity import ToolInvocationIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,19 +17,19 @@ class HookIdentity:
 
 @dataclass(frozen=True, slots=True)
 class PreToolUsePayload:
+    identity: ToolInvocationIdentity
     tool_name: str = ""
     tool_input: dict = field(default_factory=dict)
-    tool_use_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class PostToolUsePayload:
+    identity: ToolInvocationIdentity
     tool_name: str = ""
     tool_input: dict = field(default_factory=dict)
     tool_response: str = ""
     success: bool = False
     error: dict | None = None
-    tool_use_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,11 +55,11 @@ class CompactPayload:
 
 @dataclass(frozen=True, slots=True)
 class FileChangedPayload:
-    path: str = ""
-    change_type: str = ""
-    prior_version: object = None
-    version: object = None
-    attribution: object = None
+    path: str
+    change_type: FileChangeKind
+    prior_version: FileVersion
+    version: FileVersion
+    attribution: FileChangeAttribution
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,4 +123,22 @@ HookInvocation: TypeAlias = (
 )
 
 
-__all__ = [name for name in globals() if name.endswith(("Invocation", "Payload"))] + ["HookIdentity"]
+__all__ = [
+    "CompactPayload",
+    "FileChangedInvocation",
+    "FileChangedPayload",
+    "HookIdentity",
+    "HookInvocation",
+    "PostCompactInvocation",
+    "PostToolUseInvocation",
+    "PostToolUsePayload",
+    "PreCompactInvocation",
+    "PreToolUseInvocation",
+    "PreToolUsePayload",
+    "SessionStartInvocation",
+    "SessionStartPayload",
+    "StopInvocation",
+    "StopPayload",
+    "UserPromptSubmitInvocation",
+    "UserPromptSubmitPayload",
+]

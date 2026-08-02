@@ -29,6 +29,13 @@ from typing import Any, List, Optional
 from rich.console import Group
 from rich.text import Text
 
+from mote.contracts.activity import (
+    ActivityKind,
+    ActivityNodeState,
+    ActivityNodeStatus,
+    ActivityOutcome,
+    ActivityTopology,
+)
 from mote.product.interfaces.textual.style import BRANCH, Palette
 from mote.product.interfaces.textual.widgets.transcript import FoldableRow, build_tool_parts
 from mote.product.presentation.rich_rendering.builders import activity_header, activity_outcome, activity_topology
@@ -36,18 +43,26 @@ from mote.product.presentation.rich_rendering.builders import activity_header, a
 # Per-node live status → colour for the running trail (a subset of the outcome
 # tree's mapping; the terminal outcome builder owns the final glyph set).
 _LIVE_STATUS_STYLE = {
-    "running": Palette.BRAND,
-    "success": Palette.SUCCESS,
-    "failed": Palette.ERROR,
-    "skipped": Palette.DIM,
-    "cancelled": Palette.WARNING,
+    ActivityNodeStatus.RUNNING.value: Palette.BRAND,
+    ActivityNodeStatus.SUCCESS.value: Palette.SUCCESS,
+    ActivityNodeStatus.FAILED.value: Palette.ERROR,
+    ActivityNodeStatus.SKIPPED.value: Palette.DIM,
+    ActivityNodeStatus.CANCELLED.value: Palette.WARNING,
 }
 
 
 class ActivityWidget(FoldableRow):
     """One nested orchestration, keyed by ``scope`` — live topology → outcome."""
 
-    def __init__(self, activity_kind: str, label: str, topology: Any, *, expanded: bool = True, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        activity_kind: ActivityKind,
+        label: str,
+        topology: ActivityTopology | None,
+        *,
+        expanded: bool = True,
+        **kwargs: Any,
+    ) -> None:
         # Default expanded: a running orchestration must stay readable (its child
         # rows + live node trail visible); ctrl+o folds it to the header afterwards.
         super().__init__(expanded=expanded, **kwargs)
@@ -58,17 +73,16 @@ class ActivityWidget(FoldableRow):
         # ``{stage: (status, detail)}`` — most-recent value wins, rendered as a
         # dim trail below the topology while the activity runs.
         self._node_status: dict[str, tuple[str, str]] = {}
-        # Folded child tool calls dispatched inside the activity: mutable
-        # ``[started_event, completed_event | None]`` pairs (graph-internal calls
-        # carry ``tool_use_id=None``, so completion correlates positionally).
+        # Folded child tool calls dispatched inside the activity, correlated by
+        # their execution-owner invocation identity.
         self._children: List[list] = []
         # Terminal state, set on close — freezes the render to the outcome tree.
         # NB: MUST NOT be named ``_closed`` — that shadows Textual's
         # ``MessagePump._closed``, whose truthiness forces ``display=False`` (the
         # widget vanishes the instant the run completes).
         self._frozen = False
-        self._outcome = "success"
-        self._node_states: Any = ()
+        self._outcome = ActivityOutcome.SUCCESS
+        self._node_states: tuple[ActivityNodeState, ...] = ()
         self._summary = ""
         self._rebuild()
 
@@ -83,21 +97,13 @@ class ActivityWidget(FoldableRow):
         self._rebuild()
 
     def complete_child(self, ev: Any) -> None:
-        tid = getattr(ev, "tool_use_id", None)
-        # Correlate by tool_use_id when present; graph-internal calls have none,
-        # so fall back to the first uncompleted entry with the same tool name.
+        tid = str(ev.identity.invocation_id)
+        # Correlate only by the execution-owner invocation identity.
         target: Optional[list] = None
-        if tid:
-            for entry in self._children:
-                if getattr(entry[0], "tool_use_id", None) == tid:
-                    target = entry
-                    break
-        if target is None:
-            name = getattr(ev, "tool_name", None)
-            for entry in self._children:
-                if entry[1] is None and getattr(entry[0], "tool_name", None) == name:
-                    target = entry
-                    break
+        for entry in self._children:
+            if str(entry[0].identity.invocation_id) == tid:
+                target = entry
+                break
         if target is None:
             for entry in self._children:
                 if entry[1] is None:
@@ -107,10 +113,15 @@ class ActivityWidget(FoldableRow):
             target[1] = ev
         self._rebuild()
 
-    def finalize_outcome(self, outcome: str, node_states: Any, summary: str) -> None:
+    def finalize_outcome(
+        self,
+        outcome: ActivityOutcome,
+        node_states: tuple[ActivityNodeState, ...],
+        summary: str,
+    ) -> None:
         self._frozen = True
-        self._outcome = outcome or "success"
-        self._node_states = node_states or ()
+        self._outcome = outcome
+        self._node_states = node_states
         self._summary = summary or ""
         self._rebuild()
 

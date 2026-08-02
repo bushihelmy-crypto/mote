@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import Field, field_validator, model_validator
 
-from mote.contracts.config.model.base import ConfigModel
+from mote.contracts.config.base import ConfigModel
 from mote.contracts.config.model.llm import LLMConfig
 from mote.contracts.model.failover import AttemptBudget
 

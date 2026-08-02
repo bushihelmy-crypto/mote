@@ -100,7 +100,7 @@ def project_tool_started(
 ) -> Optional[ToolCallStarted]:
     name = event.tool_name or "?"
     args = event.tool_input
-    tool_use_id = event.tool_use_id
+    identity = event.identity
     if name == "AskUserQuestion":
         return None
     if name == "RunGraph":
@@ -110,7 +110,7 @@ def project_tool_started(
             headline="",
             body=None,
             lexer=None,
-            tool_use_id=tool_use_id,
+            identity=identity,
         )
     headline = _search_headline(args) if name == "Search" else ""
     if name != "Search":
@@ -124,7 +124,7 @@ def project_tool_started(
         headline=headline,
         body=body,
         lexer=lexer,
-        tool_use_id=tool_use_id,
+        identity=identity,
     )
 
 

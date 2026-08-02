@@ -1,23 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for LogSubscriber: it logs semantic events, never folds, never raises."""
+
 from __future__ import annotations
 
 import pytest
 
-from mote.runtime.events import (
-    AgentLifecycleEvent,
-    LLMStreamDeltaEvent,
-    LogSubscriber,
-    RecoveryEvent,
-    ResourceReportEvent,
-    SessionStartEvent,
-    TaskProgressEvent,
-    ToolInvocationStartedEvent,
-    bind_telemetry,
-    observe_event,
-    observe_event_sync,
-)
+from mote.contracts.events.agent import AgentLifecycleEvent
+from mote.contracts.events.model import LLMStreamDeltaEvent
+from mote.contracts.events.session import SessionStartEvent
+from mote.contracts.events.task import TaskProgressEvent
+from mote.contracts.events.telemetry import RecoveryEvent, ResourceReportEvent
+from mote.contracts.events.tool import ToolInvocationStartedEvent
+from mote.contracts.task.progress import ProgressPhase
+from mote.runtime.events import LogSubscriber, bind_telemetry, observe_event, observe_event_sync
 from mote.runtime.events.log_subscriber import _clip
 from mote.ztest.telemetry import InlineTelemetry
 
@@ -45,8 +41,18 @@ async def test_session_start_logged_at_info(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_tool_event_logged_at_debug(monkeypatch):
+    from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity
+
     info, debug, _ = _capture(monkeypatch)
-    await LogSubscriber().handle(ToolInvocationStartedEvent(tool_name="Read", tool_input={"x": 1}))
+    await LogSubscriber().handle(
+        ToolInvocationStartedEvent(
+            identity=ToolInvocationIdentity(
+                ToolInvocationId("test-call"), ToolAttemptOrdinal(1), "definition", 1, "digest", "owner", "run"
+            ),
+            tool_name="Read",
+            tool_input={"x": 1},
+        )
+    )
     assert info == []
     assert len(debug) == 1 and "tool_invocation_started" in debug[0] and "Read" in debug[0]
 
@@ -127,7 +133,15 @@ async def test_resource_report_event_logged_at_debug(monkeypatch):
 
 def test_task_progress_logged_via_handle_sync(monkeypatch):
     info, debug, _ = _capture(monkeypatch)
-    LogSubscriber().handle_sync(TaskProgressEvent(task_id="bg_1", stage="split", status="running", detail="d"))
+    LogSubscriber().handle_sync(
+        TaskProgressEvent.activity(
+            run_id="bg_1",
+            definition_id="definition",
+            stage="split",
+            phase=ProgressPhase.RUNNING,
+            detail="d",
+        )
+    )
     assert info == []
     assert len(debug) == 1 and "task_progress" in debug[0] and "bg_1" in debug[0]
 
@@ -143,7 +157,14 @@ def test_handle_sync_ignores_non_task_progress(monkeypatch):
 async def test_async_handle_ignores_task_progress(monkeypatch):
     # TaskProgress rides the sync fan-out; the async path must not double-log it.
     info, debug, _ = _capture(monkeypatch)
-    out = await LogSubscriber().handle(TaskProgressEvent(task_id="bg_1", stage="s", status="running"))
+    out = await LogSubscriber().handle(
+        TaskProgressEvent.activity(
+            run_id="bg_1",
+            definition_id="definition",
+            stage="s",
+            phase=ProgressPhase.RUNNING,
+        )
+    )
     assert out is None
     assert info == [] and debug == []
 

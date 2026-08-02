@@ -95,7 +95,7 @@ def _outcome_from_obj(obj: dict) -> HookOutcome:
     return outcome
 
 
-def parse_command_output(stdout: str, stderr: str, exit_code: int) -> HookOutcome:
+def parse_command_output(stdout: str, stderr: str, exit_code: int, *, strict: bool = False) -> HookOutcome:
     """Turn a command handler's (stdout, stderr, exit_code) into a HookOutcome."""
     # Exit 2 is the "blocking" signal: deny, reason from stderr.
     if exit_code == 2:
@@ -116,9 +116,26 @@ def parse_command_output(stdout: str, stderr: str, exit_code: int) -> HookOutcom
     try:
         obj = json.loads(text)
     except (json.JSONDecodeError, ValueError):
+        if strict:
+            raise ValueError("hook output must be a JSON object")
         return HookOutcome()  # non-JSON stdout -> no influence
     if not isinstance(obj, dict):
+        if strict:
+            raise ValueError("hook output must be a JSON object")
         return HookOutcome()
+    if strict:
+        decision = obj.get("decision")
+        if decision is not None and decision not in ("approve", "block"):
+            raise ValueError("unknown hook decision")
+        specific = obj.get("hookSpecificOutput")
+        if isinstance(specific, dict):
+            permission = specific.get("permissionDecision")
+            if permission is not None and permission not in (
+                "allow",
+                "deny",
+                "ask",
+            ):
+                raise ValueError("unknown hook permission decision")
     return _outcome_from_obj(obj)
 
 

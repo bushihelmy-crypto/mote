@@ -75,13 +75,13 @@ class EmbeddedInferenceRuntime:
         self._epoch_provider = epoch_provider
         self._event_capacity = event_capacity
         self._clock_skew_guard_seconds = clock_skew_guard_seconds
-        self._queue = FairAdmissionQueue(capacity=queue_capacity)
+        self._queue = FairAdmissionQueue[_AttemptExecution](capacity=queue_capacity)
         self._bulkheads = BulkheadController(
             global_limit=global_in_flight,
             provider_limit=provider_in_flight,
             endpoint_limit=endpoint_in_flight,
         )
-        self._dispatcher = Dispatcher(
+        self._dispatcher = Dispatcher[_AttemptExecution](
             queue=self._queue,
             bulkheads=self._bulkheads,
             identity_resolver=self._identity,
@@ -151,16 +151,20 @@ class EmbeddedInferenceRuntime:
         if close is not None:
             await close()
 
-    async def _dispatch(self, entry: QueueEntry, permit: BulkheadPermit) -> None:
+    async def _dispatch(
+        self,
+        entry: QueueEntry["_AttemptExecution"],
+        permit: BulkheadPermit,
+    ) -> None:
         execution = entry.payload
         await execution.dispatch(local_deadline=entry.deadline)
 
-    async def _dispatch_timeout(self, entry: QueueEntry) -> None:
+    async def _dispatch_timeout(self, entry: QueueEntry["_AttemptExecution"]) -> None:
         execution = entry.payload
         await execution.dispatch_timeout()
 
     @staticmethod
-    def _identity(entry: QueueEntry) -> BulkheadIdentity:
+    def _identity(entry: QueueEntry["_AttemptExecution"]) -> BulkheadIdentity:
         request = entry.payload.request
         return BulkheadIdentity(
             provider=request.endpoint.provider,

@@ -16,6 +16,7 @@ everything (including programmatic code). The default result is cached per
 ``(cwd, profile)``; any call-specific input (explicit ``env``, ``cli_overrides``
 or ``programmatic``) bypasses the cache.
 """
+
 from __future__ import annotations
 
 import os
@@ -24,14 +25,13 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Tuple, Union
 
 import yaml
 
-from mote.contracts.config.errors import UnknownConfigKeysError
+from mote.contracts.config.errors import ConfigSourceChangedError, UnknownConfigKeysError
 from mote.product.config.diagnostics import unknown_key_paths
 from mote.product.config.env import build_env_layer
 from mote.product.config.layers import ConfigLayer, ConfigLayerStack, strip_sensitive
 from mote.product.config.overrides import ConfigOverrides, parse_cli_overrides
 from mote.product.config.schema import Config
-from mote.product.config.secrets import resolve_api_key
-from mote.product.config.sources import ConfigSource, discover_source_files
+from mote.product.config.sources import ConfigSource, SourceFile, discover_source_files
 
 Programmatic = Union[Dict[str, Any], ConfigOverrides]
 
@@ -39,11 +39,29 @@ Programmatic = Union[Dict[str, Any], ConfigOverrides]
 PROFILE_ENV_VAR = "MOTE_PROFILE"
 
 
-def _read_yaml(path: Path) -> Dict[str, Any]:
-    if not path.exists():
-        return {}
-    with path.open(encoding="utf-8") as stream:
-        return yaml.safe_load(stream) or {}
+def _read_yaml(source_file: SourceFile) -> Dict[str, Any]:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(source_file.identity.canonical_path, flags)
+    except OSError as error:
+        raise ConfigSourceChangedError(
+            f"configuration source is no longer readable: {source_file.identity.canonical_path}"
+        ) from error
+    try:
+        current = os.fstat(descriptor)
+        identity = source_file.identity
+        if (current.st_dev, current.st_ino) != (identity.device, identity.inode):
+            raise ConfigSourceChangedError(f"configuration source identity changed: {identity.canonical_path}")
+        if source_file.trusted and (current.st_mode & 0o022):
+            raise ConfigSourceChangedError(
+                f"trusted configuration source permissions changed: {identity.canonical_path}"
+            )
+        with os.fdopen(descriptor, encoding="utf-8") as stream:
+            descriptor = -1
+            return yaml.safe_load(stream) or {}
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _resolve_profile(profile: Optional[str], env: Optional[Mapping[str, str]]) -> Optional[str]:
@@ -78,7 +96,6 @@ def build_layer_stack(
     cli_overrides: Optional[Iterable[str]] = None,
     programmatic: Optional[Programmatic] = None,
     user_config_root: Path | None = None,
-    source_root: Path | None = None,
 ) -> ConfigLayerStack:
     """Assemble the full layer stack: disk files + env + cli flags + programmatic.
 
@@ -92,12 +109,23 @@ def build_layer_stack(
         cwd,
         profile=profile,
         user_config_root=user_config_root,
-        source_root=source_root,
     ):
-        data = _read_yaml(source_file.path)
-        if not source_file.source.trusted:
+        data = _read_yaml(source_file)
+        if not source_file.trusted:
             data = strip_sensitive(data)
-        stack.add(ConfigLayer(source=source_file.source, data=data, path=source_file.path))
+        identity = source_file.identity
+        stack.add(
+            ConfigLayer(
+                source=source_file.source,
+                data=data,
+                path=source_file.path,
+                trusted=source_file.trusted,
+                source_identity=(
+                    f"{source_file.source.name}:{identity.canonical_path}"
+                    f"#dev={identity.device},ino={identity.inode}"
+                ),
+            )
+        )
 
     env_data = build_env_layer(env)
     if env_data:
@@ -122,17 +150,14 @@ def _cache_key(
     cwd: Optional[Path],
     profile: Optional[str],
     user_config_root: Path | None,
-    source_root: Path | None,
 ) -> str:
     base = str(Path(cwd) if cwd is not None else Path.cwd())
-    return f"{base}\0{profile or ''}\0{user_config_root or ''}\0{source_root or ''}"
+    return f"{base}\0{profile or ''}\0{user_config_root or ''}"
 
 
 def _build_config(stack: ConfigLayerStack) -> "Config":
     """Construct the typed Config after rejecting every unknown key."""
     merged = stack.effective()
-    # Fill llm.api_key from api_key_helper when no static/env key is present.
-    resolve_api_key(merged)
     unknown = unknown_key_paths(merged, Config)
     if unknown:
         raise UnknownConfigKeysError(unknown)
@@ -148,19 +173,17 @@ def load_config_with_stack(
     cli_overrides: Optional[Iterable[str]] = None,
     programmatic: Optional[Programmatic] = None,
     user_config_root: Path | None = None,
-    source_root: Path | None = None,
 ) -> Tuple["Config", ConfigLayerStack]:
     """Build the merged :class:`Config` and return it with its layer stack."""
     use_cache = env is None and not cli_overrides and not programmatic
     if use_cache:
         resolved_profile = _resolve_profile(profile, env)
-        key = _cache_key(cwd, resolved_profile, user_config_root, source_root)
+        key = _cache_key(cwd, resolved_profile, user_config_root)
         if reload or key not in _CACHE:
             stack = build_layer_stack(
                 cwd,
                 profile=profile,
                 user_config_root=user_config_root,
-                source_root=source_root,
             )
             _CACHE[key] = (_build_config(stack), stack)
         return _CACHE[key]
@@ -172,7 +195,6 @@ def load_config_with_stack(
         cli_overrides=cli_overrides,
         programmatic=programmatic,
         user_config_root=user_config_root,
-        source_root=source_root,
     )
     return _build_config(stack), stack
 
@@ -186,7 +208,6 @@ def load_config(
     cli_overrides: Optional[Iterable[str]] = None,
     programmatic: Optional[Programmatic] = None,
     user_config_root: Path | None = None,
-    source_root: Path | None = None,
 ) -> "Config":
     """Load the merged, typed :class:`Config` (the common entry point)."""
     return load_config_with_stack(
@@ -197,7 +218,6 @@ def load_config(
         cli_overrides=cli_overrides,
         programmatic=programmatic,
         user_config_root=user_config_root,
-        source_root=source_root,
     )[0]
 
 
@@ -207,7 +227,6 @@ def get_provenance(
     reload: bool = False,
     profile: Optional[str] = None,
     user_config_root: Path | None = None,
-    source_root: Path | None = None,
 ) -> Dict[str, str]:
     """Return the dotted-path -> source map for diagnostics ("where from?")."""
     return load_config_with_stack(
@@ -215,5 +234,4 @@ def get_provenance(
         reload=reload,
         profile=profile,
         user_config_root=user_config_root,
-        source_root=source_root,
     )[1].provenance()

@@ -8,6 +8,7 @@ import pytest
 
 from mote.contracts.conversation import MessageQueue
 from mote.contracts.output import CommittedOutput, RunResult, TranscriptRef
+from mote.contracts.ports.agent.control import ChildReleaseDisposition, ChildReleaseError, ChildReleaseReceipt
 from mote.orchestration.agents.identity.path import AgentPath
 from mote.orchestration.agents.lifecycle.handle import ChildAgentHandle
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime, AgentStatus
@@ -41,11 +42,14 @@ class FakeRole:
 class FakeControl:
     """Minimal control stub recording which children were released."""
 
-    def __init__(self):
+    def __init__(self, role):
         self.released = []
+        self.role = role
 
-    def release_child(self, agent_id):
+    async def release_child(self, agent_id):
         self.released.append(agent_id)
+        await self.role.cleanup()
+        return ChildReleaseReceipt(agent_id, ChildReleaseDisposition.SETTLED, 1)
 
 
 class FakeSlot:
@@ -58,10 +62,16 @@ class FakeSlot:
         self.rolled_back += 1
 
 
+class FailingSlot(FakeSlot):
+    def rollback(self):
+        self.rolled_back += 1
+        raise RuntimeError("slot rollback failed")
+
+
 def _handle(summary="done", *, residency_slot=None, timeout_seconds=None):
     role = FakeRole("child-1", summary=summary)
     runtime = AgentRuntime(role, agent_path=AgentPath.from_string("/root/child"))
-    control = FakeControl()
+    control = FakeControl(role)
     h = ChildAgentHandle(
         runtime,
         control=control,
@@ -104,6 +114,64 @@ async def test_aclose_is_idempotent():
     await h.aclose()
     await h.aclose()
     assert control.released == ["child-1"]  # released exactly once
+
+
+@pytest.mark.asyncio
+async def test_aclose_propagates_release_failure_and_can_retry():
+    h, role, control = _handle()
+    original_release = control.release_child
+    attempts = 0
+
+    async def fail_once(agent_id):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("release failed")
+        return await original_release(agent_id)
+
+    control.release_child = fail_once
+    with pytest.raises(RuntimeError, match="release failed"):
+        await h.aclose()
+    await h.aclose()
+    assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_aclose_rejects_nonterminal_receipt_and_can_retry():
+    h, role, control = _handle()
+    original_release = control.release_child
+    attempts = 0
+
+    async def fail_once(agent_id):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return ChildReleaseReceipt(
+                agent_id,
+                ChildReleaseDisposition.CLEANUP_FAILED,
+                2,
+                "cleanup timed out",
+            )
+        return await original_release(agent_id)
+
+    control.release_child = fail_once
+    with pytest.raises(ChildReleaseError) as caught:
+        await h.aclose()
+    assert caught.value.receipt.disposition is ChildReleaseDisposition.CLEANUP_FAILED
+    await h.aclose()
+    assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_aclose_propagates_slot_failure_without_marking_closed():
+    slot = FailingSlot()
+    h, role, control = _handle(residency_slot=slot)
+    with pytest.raises(RuntimeError, match="slot rollback failed"):
+        await h.aclose()
+    with pytest.raises(RuntimeError, match="slot rollback failed"):
+        await h.aclose()
+    assert slot.rolled_back == 2
+    assert control.released == ["child-1", "child-1"]
 
 
 @pytest.mark.asyncio

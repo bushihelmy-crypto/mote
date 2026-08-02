@@ -105,7 +105,7 @@ def test_rebind_resumes_cursor_without_replaying_business_start():
         first = _Client([_TransportFailure()])
         second = _Client([[(8, 12)]])
         clients = {"one": first, "two": second}
-        manager = ReconnectingSharedGrpcClient[object, object, object](
+        manager = ReconnectingSharedGrpcClient(
             supervisor,
             _Authenticator(),
             lambda socket_path: clients[socket_path.stem.removeprefix("gateway-")],
@@ -155,7 +155,7 @@ def test_rebind_continues_from_last_yielded_cursor():
 
         first.resume_events = first_events
         clients = {"one": first, "two": second}
-        manager = ReconnectingSharedGrpcClient[object, object, object](
+        manager = ReconnectingSharedGrpcClient(
             supervisor,
             _Authenticator(),
             lambda socket_path: clients[socket_path.stem.removeprefix("gateway-")],

@@ -13,7 +13,7 @@ from mote.contracts.content import ContentIdentity
 _CHUNK_SIZE = 1_024 * 1_024
 
 
-class ArtifactRepository:
+class ContentAddressedArtifactStore:
     """Filesystem CAS whose public API uses only ``ArtifactContentRef``."""
 
     def __init__(self, root: Path, *, hard_limit_bytes: int) -> None:
@@ -127,4 +127,4 @@ class ArtifactRepository:
             raise ValueError("artifact content reference is invalid for repository CAS")
 
 
-__all__ = ["ArtifactRepository"]
+__all__ = ["ContentAddressedArtifactStore"]

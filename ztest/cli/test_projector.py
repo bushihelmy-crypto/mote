@@ -18,9 +18,8 @@ from mote.contracts.events.output import OutputCommittedEvent, OutputSnapshotEve
 from mote.contracts.events.session import RuntimeDurabilityChangedEvent
 from mote.product.i18n import keys as K
 from mote.product.i18n import t
-from mote.product.presentation.projection import (
+from mote.product.presentation.events import (
     AttemptStreamDiscarded,
-    BaseProjector,
     Capabilities,
     ConversationCompacted,
     MessageBlockCompleted,
@@ -32,8 +31,9 @@ from mote.product.presentation.projection import (
     TaskProgress,
     ToolCallCompleted,
     ToolCallStarted,
-    ViewProjector,
 )
+from mote.product.presentation.projection.base import BaseProjector
+from mote.product.presentation.projection.projector import ViewProjector
 from mote.ztest.artifact_fakes import artifact_media
 
 from .conftest import (
@@ -515,19 +515,19 @@ def test_post_tool_failure_fills_structured_error_fields():
 
     report = ErrorReport(
         error="PermissionError",
-        code="tool.permission_denied",
+        code="TOOL_PERMISSION_DENIED",
         message="",
         retryable=False,
-        recovery="request access then retry",
+        recovery="abort",
     )
     p = ViewProjector()
     out = p.project(ev_post_tool("Bash", "denied", success=False, error=report))
     done = out[0]
     assert done.ok is False
     assert done.error_type == "PermissionError"
-    assert done.error_code == "tool.permission_denied"
+    assert done.error_code == "TOOL_PERMISSION_DENIED"
     assert done.retryable is False
-    assert done.recovery == "request access then retry"
+    assert done.recovery == "abort"
 
 
 def test_post_tool_failure_prefers_report_message_over_raw_error_xml():
@@ -542,9 +542,9 @@ def test_post_tool_failure_prefers_report_message_over_raw_error_xml():
 
     report = ErrorReport(
         error="PermissionError",
-        code="tool.permission_denied",
+        code="TOOL_PERMISSION_DENIED",
         retryable=False,
-        recovery="",
+        recovery="abort",
         message="Permission to run 'Bash' was denied",
     )
     xml = '<error code="tool.permission_denied" retryable="false">\nPermission to run \'Bash\' was denied\n</error>'

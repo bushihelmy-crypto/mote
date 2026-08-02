@@ -7,6 +7,7 @@ authenticates (a wrong key fails loud rather than returning garbage), and the
 auto-generated key file is owner-only (0600). ``build_cipher`` is the swappable
 strategy registry the store depends on.
 """
+
 from __future__ import annotations
 
 import os
@@ -55,11 +56,13 @@ class TestKeyFileProvider:
         provider = KeyFileProvider(tmp_path / "vault.key")
         assert provider.key() == provider.key()
 
-    def test_regenerates_wrong_length_file(self, tmp_path):
+    def test_wrong_length_key_fails_closed_without_destroying_evidence(self, tmp_path):
         key_file = tmp_path / "vault.key"
-        key_file.write_bytes(b"corrupt")
-        key = KeyFileProvider(key_file).key()
-        assert len(key) == 32
+        evidence = b"corrupt"
+        key_file.write_bytes(evidence)
+        with pytest.raises(ValueError, match="invalid length"):
+            KeyFileProvider(key_file).key()
+        assert key_file.read_bytes() == evidence
 
 
 class TestBuildCipher:

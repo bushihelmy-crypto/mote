@@ -24,6 +24,7 @@ Canonical wire-format reminders:
 - tool result: ``{"role": "tool", "tool_call_id": ..., "content": ...}``
 - assistant tool call: ``{"role": "assistant", "content": ..., "tool_calls": [...]}``
 """
+
 from __future__ import annotations
 
 import base64
@@ -37,7 +38,7 @@ except Exception as _pillow_import_error:  # Pillow is optional
 else:
     _pillow_import_error = None
 
-from mote.runtime.errors import RecoveryAction
+from mote.contracts.foundation.errors.codes import RecoveryAction
 from mote.runtime.models.media import parse_data_url
 from mote.runtime.telemetry.logging import logger
 

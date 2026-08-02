@@ -8,15 +8,17 @@ from dataclasses import dataclass
 from typing import Any
 
 from mote.contracts.authorization import PermissionDecision
+from mote.runtime.tools.definition_compiler import CompiledToolDefinition, compile_tool_definition
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 
 
 @dataclass(frozen=True, slots=True)
 class BoundApprovalPolicy:
+    identity: str
     evaluate: Callable[[Mapping[str, Any]], bool]
 
 
-class BoundTool:
+class ExecutableToolBinding:
     """Protocol definition plus the capability run by the shared control plane."""
 
     def __init__(
@@ -29,6 +31,23 @@ class BoundTool:
         self._capability = capability
         self._approval_policy = approval_policy
         self.name = definition.name
+        self._compiled_definition = compile_tool_definition(
+            definition,
+            capability,
+            approval_identity=(
+                approval_policy.identity
+                if approval_policy is not None
+                else ("definition-required" if definition.approval_required else "none")
+            ),
+        )
+
+    @property
+    def compiled_definition(self) -> CompiledToolDefinition:
+        return self._compiled_definition
+
+    @property
+    def semantic_identity(self) -> str:
+        return self._compiled_definition.semantic_identity
 
     @property
     def wrapped_tool(self) -> Any:
@@ -64,6 +83,15 @@ class BoundTool:
     def permission_targets(self, args: dict[str, Any]) -> list[str]:
         return self._capability.permission_targets(args)
 
+    def permission_segments(self, args: dict[str, Any]):
+        return self._capability.permission_segments(args)
+
+    def can_resume_started_call(self, call_id: str) -> bool:
+        return bool(self._capability.can_resume_started_call(call_id))
+
+    def cleanup_session(self, session_id: str):
+        return self._capability.cleanup_session(session_id)
+
     def check_permissions(self, args: dict[str, Any]) -> PermissionDecision | None:
         decision = self._capability.check_permissions(args)
         if decision is not None and decision.behavior == "deny":
@@ -93,4 +121,4 @@ class BoundTool:
         return await result if inspect.isawaitable(result) else result
 
 
-__all__ = ["BoundApprovalPolicy", "BoundTool"]
+__all__ = ["BoundApprovalPolicy", "ExecutableToolBinding"]

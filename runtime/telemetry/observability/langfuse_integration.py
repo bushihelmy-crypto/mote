@@ -10,7 +10,7 @@ try:
 except Exception:  # noqa: BLE001 — optional backend may have incompatible transitive deps
     Langfuse = None
 
-from mote.runtime.config.langfuse import LangfuseConfig
+from mote.contracts.config.runtime_client import LangfuseActivationSpec
 from mote.runtime.telemetry.logging import logger
 from mote.runtime.telemetry.observability.langfuse_backend import LangfuseBackend
 from mote.runtime.telemetry.observability.tracing import TracingSubscriber
@@ -25,7 +25,7 @@ class LangfuseRuntime:
         self._closed = False
 
     @classmethod
-    def from_config(cls, config: LangfuseConfig) -> "LangfuseRuntime":
+    def from_config(cls, config: LangfuseActivationSpec) -> "LangfuseRuntime":
         if not config.enabled:
             return cls()
         if not (config.public_key and config.secret_key):

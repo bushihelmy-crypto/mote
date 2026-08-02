@@ -9,7 +9,22 @@ from typing import Any, Protocol
 
 import grpc
 
+from mote.contracts.inference.executions import SessionApplicationMessage
 from mote.contracts.inference.shared import ProtocolNegotiation, SharedHandshake, SharedSessionCredential
+from mote.contracts.inference.wire_permit import WirePermit
+from mote.product.inference.daemon.messages import (
+    AuthorizeExecutionCommand,
+    CancelExecutionCommand,
+    EventCursor,
+    ExecutionQuery,
+    ExecutionReceiptView,
+    GenerationCommand,
+    LifecycleEventView,
+    RpcEnvelopeBinding,
+    SessionMessageCommand,
+    StartExecutionCommand,
+    TransferExecutionCommand,
+)
 from mote.product.inference.daemon.rpc import gateway_v1_pb2 as _pb
 from mote.product.inference.daemon.rpc import gateway_v1_pb2_grpc as rpc
 from mote.product.inference.daemon.security import SharedAuthenticationError, SharedHandshakeAuthority
@@ -18,61 +33,59 @@ pb: Any = _pb
 
 
 class SharedExecutionBackend(Protocol):
-    async def start_unary(self, request: Any, credential: SharedSessionCredential) -> int:
-        ...
+    async def start_unary(self, request: StartExecutionCommand, credential: SharedSessionCredential) -> int: ...
 
-    async def start_durable_command(self, request: Any, credential: SharedSessionCredential) -> int:
-        ...
+    async def start_durable_command(
+        self, request: StartExecutionCommand, credential: SharedSessionCredential
+    ) -> int: ...
 
-    async def open_session(self, request: Any, credential: SharedSessionCredential) -> int:
-        ...
+    async def open_session(self, request: StartExecutionCommand, credential: SharedSessionCredential) -> int: ...
 
-    async def execute_transfer_part(self, request: Any, credential: SharedSessionCredential) -> int:
-        ...
+    async def execute_transfer_part(
+        self, request: TransferExecutionCommand, credential: SharedSessionCredential
+    ) -> int: ...
 
-    async def authorize(self, request: Any, credential: SharedSessionCredential) -> None:
-        ...
+    async def authorize(self, request: AuthorizeExecutionCommand, credential: SharedSessionCredential) -> None: ...
 
-    async def cancel(self, request: Any, credential: SharedSessionCredential) -> None:
-        ...
+    async def cancel(self, request: CancelExecutionCommand, credential: SharedSessionCredential) -> None: ...
 
-    def stream_events(self, request: Any, credential: SharedSessionCredential) -> AsyncIterator[Any]:
-        ...
+    def stream_events(
+        self, request: EventCursor, credential: SharedSessionCredential
+    ) -> AsyncIterator[LifecycleEventView]: ...
 
-    async def query_receipt(self, request: Any, credential: SharedSessionCredential) -> Any:
-        ...
+    async def query_receipt(
+        self, request: ExecutionQuery, credential: SharedSessionCredential
+    ) -> ExecutionReceiptView: ...
 
-    def reconcile(self, request: Any, credential: SharedSessionCredential) -> AsyncIterator[Any]:
-        ...
+    def reconcile(
+        self, request: ExecutionQuery, credential: SharedSessionCredential
+    ) -> AsyncIterator[LifecycleEventView]: ...
 
     def session(
         self,
-        requests: AsyncIterator[Any],
+        requests: AsyncIterator[SessionMessageCommand],
         credential: SharedSessionCredential,
-    ) -> AsyncIterator[Any]:
-        ...
+    ) -> AsyncIterator[LifecycleEventView]: ...
 
 
 class SharedGenerationControl(Protocol):
-    async def stage_generation(self, request: Any, credential: SharedSessionCredential) -> tuple[str, str, str]:
-        ...
+    async def stage_generation(
+        self, request: GenerationCommand, credential: SharedSessionCredential
+    ) -> tuple[str, str, str]: ...
 
-    async def observe_generation(self, request: Any, credential: SharedSessionCredential) -> tuple[str, str, str]:
-        ...
+    async def observe_generation(
+        self, request: GenerationCommand, credential: SharedSessionCredential
+    ) -> tuple[str, str, str]: ...
 
 
 class SharedOperationsControl(Protocol):
-    async def backup(self, destination: Path, consistency: str) -> str:
-        ...
+    async def backup(self, destination: Path, consistency: str) -> str: ...
 
-    async def verify_restore(self, source: Path) -> str:
-        ...
+    async def verify_restore(self, source: Path) -> str: ...
 
-    async def reconcile_all(self) -> tuple[int, int]:
-        ...
+    async def reconcile_all(self) -> tuple[int, int]: ...
 
-    async def begin_drain(self, *, timeout_seconds: float) -> None:
-        ...
+    async def begin_drain(self, *, timeout_seconds: float) -> None: ...
 
 
 class _ExecutionService(rpc.GatewayExecutionServiceServicer):
@@ -89,25 +102,37 @@ class _ExecutionService(rpc.GatewayExecutionServiceServicer):
     async def StartUnary(self, request, context):
         await self._require_admission(context)
         credential = await _credential(request.envelope, context, self._authority)
-        revision = await _backend_call(context, self._backend.start_unary(request, credential))
+        revision = await _backend_call(context, self._backend.start_unary(_start(request), credential))
         return pb.StartResponse(execution_id=request.execution_id, receipt_revision=revision)
 
     async def StartDurableCommand(self, request, context):
         await self._require_admission(context)
         credential = await _credential(request.envelope, context, self._authority)
-        revision = await _backend_call(context, self._backend.start_durable_command(request, credential))
+        revision = await _backend_call(context, self._backend.start_durable_command(_start(request), credential))
         return pb.StartResponse(execution_id=request.execution_id, receipt_revision=revision)
 
     async def OpenSession(self, request, context):
         await self._require_admission(context)
         credential = await _credential(request.envelope, context, self._authority)
-        revision = await _backend_call(context, self._backend.open_session(request, credential))
+        revision = await _backend_call(context, self._backend.open_session(_start(request), credential))
         return pb.StartResponse(execution_id=request.execution_id, receipt_revision=revision)
 
     async def ExecuteTransferPart(self, request, context):
         await self._require_admission(context)
         credential = await _credential(request.start.envelope, context, self._authority)
-        revision = await _backend_call(context, self._backend.execute_transfer_part(request, credential))
+        revision = await _backend_call(
+            context,
+            self._backend.execute_transfer_part(
+                TransferExecutionCommand(
+                    start=_start(request.start),
+                    part_number=request.part_number,
+                    offset=request.offset,
+                    length=request.length,
+                    content_digest=request.content_digest,
+                ),
+                credential,
+            ),
+        )
         return pb.StartResponse(
             execution_id=request.start.execution_id,
             receipt_revision=revision,
@@ -115,31 +140,57 @@ class _ExecutionService(rpc.GatewayExecutionServiceServicer):
 
     async def AuthorizeWire(self, request, context):
         credential = await _credential(request.envelope, context, self._authority)
-        await _backend_call(context, self._backend.authorize(request, credential))
+        await _backend_call(
+            context,
+            self._backend.authorize(
+                AuthorizeExecutionCommand(
+                    envelope=_envelope(request.envelope),
+                    execution_id=request.execution_id,
+                    permit=WirePermit.model_validate_json(request.wire_permit),
+                ),
+                credential,
+            ),
+        )
         return pb.Empty()
 
     async def Cancel(self, request, context):
         credential = await _credential(request.envelope, context, self._authority)
-        await _backend_call(context, self._backend.cancel(request, credential))
+        await _backend_call(
+            context,
+            self._backend.cancel(
+                CancelExecutionCommand(
+                    envelope=_envelope(request.envelope),
+                    execution_id=request.execution_id,
+                    reason=request.reason,
+                ),
+                credential,
+            ),
+        )
         return pb.Empty()
 
     async def StreamEvents(self, request, context):
         credential = await _credential(request.envelope, context, self._authority)
         try:
-            async for event in self._backend.stream_events(request, credential):
-                yield event
+            async for event in self._backend.stream_events(_cursor(request), credential):
+                yield _event_pb(event)
         except (KeyError, PermissionError, ValueError, RuntimeError) as exc:
             await _abort_backend_error(context, exc)
 
     async def QueryReceipt(self, request, context):
         credential = await _credential(request.envelope, context, self._authority)
-        return await _backend_call(context, self._backend.query_receipt(request, credential))
+        result = await _backend_call(context, self._backend.query_receipt(_query(request), credential))
+        return pb.Receipt(
+            execution_id=result.execution_id,
+            revision=result.revision,
+            state=result.state,
+            terminal_artifact_reference=result.terminal_artifact_reference,
+        )
 
     async def Reconcile(self, request, context):
         credential = await _credential(request.envelope, context, self._authority)
         try:
-            async for event in self._backend.reconcile(request, credential):
-                yield event
+            async for event in self._backend.reconcile(_query(request), credential):
+                yield _event_pb(event)
         except (KeyError, PermissionError, ValueError, RuntimeError) as exc:
             await _abort_backend_error(context, exc)
 
@@ -150,7 +201,7 @@ class _ExecutionService(rpc.GatewayExecutionServiceServicer):
         credential = await _credential(first.envelope, context, self._authority)
 
         async def requests():
-            yield first
+            yield _session_message(first)
             async for request in request_iterator:
                 observed = await _credential(request.envelope, context, self._authority)
                 if observed.session_id != credential.session_id:
@@ -158,11 +209,11 @@ class _ExecutionService(rpc.GatewayExecutionServiceServicer):
                         grpc.StatusCode.UNAUTHENTICATED,
                         "session credential changed within stream",
                     )
-                yield request
+                yield _session_message(request)
 
         try:
             async for event in self._backend.session(requests(), credential):
-                yield event
+                yield _event_pb(event)
         except (KeyError, PermissionError, ValueError, RuntimeError) as exc:
             await _abort_backend_error(context, exc)
 
@@ -227,7 +278,13 @@ class _ControlService(rpc.GatewayControlServiceServicer):
     async def StageGeneration(self, request, context):
         credential = await _credential(request.envelope, context, self._authority)
         try:
-            generation_id, digest, state = await self._generations.stage_generation(request, credential)
+            generation_id, digest, state = await self._generations.stage_generation(
+                GenerationCommand(
+                    envelope=_envelope(request.envelope),
+                    generation_artifact=bytes(request.generation_artifact),
+                ),
+                credential,
+            )
         except (KeyError, ValueError) as exc:
             await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
             raise AssertionError("abort returned")
@@ -236,7 +293,9 @@ class _ControlService(rpc.GatewayControlServiceServicer):
     async def ObserveGeneration(self, request, context):
         credential = await _credential(request.envelope, context, self._authority)
         try:
-            generation_id, digest, state = await self._generations.observe_generation(request, credential)
+            generation_id, digest, state = await self._generations.observe_generation(
+                GenerationCommand(envelope=_envelope(request.envelope)), credential
+            )
         except KeyError as exc:
             await context.abort(grpc.StatusCode.NOT_FOUND, str(exc))
             raise AssertionError("abort returned")
@@ -358,6 +417,59 @@ class SharedGrpcServer:
 
     async def wait(self) -> None:
         await self._server.wait_for_termination()
+
+
+def _envelope(value: Any) -> RpcEnvelopeBinding:
+    return RpcEnvelopeBinding(
+        generation_id=value.generation_id,
+        generation_artifact_digest=value.generation_artifact_digest,
+    )
+
+
+def _start(value: Any) -> StartExecutionCommand:
+    return StartExecutionCommand(
+        envelope=_envelope(value.envelope),
+        execution_id=value.execution_id,
+        operation=value.operation,
+        canonical_request=bytes(value.canonical_request),
+        artifact_reference=value.artifact_reference,
+    )
+
+
+def _query(value: Any) -> ExecutionQuery:
+    return ExecutionQuery(
+        envelope=_envelope(value.envelope),
+        execution_id=value.execution_id,
+    )
+
+
+def _cursor(value: Any) -> EventCursor:
+    return EventCursor(
+        envelope=_envelope(value.envelope),
+        execution_id=value.execution_id,
+        after_sequence=value.after_sequence,
+        receipt_revision=value.receipt_revision,
+    )
+
+
+def _session_message(value: Any) -> SessionMessageCommand:
+    return SessionMessageCommand(
+        envelope=_envelope(value.envelope),
+        execution_id=value.execution_id,
+        application_sequence=value.application_sequence,
+        message=SessionApplicationMessage.model_validate_json(value.payload),
+        permit=WirePermit.model_validate_json(value.wire_permit),
+    )
+
+
+def _event_pb(value: LifecycleEventView) -> Any:
+    return pb.LifecycleEvent(
+        execution_id=value.execution_id,
+        sequence=value.sequence,
+        receipt_revision=value.receipt_revision,
+        event_type=value.event_type,
+        payload=value.payload,
+    )
 
 
 async def _credential(

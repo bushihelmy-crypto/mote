@@ -11,6 +11,7 @@ KernelSession.start -> wrap_exec — without depending on the host backend.
 A CapRole publishing the fake runtime via the ``get_sandbox_runtime`` capability
 exercises the real bind() path the production Role uses.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -19,9 +20,11 @@ import sys
 
 import pytest
 
+from mote.contracts.tool.errors import ToolError
 from mote.product.toolsets.builtin.bash import Bash
 from mote.runtime.interactive.kernel.driver import KernelSession
 from mote.runtime.interactive.terminal.driver import TerminalSession
+from mote.runtime.tools.execution_context import AuthorizedToolInvocation, bind_authorized_invocation
 from mote.ztest.executor.tools.conftest import CapRole, bind, run
 
 
@@ -57,26 +60,38 @@ class RecordingRuntime:
         return list(argv), dict(env or {})
 
 
-# --- Bash -> aexecute -> wrap_command --------------------------------------
+# --- Bash -> governed runner -> wrap_command -------------------------------
 
 
-def test_bash_threads_runtime_to_aexecute(workspace):
+def test_bash_threads_runtime_to_governed_runner(workspace):
     rt = RecordingRuntime()
     role = CapRole(cwd=str(workspace), sandbox_runtime=rt)
     tool = bind(Bash(), role=role)
-    out = run(tool.call(command="echo hello")).output
+    with bind_authorized_invocation(AuthorizedToolInvocation("Bash", {"command": "echo hello"}, 1)):
+        out = run(tool.call(command="echo hello")).output
     assert "hello" in out
-    # The command went through the runtime's wrap_command (aexecute appends a
-    # cwd-sync probe, so match the prefix rather than exact equality).
+    # The command went through the runtime's wrap_command.
     assert len(rt.wrap_command_calls) == 1
     assert rt.wrap_command_calls[0].startswith("echo hello")
 
 
-def test_bash_without_runtime_runs_unsandboxed(workspace):
+def test_bash_without_runtime_fails_closed(workspace):
     role = CapRole(cwd=str(workspace), sandbox_runtime=None)
     tool = bind(Bash(), role=role)
-    out = run(tool.call(command="echo plain")).output
-    assert "plain" in out
+    with bind_authorized_invocation(AuthorizedToolInvocation("Bash", {"command": "echo plain"}, 1)):
+        with pytest.raises(ToolError, match="sandbox is unavailable"):
+            run(tool.call(command="echo plain"))
+
+
+def test_bash_without_executor_authorization_never_reaches_sandbox(workspace):
+    rt = RecordingRuntime()
+    role = CapRole(cwd=str(workspace), sandbox_runtime=rt)
+    tool = bind(Bash(), role=role)
+
+    with pytest.raises(ToolError, match="no active ToolExecutor authorization"):
+        run(tool.call(command="echo denied"))
+
+    assert rt.wrap_command_calls == []
 
 
 # --- Terminal -> TerminalSession.start -> wrap_exec ------------------------

@@ -30,9 +30,10 @@ Trust-boundary contract (enforced elsewhere, relied on here):
     private key is what makes the "secret never in the sandbox" guarantee real.
 
 Leaf module: imports only stdlib + ``cryptography`` (already a dependency via
-``common/secrets/cipher.py``) + the optional ``certifi`` for the real-root bundle.
+``runtime/secrets/cipher.py``) plus optional ``certifi`` for the real-root bundle.
 No new dependency, no knowledge of the proxy, configuration, or event infrastructure.
 """
+
 from __future__ import annotations
 
 import datetime

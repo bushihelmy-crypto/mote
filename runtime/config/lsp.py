@@ -1,6 +1,6 @@
 """Runtime LSP configuration.
 
-Lives in ``common/schema`` alongside ``hook_config.py`` / ``permission_config.py``
+Lives in Runtime configuration and is selected by Product composition
 so ``RoleSchema`` (which declares it) can reference it without importing the LSP
 service. The service itself lives in ``mote.runtime.lsp``; this is only the
 declarative shape: which language servers to launch, keyed by the file
@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from mote.contracts.config.base import ConfigModel
 
 
-class LspServerConfig(BaseModel):
+class LspServerConfig(ConfigModel):
     """One language server: how to launch it and which files it handles.
 
     The ``command`` is spawned once per Role session and driven over stdio with
@@ -44,7 +46,7 @@ class LspServerConfig(BaseModel):
         return any(lowered.endswith(ext.lower()) for ext in self.extensions)
 
 
-class LspConfig(BaseModel):
+class LspConfig(ConfigModel):
     """Per-Role LSP policy, declared on :class:`RoleSchema`.
 
     ``servers`` lists the language servers to launch lazily on first relevant

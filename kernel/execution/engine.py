@@ -16,15 +16,19 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Protocol, TypeVar
+from typing import TYPE_CHECKING, Callable, Generic, Optional, TypeVar
 from uuid import uuid4
 
 from mote.contracts.conversation import AIMessage, CauseBy, Message
-from mote.contracts.model.turn import ModelTurn
-from mote.contracts.output.completion import CompletionDecision
+from mote.contracts.model.inference import InferenceResult
+from mote.contracts.ports.conversation.turn_context_bus import TurnContextCollector
+from mote.contracts.ports.execution.model_turn_completion import ModelTurnCompletionPolicy
+from mote.contracts.ports.execution.transaction import ExecutionOutputTransactionPort
 from mote.contracts.ports.output.evaluation import OutputEngine
+from mote.contracts.ports.task.operations import BackgroundTaskService
 from mote.contracts.tool.catalog import ToolBindingSnapshot, ToolExecutionOutcome, ToolExecutionPort
 from mote.kernel.execution.context import ExecutionContext
+from mote.kernel.execution.context_provider import BaseContextProvider
 from mote.kernel.execution.events import (
     RunCancelled,
     RunCompletionSummary,
@@ -67,11 +71,6 @@ RUN_EVENT_BUFFER_SIZE = DEFAULT_EXECUTION_LIMITS.run_event_buffer
 OutputT = TypeVar("OutputT")
 
 
-class CompletionPolicy(Protocol):
-    async def evaluate(self, turn: ModelTurn) -> CompletionDecision:
-        ...
-
-
 _PUBLIC_PHASE = {
     "restore": RunPhase.RECOVERY,
     "observe": RunPhase.OBSERVATION,
@@ -110,20 +109,20 @@ class ExecutionEngine(Generic[OutputT]):
         *,
         inference_engine: "BaseInferenceEngine",
         command_channel: "CommandChannel",
-        executor: Any,
+        executor: ToolExecutionPort[ToolExecutionOutcome],
         tool_execution_port: ToolExecutionPort[ToolExecutionOutcome],
         memory: "MessageStore",
-        context_provider: Any,
+        context_provider: BaseContextProvider,
         is_active: Callable[[], bool],
         set_active: Callable[[bool], None],
         get_bg_pool: Callable[[], Optional["BackgroundTaskService"]],
-        report_inference_result: Callable[[Any], None],
+        report_inference_result: Callable[[InferenceResult], None],
         inference_checkpoint: "InferenceCheckpointPort",
-        execution_transaction: Any,
-        turn_context_bus: Any = None,
+        execution_transaction: ExecutionOutputTransactionPort[OutputT],
+        turn_context_bus: TurnContextCollector | None = None,
         get_cwd: Optional[Callable[[], str]] = None,
         advance_turn: Optional[Callable[[], int]] = None,
-        completion_policy: "CompletionPolicy | None" = None,
+        completion_policy: ModelTurnCompletionPolicy | None = None,
         action_dispatcher: ActionDispatcher | None = None,
         output_engine: OutputEngine[OutputT] | None = None,
         graph_builder: Callable[

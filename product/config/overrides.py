@@ -8,13 +8,15 @@ Two highest-precedence input channels for the config center:
 - :class:`ConfigOverrides` is a typed, validated programmatic override bag
   (the PROGRAMMATIC layer, the very top of the precedence stack).
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
+from mote.contracts.config.base import ConfigModel
 from mote.product.config.layers import deep_merge
 
 
@@ -67,7 +69,7 @@ def parse_cli_overrides(items: Optional[Iterable[str]]) -> Dict[str, Any]:
     return data
 
 
-class ConfigOverrides(BaseModel):
+class ConfigOverrides(ConfigModel):
     """Typed, highest-precedence programmatic overrides (the PROGRAMMATIC layer).
 
     Common knobs are first-class and validated; ``extra`` is a free-form nested

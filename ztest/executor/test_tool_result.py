@@ -6,37 +6,65 @@ Pins the structural-failure contract: a plain return value is ALWAYS success;
 failure is signalled by ``raise ToolError`` or ``ToolResult(success=False)`` —
 never by sniffing the output text (so a successful output may start "Error:").
 """
+
 from __future__ import annotations
+
+from dataclasses import FrozenInstanceError
 
 import pytest
 
 from mote.contracts.tool.constants import ERROR_PREFIX
-from mote.runtime.errors import ToolError as ExceptionToolError
-from mote.runtime.tools.tool_result import ERROR_PREFIX as RESULT_ERROR_PREFIX
-from mote.runtime.tools.tool_result import FileChange, ToolError, ToolMedia, ToolResult
+from mote.contracts.tool.errors import ToolError
+from mote.contracts.tool.result import ArtifactToolPayload, JsonToolPayload, json_tool_payload
+from mote.runtime.tools.tool_result import FileChange, ToolMedia, ToolResult
 from mote.ztest.artifact_fakes import artifact_media, artifact_ref
 
 
 class TestToolResultDefaults:
+    def test_direct_json_payload_constructor_deeply_freezes(self):
+        nested = {"items": [1]}
+        payload = JsonToolPayload(nested)  # type: ignore[arg-type]
+        nested["items"].append(2)
+
+        assert payload.materialize() == {"items": [1]}
+
+    def test_nested_payload_artifact_types_fail_closed(self):
+        with pytest.raises(TypeError, match="ArtifactRef"):
+            ArtifactToolPayload(object())  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="ArtifactRef"):
+            ToolMedia(artifact=object())  # type: ignore[arg-type]
+
     def test_minimal_construction(self):
         r = ToolResult(output="hello")
         assert r.output == "hello"
         assert r.success is True
-        assert r.data is None
-        assert r.media == []
-        assert r.file_changes == []
+        assert r.payload is None
+        assert r.media == ()
+        assert r.file_changes == ()
 
     def test_media_independent_per_instance(self):
         a = ToolResult(output="a")
         b = ToolResult(output="b")
-        a.media.append(artifact_media("image", "x"))
-        # default_factory => no shared mutable default between instances.
-        assert b.media == []
+        with pytest.raises(AttributeError):
+            a.media.append(artifact_media("image", "x"))
+        assert b.media == ()
+
+    def test_result_is_frozen_and_collections_are_canonical_tuples(self):
+        result = ToolResult(
+            output="a",
+            media=[artifact_media("image", "x")],
+            file_changes=[FileChange(path="/tmp/a.py")],
+        )
+
+        assert isinstance(result.media, tuple)
+        assert isinstance(result.file_changes, tuple)
+        with pytest.raises(FrozenInstanceError):
+            result.output = "changed"  # type: ignore[misc]
 
     def test_explicit_failure(self):
-        r = ToolResult(output="nope", success=False, data={"k": 1})
+        r = ToolResult(output="nope", success=False, payload=json_tool_payload({"k": 1}))
         assert r.success is False
-        assert r.data == {"k": 1}
+        assert r.payload.materialize() == {"k": 1}
 
 
 class TestFileChange:
@@ -63,9 +91,9 @@ class TestFileChange:
     def test_file_changes_independent_per_instance(self):
         a = ToolResult(output="a")
         b = ToolResult(output="b")
-        a.file_changes.append(FileChange(path="/tmp/a.py"))
-        # default_factory => no shared mutable default between instances.
-        assert b.file_changes == []
+        with pytest.raises(AttributeError):
+            a.file_changes.append(FileChange(path="/tmp/a.py"))
+        assert b.file_changes == ()
 
 
 class TestFromToolReturn:
@@ -98,7 +126,7 @@ class TestFromToolReturn:
 class TestMedia:
     def test_no_media_is_empty(self):
         r = ToolResult(output="x")
-        assert r.media == []
+        assert r.media == ()
 
     def test_image_carries_kind_ref_and_artifact(self):
         # The producer stamps ref at the source — no path recovered from data.
@@ -156,10 +184,9 @@ class TestMedia:
             ToolMedia(kind="image")  # type: ignore[call-arg]
 
 
-class TestReExports:
-    def test_tool_error_is_the_global_exception(self):
-        # tool_result re-exports ToolError from the global exception system.
-        assert ToolError is ExceptionToolError
+class TestCanonicalOwners:
+    def test_tool_error_is_the_runtime_exception(self):
+        assert issubclass(ToolError, Exception)
 
-    def test_error_prefix_reexported(self):
-        assert RESULT_ERROR_PREFIX == ERROR_PREFIX
+    def test_error_prefix_is_owned_by_contracts(self):
+        assert ERROR_PREFIX == "Error:"

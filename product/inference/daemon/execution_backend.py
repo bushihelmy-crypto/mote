@@ -5,37 +5,73 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Callable, TypeAlias
 
 from mote.contracts.inference.attempt import InferenceAttemptRequest
 from mote.contracts.inference.events import AttemptLifecycleEvent, SessionLifecycleEvent
+from mote.contracts.inference.execution_owner import (
+    ExecutionEpochBinding,
+    ExecutionId,
+    ExecutionObjectCommand,
+    ExecutionOwnerRecord,
+    ExecutionOwnerVerification,
+    SharedExecutionVariant,
+    epoch_binding_from_permit,
+    verify_execution_owner,
+    verify_execution_permit_binding,
+)
 from mote.contracts.inference.executions import BoundExecutionRequest, SessionApplicationMessage, TransferPartRequest
 from mote.contracts.inference.persisted_event import PersistedLifecycleEvent
 from mote.contracts.inference.shared import SharedSessionCredential
 from mote.contracts.inference.wire_permit import WirePermit
 from mote.contracts.ports.inference.attempt_receipt import AttemptReceiptStore
+from mote.contracts.ports.inference.execution_owner import ExecutionOwnerRecordStore
 from mote.contracts.ports.inference.lifecycle_event import LifecycleEventStore
 from mote.contracts.ports.inference.session_receipt import SessionReceiptStore
-from mote.product.inference.daemon.rpc import gateway_v1_pb2 as _pb
+from mote.product.inference.daemon.messages import (
+    AuthorizeExecutionCommand,
+    CancelExecutionCommand,
+    EventCursor,
+    ExecutionQuery,
+    ExecutionReceiptView,
+    FiniteExecution,
+    LifecycleEvent,
+    LifecycleEventView,
+    SessionExecution,
+    SessionMessageCommand,
+    StartExecutionCommand,
+    TransferExecutionCommand,
+)
 from mote.runtime.inference.command_runtime import EmbeddedServiceCommandRuntime
 from mote.runtime.inference.runtime import EmbeddedInferenceRuntime
 from mote.runtime.inference.session_runtime import EmbeddedSessionRuntime
 from mote.runtime.inference.transfer_runtime import EmbeddedArtifactTransferRuntime
 
-pb: Any = _pb
-
 
 @dataclass(slots=True)
 class _EventJournal:
-    events: list[Any] = field(default_factory=list)
+    events: list[LifecycleEvent] = field(default_factory=list)
     terminal: bool = False
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
 
-    async def append(self, event: Any) -> None:
+    async def append(self, event: LifecycleEvent) -> None:
         async with self.condition:
             self.events.append(event)
             self.terminal = event.terminal
             self.condition.notify_all()
+
+
+@dataclass(frozen=True, slots=True)
+class _FiniteExecutionHandle:
+    execution: FiniteExecution
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionExecutionHandle:
+    execution: SessionExecution
+
+
+_ExecutionHandle: TypeAlias = _FiniteExecutionHandle | _SessionExecutionHandle
 
 
 class SharedEmbeddedExecutionBackend:
@@ -51,6 +87,8 @@ class SharedEmbeddedExecutionBackend:
         receipts: AttemptReceiptStore,
         session_receipts: SessionReceiptStore,
         events: LifecycleEventStore,
+        owners: ExecutionOwnerRecordStore,
+        epoch_provider: Callable[[], tuple[int, int]],
     ) -> None:
         self._unary = unary
         self._commands = commands
@@ -59,44 +97,54 @@ class SharedEmbeddedExecutionBackend:
         self._receipts = receipts
         self._session_receipts = session_receipts
         self._event_store = events
-        self._executions: dict[str, Any] = {}
+        self._owners = owners
+        self._epoch_provider = epoch_provider
+        self._executions: dict[str, _ExecutionHandle] = {}
         self._journals: dict[str, _EventJournal] = {}
         self._pumps: set[asyncio.Task[None]] = set()
 
-    async def start_unary(self, request: Any, credential: SharedSessionCredential) -> int:
+    async def start_unary(self, request: StartExecutionCommand, credential: SharedSessionCredential) -> int:
         canonical = InferenceAttemptRequest.model_validate_json(request.canonical_request)
         self._validate_start(request, canonical, credential, canonical.attempt_id)
         execution = await self._unary.start_attempt(canonical)
+        owner = self._owner_record(canonical.attempt_id, canonical, credential, SharedExecutionVariant.FINITE)
         return await self._register(
             canonical.attempt_id,
             canonical.generation_id,
-            execution,
+            _FiniteExecutionHandle(execution),
+            owner,
             session=False,
         )
 
-    async def start_durable_command(self, request: Any, credential: SharedSessionCredential) -> int:
+    async def start_durable_command(self, request: StartExecutionCommand, credential: SharedSessionCredential) -> int:
         canonical = BoundExecutionRequest.model_validate_json(request.canonical_request)
         self._validate_start(request, canonical, credential, canonical.execution_id)
         execution = await self._commands.start_command(canonical)
+        owner = self._owner_record(canonical.execution_id, canonical, credential, SharedExecutionVariant.FINITE)
         return await self._register(
             canonical.execution_id,
             canonical.generation_id,
-            execution,
+            _FiniteExecutionHandle(execution),
+            owner,
             session=False,
         )
 
-    async def open_session(self, request: Any, credential: SharedSessionCredential) -> int:
+    async def open_session(self, request: StartExecutionCommand, credential: SharedSessionCredential) -> int:
         canonical = BoundExecutionRequest.model_validate_json(request.canonical_request)
         self._validate_start(request, canonical, credential, canonical.execution_id)
         execution = await self._sessions.open(canonical)
+        owner = self._owner_record(canonical.execution_id, canonical, credential, SharedExecutionVariant.SESSION)
         return await self._register(
             canonical.execution_id,
             canonical.generation_id,
-            execution,
+            _SessionExecutionHandle(execution),
+            owner,
             session=True,
         )
 
-    async def execute_transfer_part(self, request: Any, credential: SharedSessionCredential) -> int:
+    async def execute_transfer_part(
+        self, request: TransferExecutionCommand, credential: SharedSessionCredential
+    ) -> int:
         canonical = TransferPartRequest.model_validate_json(request.start.canonical_request)
         self._validate_start(request.start, canonical, credential, canonical.execution_id)
         if (
@@ -107,35 +155,53 @@ class SharedEmbeddedExecutionBackend:
         ):
             raise ValueError("transfer RPC fields disagree with canonical request")
         execution = await self._transfers.execute_part(canonical)
+        owner = self._owner_record(canonical.execution_id, canonical, credential, SharedExecutionVariant.FINITE)
         return await self._register(
             canonical.execution_id,
             canonical.generation_id,
-            execution,
+            _FiniteExecutionHandle(execution),
+            owner,
             session=False,
         )
 
-    async def authorize(self, request: Any, credential: SharedSessionCredential) -> None:
-        execution = self._require_execution(request.execution_id)
-        permit = WirePermit.model_validate_json(request.wire_permit)
-        if hasattr(execution, "authorize_open"):
-            await execution.authorize_open(permit)
+    async def authorize(self, request: AuthorizeExecutionCommand, credential: SharedSessionCredential) -> None:
+        permit = request.permit
+        owner = await self._verify_owner(
+            request,
+            credential,
+            ExecutionObjectCommand.AUTHORIZE,
+            epoch=epoch_binding_from_permit(permit),
+        )
+        permit_decision = verify_execution_permit_binding(owner, permit)
+        if not permit_decision.allowed:
+            raise PermissionError(f"execution permit binding denied: {permit_decision.disposition.value}")
+        handle = self._require_execution(request.execution_id)
+        if isinstance(handle, _SessionExecutionHandle):
+            await handle.execution.authorize_open(permit)
         else:
-            await execution.authorize_wire(permit)
+            await handle.execution.authorize_wire(permit)
 
-    async def cancel(self, request: Any, credential: SharedSessionCredential) -> None:
-        execution = self._require_execution(request.execution_id)
-        if hasattr(execution, "close"):
-            await execution.close(request.reason)
+    async def cancel(self, request: CancelExecutionCommand, credential: SharedSessionCredential) -> None:
+        await self._verify_owner(request, credential, ExecutionObjectCommand.CANCEL)
+        handle = self._require_execution(request.execution_id)
+        if isinstance(handle, _SessionExecutionHandle):
+            await handle.execution.close(request.reason)
         else:
-            await execution.cancel(request.reason)
+            await handle.execution.cancel(request.reason)
 
-    async def stream_events(self, request: Any, credential: SharedSessionCredential) -> AsyncIterator[Any]:
-        journal = self._journals.get(request.execution_id)
-        cursor = request.after_sequence
+    async def stream_events(
+        self, request: EventCursor, credential: SharedSessionCredential
+    ) -> AsyncIterator[LifecycleEventView]:
+        await self._verify_owner(request, credential, ExecutionObjectCommand.STREAM_EVENTS)
+        async for event in self._stream_events_authorized(request.execution_id, request.after_sequence):
+            yield event
+
+    async def _stream_events_authorized(self, execution_id: str, cursor: int) -> AsyncIterator[LifecycleEventView]:
+        journal = self._journals.get(execution_id)
         if journal is None:
             found = False
             while True:
-                persisted = await self._event_store.read_events(request.execution_id, after_sequence=cursor)
+                persisted = await self._event_store.read_events(execution_id, after_sequence=cursor)
                 if not persisted:
                     break
                 found = True
@@ -145,7 +211,7 @@ class SharedEmbeddedExecutionBackend:
                 if len(persisted) < 256 or persisted[-1].terminal:
                     break
             if not found:
-                raise KeyError(f"unknown execution {request.execution_id}")
+                raise KeyError(f"unknown execution {execution_id}")
             return
         while True:
             async with journal.condition:
@@ -159,13 +225,14 @@ class SharedEmbeddedExecutionBackend:
             if journal.terminal:
                 return
 
-    async def query_receipt(self, request: Any, credential: SharedSessionCredential) -> Any:
+    async def query_receipt(self, request: ExecutionQuery, credential: SharedSessionCredential) -> ExecutionReceiptView:
+        await self._verify_owner(request, credential, ExecutionObjectCommand.QUERY_RECEIPT)
         generation_id = request.envelope.generation_id
         if not generation_id:
             raise ValueError("receipt query requires generation id")
         session = await self._session_receipts.get(request.execution_id, generation_id)
         if session is not None:
-            return pb.Receipt(
+            return ExecutionReceiptView(
                 execution_id=request.execution_id,
                 revision=session.revision,
                 state=session.state.value,
@@ -173,53 +240,67 @@ class SharedEmbeddedExecutionBackend:
         receipt = await self._receipts.get(request.execution_id, generation_id)
         if receipt is None:
             raise KeyError(f"unknown execution {request.execution_id}")
-        return pb.Receipt(
+        return ExecutionReceiptView(
             execution_id=request.execution_id,
             revision=receipt.revision,
             state=receipt.state.value,
             terminal_artifact_reference=receipt.terminal_artifact_reference or "",
         )
 
-    def reconcile(self, request: Any, credential: SharedSessionCredential) -> AsyncIterator[Any]:
-        return self.stream_events(request, credential)
+    async def reconcile(
+        self, request: ExecutionQuery, credential: SharedSessionCredential
+    ) -> AsyncIterator[LifecycleEventView]:
+        await self._verify_owner(request, credential, ExecutionObjectCommand.RECONCILE)
+        async for event in self._stream_events_authorized(request.execution_id, 0):
+            yield event
 
     async def session(
         self,
-        requests: AsyncIterator[Any],
+        requests: AsyncIterator[SessionMessageCommand],
         credential: SharedSessionCredential,
-    ) -> AsyncIterator[Any]:
-        execution_id: str | None = None
+    ) -> AsyncIterator[LifecycleEventView]:
+        try:
+            first = await anext(requests)
+        except StopAsyncIteration:
+            return
+        execution_id = first.execution_id
+        await self._send_session_message(first, credential)
 
         async def consume() -> None:
-            nonlocal execution_id
             async for request in requests:
-                if execution_id is None:
-                    execution_id = request.execution_id
-                elif request.execution_id != execution_id:
+                if request.execution_id != execution_id:
                     raise ValueError("session stream changed execution id")
-                execution = self._require_execution(request.execution_id)
-                message = SessionApplicationMessage.model_validate_json(request.payload)
-                permit = WirePermit.model_validate_json(request.wire_permit)
-                await execution.send(message, permit)
+                await self._send_session_message(request, credential)
 
         consumer = asyncio.create_task(consume())
         try:
-            while execution_id is None and not consumer.done():
-                await asyncio.sleep(0)
-            if execution_id is None:
-                await consumer
-                return
-            request = pb.CursorRequest(
-                execution_id=execution_id,
-                after_sequence=0,
-            )
-            async for event in self.stream_events(request, credential):
+            async for event in self._stream_events_authorized(execution_id, 0):
                 yield event
             await consumer
         finally:
             if not consumer.done():
                 consumer.cancel()
                 await asyncio.gather(consumer, return_exceptions=True)
+
+    async def _send_session_message(
+        self,
+        request: SessionMessageCommand,
+        credential: SharedSessionCredential,
+    ) -> None:
+        permit = request.permit
+        owner = await self._verify_owner(
+            request,
+            credential,
+            ExecutionObjectCommand.SEND_SESSION_MESSAGE,
+            epoch=epoch_binding_from_permit(permit),
+        )
+        permit_decision = verify_execution_permit_binding(owner, permit)
+        if not permit_decision.allowed:
+            raise PermissionError(f"execution permit binding denied: {permit_decision.disposition.value}")
+        handle = self._require_execution(request.execution_id)
+        if not isinstance(handle, _SessionExecutionHandle):
+            raise PermissionError("session message targets a finite execution")
+        await handle.execution.send(request.message, permit)
 
     async def aclose(self) -> None:
         await self._unary.aclose()
@@ -245,18 +326,22 @@ class SharedEmbeddedExecutionBackend:
         self,
         execution_id: str,
         generation_id: str,
-        execution: Any,
+        handle: _ExecutionHandle,
+        owner: ExecutionOwnerRecord,
         *,
         session: bool,
     ) -> int:
+        committed_owner = await self._owners.put_owner_record(owner)
+        if committed_owner != owner:
+            raise PermissionError("execution owner binding changed during registration")
         existing = self._executions.get(execution_id)
-        if existing is not None and existing is not execution:
+        if existing is not None and existing != handle:
             raise ValueError("execution id is already registered")
-        self._executions[execution_id] = execution
+        self._executions[execution_id] = handle
         if execution_id not in self._journals:
             journal = _EventJournal()
             self._journals[execution_id] = journal
-            task = asyncio.create_task(self._pump(execution, journal))
+            task = asyncio.create_task(self._pump(handle, journal))
             self._pumps.add(task)
             task.add_done_callback(self._pumps.discard)
         if session:
@@ -267,15 +352,76 @@ class SharedEmbeddedExecutionBackend:
             raise RuntimeError("runtime accepted execution without durable receipt")
         return receipt.revision
 
-    async def _pump(self, execution: Any, journal: _EventJournal) -> None:
-        async for event in execution:
+    def _owner_record(
+        self,
+        execution_id: str,
+        canonical: InferenceAttemptRequest | BoundExecutionRequest,
+        credential: SharedSessionCredential,
+        variant: SharedExecutionVariant,
+    ) -> ExecutionOwnerRecord:
+        backup_epoch, admission_epoch = self._epoch_provider()
+        return ExecutionOwnerRecord(
+            record_revision=1,
+            execution_id=ExecutionId(execution_id),
+            variant=variant,
+            principal=canonical.principal,
+            application_scope=credential.application_id,
+            credential_scope=credential.session_id,
+            generation_id=canonical.generation_id,
+            generation_artifact_digest=canonical.generation_artifact_digest,
+            epoch=ExecutionEpochBinding(
+                backup_epoch=backup_epoch,
+                admission_epoch=admission_epoch,
+                permit_trust_revision=credential.permit_trust_revision,
+            ),
+        )
+
+    async def _verify_owner(
+        self,
+        request: ExecutionQuery,
+        credential: SharedSessionCredential,
+        command: ExecutionObjectCommand,
+        *,
+        epoch: ExecutionEpochBinding | None = None,
+    ) -> ExecutionOwnerRecord:
+        execution_id = ExecutionId(request.execution_id)
+        record = await self._owners.get_owner_record(execution_id)
+        if record is None:
+            raise KeyError(f"unknown execution {execution_id}")
+        if epoch is None:
+            backup_epoch, admission_epoch = self._epoch_provider()
+            epoch = ExecutionEpochBinding(
+                backup_epoch=backup_epoch,
+                admission_epoch=admission_epoch,
+                permit_trust_revision=credential.permit_trust_revision,
+            )
+        envelope = request.envelope
+        decision = verify_execution_owner(
+            record,
+            ExecutionOwnerVerification(
+                execution_id=execution_id,
+                command=command,
+                principal=credential.principal,
+                application_scope=credential.application_id,
+                credential_scope=credential.session_id,
+                generation_id=envelope.generation_id,
+                generation_artifact_digest=envelope.generation_artifact_digest,
+                epoch=epoch,
+            ),
+        )
+        if not decision.allowed:
+            raise PermissionError(f"execution owner verification denied: {decision.disposition.value}")
+        return record
+
+    async def _pump(self, handle: _ExecutionHandle, journal: _EventJournal) -> None:
+        async for event in handle.execution:
             await self._event_store.append_event(self._persisted_event(event))
             await journal.append(event)
 
     def _validate_start(
         self,
-        request: Any,
-        canonical: Any,
+        request: StartExecutionCommand,
+        canonical: InferenceAttemptRequest | BoundExecutionRequest | TransferPartRequest,
         credential: SharedSessionCredential,
         execution_id: str,
     ) -> None:
@@ -290,7 +436,7 @@ class SharedEmbeddedExecutionBackend:
         ):
             raise ValueError("RPC generation binding disagrees with canonical request")
 
-    def _require_execution(self, execution_id: str) -> Any:
+    def _require_execution(self, execution_id: str) -> _ExecutionHandle:
         try:
             return self._executions[execution_id]
         except KeyError as exc:
@@ -306,7 +452,7 @@ class SharedEmbeddedExecutionBackend:
     def _persisted_event(
         event: AttemptLifecycleEvent | SessionLifecycleEvent,
     ) -> PersistedLifecycleEvent:
-        execution_id = getattr(event, "attempt_id", None) or getattr(event, "session_id")
+        execution_id = event.attempt_id if isinstance(event, AttemptLifecycleEvent) else event.session_id
         return PersistedLifecycleEvent(
             execution_id=execution_id,
             sequence=event.sequence,
@@ -317,8 +463,8 @@ class SharedEmbeddedExecutionBackend:
         )
 
     @staticmethod
-    def _stored_rpc_event(event: PersistedLifecycleEvent) -> Any:
-        return pb.LifecycleEvent(
+    def _stored_rpc_event(event: PersistedLifecycleEvent) -> LifecycleEventView:
+        return LifecycleEventView(
             execution_id=event.execution_id,
             sequence=event.sequence,
             receipt_revision=event.receipt_revision,
@@ -327,9 +473,9 @@ class SharedEmbeddedExecutionBackend:
         )
 
     @staticmethod
-    def _rpc_event(event: AttemptLifecycleEvent | SessionLifecycleEvent) -> Any:
-        execution_id = getattr(event, "attempt_id", None) or getattr(event, "session_id")
-        return pb.LifecycleEvent(
+    def _rpc_event(event: AttemptLifecycleEvent | SessionLifecycleEvent) -> LifecycleEventView:
+        execution_id = event.attempt_id if isinstance(event, AttemptLifecycleEvent) else event.session_id
+        return LifecycleEventView(
             execution_id=execution_id,
             sequence=event.sequence,
             receipt_revision=event.receipt_revision,

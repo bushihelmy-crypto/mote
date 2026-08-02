@@ -6,12 +6,13 @@ The registry is the pluggable-vendor seam for web search. Each Application owns
 an isolated catalog. The built-in ``"provider"`` backend wraps
 the Role's provider-native ``web_search`` capability. All offline.
 """
+
 from __future__ import annotations
 
 import pytest
 
+from mote.contracts.tool.errors import ToolNotConfiguredError
 from mote.product.web_search.registry import ProviderSearchBackend, SearchBackend, builtin_search_backend_registry
-from mote.runtime.errors import ToolNotConfiguredError
 
 pytestmark = pytest.mark.asyncio
 

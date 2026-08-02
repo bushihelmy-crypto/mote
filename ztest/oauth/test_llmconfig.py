@@ -1,14 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for oauth-aware LLMConfig key validation."""
+
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
+from mote.contracts.config.errors import MissingAPIKeyError
 from mote.contracts.config.model.llm import LLMConfig
 from mote.contracts.config.model.oauth import OAuthProviderConfig
-from mote.runtime.errors import MissingAPIKeyError
 
 
 def _oauth() -> OAuthProviderConfig:

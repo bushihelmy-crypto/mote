@@ -11,6 +11,18 @@ import grpc
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from mote.contracts.inference.shared import ProtocolNegotiationResult, SharedHandshake, SharedSessionCredential
+from mote.contracts.inference.wire_permit import WirePermit
+from mote.product.inference.daemon.messages import (
+    DaemonReadinessView,
+    ExecutionReceiptView,
+    GenerationStatusView,
+    LifecycleEventView,
+    RpcEnvelopeBinding,
+    SessionMessageCommand,
+    StartExecutionCommand,
+    StartExecutionReceipt,
+    TransferExecutionCommand,
+)
 from mote.product.inference.daemon.rpc import gateway_v1_pb2 as _pb
 from mote.product.inference.daemon.rpc import gateway_v1_pb2_grpc as rpc
 from mote.product.inference.security.permit_issuer import ProductWirePermitIssuer
@@ -122,22 +134,43 @@ class SharedGrpcClient:
             trust_revision=credential.permit_trust_revision,
         )
 
-    async def start_unary(self, request: Any, *, timeout: float | None = None) -> Any:
-        return await self._execution.StartUnary(request, timeout=timeout)
+    async def start_unary(
+        self, request: StartExecutionCommand, *, timeout: float | None = None
+    ) -> StartExecutionReceipt:
+        response = await self._execution.StartUnary(self._start_pb(request), timeout=timeout)
+        return StartExecutionReceipt(response.execution_id, response.receipt_revision)
 
-    async def start_durable_command(self, request: Any, *, timeout: float | None = None) -> Any:
-        return await self._execution.StartDurableCommand(request, timeout=timeout)
+    async def start_durable_command(
+        self, request: StartExecutionCommand, *, timeout: float | None = None
+    ) -> StartExecutionReceipt:
+        response = await self._execution.StartDurableCommand(self._start_pb(request), timeout=timeout)
+        return StartExecutionReceipt(response.execution_id, response.receipt_revision)
 
-    async def open_session(self, request: Any, *, timeout: float | None = None) -> Any:
-        return await self._execution.OpenSession(request, timeout=timeout)
+    async def open_session(
+        self, request: StartExecutionCommand, *, timeout: float | None = None
+    ) -> StartExecutionReceipt:
+        response = await self._execution.OpenSession(self._start_pb(request), timeout=timeout)
+        return StartExecutionReceipt(response.execution_id, response.receipt_revision)
 
-    async def execute_transfer_part(self, request: Any, *, timeout: float | None = None) -> Any:
-        return await self._execution.ExecuteTransferPart(request, timeout=timeout)
+    async def execute_transfer_part(
+        self, request: TransferExecutionCommand, *, timeout: float | None = None
+    ) -> StartExecutionReceipt:
+        response = await self._execution.ExecuteTransferPart(
+            pb.TransferPartRequest(
+                start=self._start_pb(request.start),
+                part_number=request.part_number,
+                offset=request.offset,
+                length=request.length,
+                content_digest=request.content_digest,
+            ),
+            timeout=timeout,
+        )
+        return StartExecutionReceipt(response.execution_id, response.receipt_revision)
 
     async def authorize_wire(
         self,
         execution_id: str,
-        wire_permit: bytes,
+        permit: WirePermit,
         *,
         generation_id: str,
         timeout: float | None = None,
@@ -149,7 +182,7 @@ class SharedGrpcClient:
                     idempotency_key=f"authorize:{execution_id}",
                 ),
                 execution_id=execution_id,
-                wire_permit=wire_permit,
+                wire_permit=permit.model_dump_json().encode(),
             ),
             timeout=timeout,
         )
@@ -176,11 +209,24 @@ class SharedGrpcClient:
             timeout=timeout,
         )
 
-    def session(self, requests: AsyncIterator[Any]) -> AsyncIterator[Any]:
-        return self._execution.Session(requests)
+    async def session(self, requests: AsyncIterator[SessionMessageCommand]) -> AsyncIterator[LifecycleEventView]:
+        async def encoded():
+            async for request in requests:
+                yield pb.SessionMessage(
+                    envelope=self._envelope_pb(request.envelope),
+                    execution_id=request.execution_id,
+                    application_sequence=request.application_sequence,
+                    payload=request.message.model_dump_json().encode(),
+                    wire_permit=request.permit.model_dump_json().encode(),
+                )
 
-    async def stage_generation(self, artifact: bytes, *, generation_id: str, artifact_digest: str) -> Any:
-        return await self._control.StageGeneration(
+        async for event in self._execution.Session(encoded()):
+            yield self._event_view(event)
+
+    async def stage_generation(
+        self, artifact: bytes, *, generation_id: str, artifact_digest: str
+    ) -> GenerationStatusView:
+        response = await self._control.StageGeneration(
             pb.GenerationRequest(
                 envelope=self.envelope(
                     generation_id=generation_id,
@@ -190,9 +236,10 @@ class SharedGrpcClient:
                 generation_artifact=artifact,
             )
         )
+        return GenerationStatusView(response.generation_id, response.artifact_digest, response.state)
 
-    async def observe_generation(self, generation_id: str, *, artifact_digest: str = "") -> Any:
-        return await self._control.ObserveGeneration(
+    async def observe_generation(self, generation_id: str, *, artifact_digest: str = "") -> GenerationStatusView:
+        response = await self._control.ObserveGeneration(
             pb.GenerationRequest(
                 envelope=self.envelope(
                     generation_id=generation_id,
@@ -201,9 +248,11 @@ class SharedGrpcClient:
                 )
             )
         )
+        return GenerationStatusView(response.generation_id, response.artifact_digest, response.state)
 
-    async def get_readiness(self, *, timeout: float | None = None) -> Any:
-        return await self._control.GetReadiness(pb.Empty(), timeout=timeout)
+    async def get_readiness(self, *, timeout: float | None = None) -> DaemonReadinessView:
+        response = await self._control.GetReadiness(pb.Empty(), timeout=timeout)
+        return DaemonReadinessView(response.ready, tuple(sorted(response.components.items())))
 
     async def backup(self, destination: Path, *, consistency: str, timeout: float | None = None) -> Any:
         return await self._control.Backup(
@@ -245,8 +294,8 @@ class SharedGrpcClient:
         *,
         generation_id: str,
         timeout: float | None = None,
-    ) -> Any:
-        return await self._execution.QueryReceipt(
+    ) -> ExecutionReceiptView:
+        response = await self._execution.QueryReceipt(
             pb.ReceiptRequest(
                 envelope=self.envelope(
                     generation_id=generation_id,
@@ -255,6 +304,12 @@ class SharedGrpcClient:
                 execution_id=execution_id,
             ),
             timeout=timeout,
+        )
+        return ExecutionReceiptView(
+            response.execution_id,
+            response.revision,
+            response.state,
+            response.terminal_artifact_reference,
         )
 
     async def resume_events(
@@ -265,7 +320,7 @@ class SharedGrpcClient:
         after_sequence: int,
         receipt_revision: int,
         timeout: float | None = None,
-    ) -> AsyncIterator[Any]:
+    ) -> AsyncIterator[LifecycleEventView]:
         """Query durable truth, then resume and suppress at-least-once duplicates."""
         receipt = await self.query_receipt(execution_id, generation_id=generation_id, timeout=timeout)
         revision = max(receipt_revision, receipt.revision)
@@ -279,11 +334,11 @@ class SharedGrpcClient:
             after_sequence=cursor,
             receipt_revision=revision,
         )
-        pending: dict[int, Any] = {}
+        pending: dict[int, LifecycleEventView] = {}
         async for event in self._execution.StreamEvents(request, timeout=timeout):
             if event.execution_id != execution_id or event.sequence <= cursor:
                 continue
-            pending[event.sequence] = event
+            pending[event.sequence] = self._event_view(event)
             if len(pending) > 256:
                 raise RuntimeError("Shared event reorder window exceeded")
             while cursor + 1 in pending:
@@ -299,3 +354,33 @@ class SharedGrpcClient:
         if self._credential is None:
             raise RuntimeError("Shared gRPC client is not authenticated")
         return self._credential
+
+    def _envelope_pb(self, value: RpcEnvelopeBinding) -> Any:
+        return self.envelope(
+            generation_id=value.generation_id,
+            generation_artifact_digest=value.generation_artifact_digest,
+            deadline_utc=value.deadline_utc,
+            remaining_seconds_at_send=value.remaining_seconds_at_send,
+            sent_at_utc=value.sent_at_utc,
+            traceparent=value.traceparent,
+            idempotency_key=value.idempotency_key,
+        )
+
+    def _start_pb(self, value: StartExecutionCommand) -> Any:
+        return pb.StartRequest(
+            envelope=self._envelope_pb(value.envelope),
+            execution_id=value.execution_id,
+            operation=value.operation,
+            canonical_request=value.canonical_request,
+            artifact_reference=value.artifact_reference,
+        )
+
+    @staticmethod
+    def _event_view(value: Any) -> LifecycleEventView:
+        return LifecycleEventView(
+            execution_id=value.execution_id,
+            sequence=value.sequence,
+            receipt_revision=value.receipt_revision,
+            event_type=value.event_type,
+            payload=bytes(value.payload),
+        )

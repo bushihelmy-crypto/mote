@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,6 +30,7 @@ from mote.contracts.service import (
     ServiceCallPlannedRecord,
     ServiceCallRecovery,
     ServiceCallState,
+    ServiceCallSuspendedRecord,
     ServiceCompleted,
     ServiceDecisionRecord,
     ServiceEndpointDescriptor,
@@ -42,16 +42,19 @@ from mote.contracts.service import (
     ServiceReceipt,
     ServiceReceiptAcceptedRecord,
     ServiceResponse,
+    ServiceResumeHandle,
 )
 from mote.contracts.service.errors import (
     ServiceCallDeadlineExceededError,
     ServiceCallExhaustedError,
     ServiceCallInDoubtError,
+    ServiceCallWaitingRemoteError,
     ServiceRouteUnavailableError,
 )
 from mote.runtime.resilience.admission import AdmissionPermit, AdmissionRejectedError, ResourceAdmissionController
 from mote.runtime.resilience.failover.policy import DefaultFailoverPolicy, FailoverPolicy
 from mote.runtime.service_gateway.planner import ServiceFailoverPlanner
+from mote.runtime.service_gateway.reconciler import HostedServiceReconciler
 from mote.runtime.telemetry.logging import log_class
 
 
@@ -84,6 +87,26 @@ class RuntimeServiceGateway:
         self._admission = admission_controller or ResourceAdmissionController()
         self._policy = policy or DefaultFailoverPolicy()
         self._locks: dict[str, asyncio.Lock] = {}
+        self._reconciler: HostedServiceReconciler | None = None
+
+    def activate_reconciliation(
+        self,
+        *,
+        scan_interval_seconds: float = 5.0,
+        page_size: int = 64,
+        concurrency: int = 4,
+    ) -> None:
+        if self._reconciler is not None:
+            raise RuntimeError("hosted-service reconciliation already activated")
+        reconciler = HostedServiceReconciler(
+            self,
+            self._journal,
+            scan_interval_seconds=scan_interval_seconds,
+            page_size=page_size,
+            concurrency=concurrency,
+        )
+        reconciler.start()
+        self._reconciler = reconciler
 
     def supports_route(self, route_id: str, capability: str) -> bool:
         try:
@@ -112,28 +135,52 @@ class RuntimeServiceGateway:
     ) -> ResolvedServiceResponse:
         return await self._serialized(invocation, resume_only=True)
 
+    async def reconcile(self, invocation: ServiceInvocation) -> ResolvedServiceResponse:
+        return await self._serialized(invocation, resume_only=True, reconcile_only=True)
+
     async def _serialized(
         self,
         invocation: ServiceInvocation,
         *,
         resume_only: bool,
+        reconcile_only: bool = False,
     ) -> ResolvedServiceResponse:
         lock = self._locks.setdefault(invocation.service_call_id, asyncio.Lock())
         try:
             async with lock:
-                records = self._journal.records(invocation.service_call_id)
-                if records:
-                    recovery = self._journal.recover(invocation.service_call_id)
-                    self._validate_invocation(invocation, recovery)
-                    return await self._resume(invocation, recovery)
-                if resume_only:
-                    raise ServiceRouteUnavailableError(
-                        "service call has no durable journal",
-                        service_call_id=invocation.service_call_id,
-                    )
-                plan = self._planner.plan(invocation)
-                await self._journal.append(self._planned(invocation, plan))
-                return await self._run_new(invocation, plan, started_at=time.monotonic())
+                async with self._journal.claim(invocation.service_call_id):
+                    try:
+                        records = self._journal.records(invocation.service_call_id)
+                        if records:
+                            recovery = self._journal.recover(invocation.service_call_id)
+                            self._validate_invocation(invocation, recovery)
+                            return await self._resume(
+                                invocation,
+                                recovery,
+                                reconcile_only=reconcile_only,
+                            )
+                        if resume_only:
+                            raise ServiceRouteUnavailableError(
+                                "service call has no durable journal",
+                                service_call_id=invocation.service_call_id,
+                            )
+                        plan = self._planner.plan(invocation)
+                        await self._journal.append(self._planned(invocation, plan))
+                        return await self._run_new(invocation, plan, started_at=time.monotonic())
+                    except ServiceCallDeadlineExceededError:
+                        if reconcile_only:
+                            raise
+                        handle = await self._suspend_waiting_remote(invocation.service_call_id)
+                        if handle is None:
+                            raise
+                        raise ServiceCallWaitingRemoteError(
+                            "accepted service operation remains owned after caller deadline",
+                            resume_handle=handle,
+                        ) from None
+                    except asyncio.CancelledError:
+                        task = asyncio.create_task(self._settle_caller_cancellation(invocation.service_call_id))
+                        await asyncio.shield(task)
+                        raise
         finally:
             if not lock.locked() and self._locks.get(invocation.service_call_id) is lock:
                 self._locks.pop(invocation.service_call_id, None)
@@ -142,12 +189,14 @@ class RuntimeServiceGateway:
         self,
         invocation: ServiceInvocation,
         recovery: ServiceCallRecovery,
+        *,
+        reconcile_only: bool = False,
     ) -> ResolvedServiceResponse:
         terminal = recovery.terminal
         if terminal is not None:
             return self._resolve_terminal(terminal)
         plan = self._plan_for_recovery(invocation, recovery)
-        started_at = _monotonic_start(recovery.plan.root_started_at)
+        started_at = time.monotonic() if reconcile_only else _monotonic_start(recovery.plan.root_started_at)
         finished_ids = {record.attempt_id for record in recovery.attempt_finishes}
         open_attempt = next(
             (record for record in reversed(recovery.attempt_starts) if record.attempt_id not in finished_ids),
@@ -404,9 +453,20 @@ class RuntimeServiceGateway:
     ) -> ResolvedServiceResponse:
         current = receipt
         while True:
+            if self._journal.cancellation_requested(invocation.service_call_id):
+                await self._settle_caller_cancellation(invocation.service_call_id)
+                raise ServiceCallExhaustedError(
+                    "service call was explicitly cancelled",
+                    service_call_id=invocation.service_call_id,
+                )
             self._ensure_deadline(plan, started_at, invocation.service_call_id)
             if current.poll_after_seconds:
-                await self._backoff(current.poll_after_seconds, plan, started_at)
+                await self._wait_poll_backoff(
+                    current.poll_after_seconds,
+                    invocation.service_call_id,
+                    plan,
+                    started_at,
+                )
             permit = await self._wait_for_admission(
                 target,
                 plan,
@@ -554,63 +614,114 @@ class RuntimeServiceGateway:
             service_call_id=invocation.service_call_id,
         )
 
-    async def cancel(self, service_call_id: str) -> bool:
-        lock = self._locks.setdefault(service_call_id, asyncio.Lock())
+    async def _suspend_waiting_remote(self, service_call_id: str) -> ServiceResumeHandle | None:
+        records = self._journal.records(service_call_id)
+        if not records:
+            return None
+        recovery = self._journal.recover(service_call_id)
+        if recovery.terminal is not None:
+            return None
+        finished = {item.attempt_id for item in recovery.attempt_finishes}
+        attempt = next(
+            (item for item in reversed(recovery.attempt_starts) if item.attempt_id not in finished),
+            None,
+        )
+        if attempt is None or not any(item.attempt_id == attempt.attempt_id for item in recovery.receipts):
+            return None
+        await self._journal.append(
+            ServiceCallSuspendedRecord(
+                service_call_id=service_call_id,
+                attempt_id=attempt.attempt_id,
+                resume_generation=attempt.resume_generation,
+            )
+        )
+        return ServiceResumeHandle(
+            service_call_id=service_call_id,
+            stream_revision=len(records) + 1,
+        )
+
+    async def _settle_caller_cancellation(self, service_call_id: str) -> bool:
+        recovery = self._journal.recover(service_call_id)
+        if recovery.terminal is not None:
+            return recovery.terminal.state is ServiceCallState.CANCELLED
+        finished = {item.attempt_id for item in recovery.attempt_finishes}
+        attempt = next(
+            (item for item in reversed(recovery.attempt_starts) if item.attempt_id not in finished),
+            None,
+        )
+        if attempt is None:
+            return False
+        receipt_record = next(
+            (item for item in reversed(recovery.receipts) if item.attempt_id == attempt.attempt_id),
+            None,
+        )
+        if receipt_record is None:
+            return False
+        plan = self._plan_from_record(recovery.plan)
+        target = self._target_for_started(plan, attempt)
         try:
-            async with lock:
-                records = self._journal.records(service_call_id)
-                if not records:
-                    return False
-                recovery = self._journal.recover(service_call_id)
-                if recovery.terminal is not None:
-                    return recovery.terminal.state is ServiceCallState.CANCELLED
-                finished_ids = {item.attempt_id for item in recovery.attempt_finishes}
-                attempt = next(
-                    (item for item in reversed(recovery.attempt_starts) if item.attempt_id not in finished_ids),
-                    None,
-                )
-                if attempt is None:
-                    return False
-                receipt_record = next(
-                    (item for item in reversed(recovery.receipts) if item.attempt_id == attempt.attempt_id),
-                    None,
-                )
-                if receipt_record is None:
-                    return False
-                plan = self._plan_from_record(recovery.plan)
-                target = self._target_for_started(plan, attempt)
+            async with asyncio.timeout(plan.budget.single_attempt_timeout_seconds):
                 await target.adapter.cancel_once(
                     receipt_record.receipt,
                     target.endpoint,
                     timeout_seconds=plan.budget.single_attempt_timeout_seconds,
                 )
-                await self._journal.append(
-                    ServiceAttemptFinishedRecord(
-                        service_call_id=service_call_id,
-                        attempt_id=attempt.attempt_id,
-                        ordinal=attempt.ordinal,
-                        resume_generation=attempt.resume_generation,
-                        state=AttemptState.CANCELLED,
-                    )
-                )
-                await self._journal.append(
-                    ServiceCallFinishedRecord(
-                        service_call_id=service_call_id,
-                        state=ServiceCallState.CANCELLED,
-                    )
-                )
-                return True
+        except Exception:
+            failure = _unknown_failure("remote service cancellation is unknown")
+            await self._finish_in_doubt(
+                ServiceInvocation(
+                    service_call_id=recovery.plan.service_call_id,
+                    route_id=recovery.plan.route_id,
+                    capability=recovery.plan.capability,
+                    payload=recovery.plan.payload,
+                    semantics=recovery.plan.semantics,
+                    idempotency_key=recovery.plan.idempotency_key,
+                ),
+                attempt,
+                failure,
+            )
+            return False
+        await self._journal.append(
+            ServiceAttemptFinishedRecord(
+                service_call_id=service_call_id,
+                attempt_id=attempt.attempt_id,
+                ordinal=attempt.ordinal,
+                resume_generation=attempt.resume_generation,
+                state=AttemptState.CANCELLED,
+            )
+        )
+        await self._journal.append(
+            ServiceCallFinishedRecord(
+                service_call_id=service_call_id,
+                state=ServiceCallState.CANCELLED,
+            )
+        )
+        return True
+
+    async def cancel(self, service_call_id: str) -> bool:
+        if not self._journal.records(service_call_id):
+            return False
+        await self._journal.request_cancel(service_call_id)
+        lock = self._locks.setdefault(service_call_id, asyncio.Lock())
+        try:
+            async with lock:
+                async with self._journal.claim(service_call_id):
+                    records = self._journal.records(service_call_id)
+                    if not records:
+                        return False
+                    recovery = self._journal.recover(service_call_id)
+                    if recovery.terminal is not None:
+                        return recovery.terminal.state is ServiceCallState.CANCELLED
+                    return await self._settle_caller_cancellation(service_call_id)
         finally:
             if not lock.locked() and self._locks.get(service_call_id) is lock:
                 self._locks.pop(service_call_id, None)
 
     async def aclose(self) -> None:
-        close = getattr(self._resolver, "aclose", None)
-        if close is None:
-            return
-        result = close()
-        if inspect.isawaitable(result):
-            await result
+        if self._reconciler is not None:
+            await self._reconciler.aclose()
+            self._reconciler = None
+        await self._resolver.aclose()
 
     def _targets(self, plan: ServicePlan) -> tuple[_Target, ...]:
         targets: list[_Target] = []
@@ -883,6 +994,25 @@ class RuntimeServiceGateway:
         if delay:
             await asyncio.sleep(delay)
 
+    async def _wait_poll_backoff(
+        self,
+        requested: float,
+        service_call_id: str,
+        plan: ServicePlan,
+        started_at: float,
+    ) -> None:
+        delay = min(max(requested, 0.0), plan.budget.max_backoff_seconds)
+        deadline = time.monotonic() + delay
+        while time.monotonic() < deadline:
+            self._ensure_deadline(plan, started_at, service_call_id)
+            if self._journal.cancellation_requested(service_call_id):
+                await self._settle_caller_cancellation(service_call_id)
+                raise ServiceCallExhaustedError(
+                    "service call was explicitly cancelled",
+                    service_call_id=service_call_id,
+                )
+            await asyncio.sleep(min(deadline - time.monotonic(), 0.25))
+
     @staticmethod
     def _attempt_timeout(plan: ServicePlan, started_at: float) -> float:
         remaining = plan.budget.total_deadline_seconds - (time.monotonic() - started_at)
@@ -910,6 +1040,7 @@ class RuntimeServiceGateway:
             plan_id=plan.plan_id,
             route_id=invocation.route_id,
             capability=invocation.capability,
+            payload=invocation.payload,
             config_revision=plan.config_revision,
             endpoint_ids=tuple(item.endpoint_id for item in plan.endpoints),
             budget=plan.budget,

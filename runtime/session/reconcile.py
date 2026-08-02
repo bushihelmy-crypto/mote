@@ -46,7 +46,7 @@ from mote.contracts.conversation.fields import TOOL_CALL_ID, TOOL_CALLS
 _STARTED = "started"
 
 #: The replay-safe side-effect classes (mirrors ``ToolEffect.PURE``/``LOCAL``
-#: values, kept local so ``session`` needs no import of ``common.schema``). A
+#: values, kept local so ``session`` needs no import of an unrelated schema owner). A
 #: dangling ``started`` call of one of these left no unrecoverable external
 #: effect, so it is safe to re-run; any other effect (EXTERNAL, or an unknown/
 #: missing value — fail-closed) is guarded against blind replay.
@@ -80,24 +80,20 @@ class StepRecordView(Protocol):
     """
 
     @property
-    def status(self) -> str:
-        ...
+    def status(self) -> str: ...
 
     @property
-    def payload(self) -> Optional[str]:
-        ...
+    def payload(self) -> Optional[str]: ...
 
     @property
-    def effect(self) -> str:
-        ...
+    def effect(self) -> str: ...
 
 
 @runtime_checkable
 class LedgerView(Protocol):
     """The RunJournal slice needed to read one call's latest record."""
 
-    def replay(self, tool_call_id: str) -> Optional[StepRecordView]:
-        ...
+    def replay(self, tool_call_id: str) -> Optional[StepRecordView]: ...
 
 
 @dataclass

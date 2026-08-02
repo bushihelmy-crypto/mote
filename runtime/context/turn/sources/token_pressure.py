@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional, Protocol, Union
 
+from mote.contracts.conversation.context import TokenState
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 
 
@@ -30,8 +31,7 @@ class _TokenStateProvider(Protocol):
     ``ContextManager``) keeps the source trivially fakeable in tests.
     """
 
-    def token_state(self) -> object:
-        ...
+    def token_state(self) -> TokenState | None: ...
 
 
 class TokenPressureContextSource:
@@ -66,9 +66,9 @@ class TokenPressureContextSource:
         if provider is None:
             return None
         state = provider.token_state()
-        if state is None or not getattr(state, "above_warning", False):
+        if state is None or not state.above_warning:
             return None
-        percent = getattr(state, "percent_left", 0)
+        percent = state.percent_left
         return (
             "# Context budget\n"
             f"The context window is filling up (~{percent}% headroom left before "

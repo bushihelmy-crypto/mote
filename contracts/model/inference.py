@@ -5,53 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, JsonValue
 
+from mote.contracts.conversation import Message
+from mote.contracts.model.invocation import CanonicalToolCall, CanonicalToolDefinition, ResponseMode
 from mote.contracts.model.topology import RouteId
-
-
-class CanonicalToolCall(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    id: str = ""
-    command_name: str
-    args: dict[str, Any] = Field(default_factory=dict)
-
-    @property
-    def call_id(self) -> str:
-        return self.id
-
-    @property
-    def name(self) -> str:
-        return self.command_name
-
-    @property
-    def arguments(self) -> dict[str, Any]:
-        return self.args
-
-    def __getitem__(self, key: str) -> Any:
-        return getattr(self, key)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return getattr(self, key, default)
 
 
 class InferenceResult(BaseModel):
     content: str | None = ""
-    tool_calls: list[dict[str, Any]] | None = None
+    tool_calls: tuple[CanonicalToolCall, ...] | None = None
     structured_value: Any | None = None
-
-    @field_validator("tool_calls", mode="before")
-    @classmethod
-    def normalize_tool_calls(cls, value: Any) -> Any:
-        if value is None:
-            return None
-        normalized = []
-        for item in value:
-            data = item.model_dump() if isinstance(item, BaseModel) else dict(item)
-            data["args"] = data.get("args") or {}
-            normalized.append(data)
-        return normalized
 
     @property
     def text(self) -> str:
@@ -130,13 +94,39 @@ class ResolvedInferenceTarget:
 @dataclass(frozen=True, slots=True)
 class FinalizedInferenceRequest:
     model_call_id: str
-    payload: Any
-    messages: tuple[dict[str, Any], ...] = ()
+    payload: "FinalizedGenerateRequest"
     protocol_fingerprint: str = ""
     vocabulary_fingerprint: str = ""
     tool_projection_fingerprint: str = ""
     prompt_section_set_fingerprint: str = ""
     request_fingerprint: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.model_call_id:
+            raise ValueError("finalized inference request requires a model call identity")
+        if not isinstance(self.payload, FinalizedGenerateRequest):
+            raise TypeError("finalized inference request only accepts a generate request")
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizedGenerateRequest:
+    messages: tuple[Message, ...]
+    task: str
+    system_prompt: str = ""
+    tools: tuple[CanonicalToolDefinition, ...] = ()
+    output_schema: dict[str, JsonValue] | None = None
+    response_mode: ResponseMode = ResponseMode.TEXT
+    stream: bool = True
+    resume: bool = False
+    trace_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.messages or any(not isinstance(item, Message) for item in self.messages):
+            raise TypeError("finalized generate request requires canonical Message values")
+        if not self.task:
+            raise ValueError("finalized generate request requires a task identity")
+        if any(not isinstance(item, CanonicalToolDefinition) for item in self.tools):
+            raise TypeError("finalized generate tools must be canonical definitions")
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,9 +140,9 @@ InferenceOutcome = InferenceResult | TargetInvalidated
 
 
 __all__ = [
-    "CanonicalToolCall",
     "EndpointCapabilitySnapshot",
     "FinalizedInferenceRequest",
+    "FinalizedGenerateRequest",
     "InferenceAttemptFence",
     "InferenceIntent",
     "InferenceOutcome",

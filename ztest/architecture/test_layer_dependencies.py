@@ -5,6 +5,7 @@ every entry names one source file and one imported module.  New upward edges
 therefore fail immediately, while the two pre-existing seams can be removed
 independently as their implementations move to the owning layer.
 """
+
 from __future__ import annotations
 
 import ast
@@ -175,6 +176,7 @@ def test_control_contains_only_runtime_control_primitives() -> None:
         "__init__.py",
         "leases.py",
         "lifecycle.py",
+        "operation_ownership.py",
         "scheduling",
     }
 

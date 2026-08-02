@@ -18,9 +18,10 @@ raises on a missing param: an unknown ``{name}`` renders empty rather than
 crashing a status line.
 
 Number interpolation is intentionally *plain* (``str(value)``, no grouping) to
-preserve the CLI's existing wording; locale grouping is an explicit opt-in via
-``common.i18n.numbers`` at the call site, not an implicit formatter behaviour.
+preserve the CLI's existing wording; locale grouping is an explicit call-site
+decision, not implicit formatter behaviour.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -10,6 +10,7 @@ path and must never break a turn.
 A short TTL cache keyed by the resolved repo root avoids re-running ``git`` on every
 think cycle within the same second.
 """
+
 from __future__ import annotations
 
 import os
@@ -17,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from mote.runtime.process import aexecute
+from mote.runtime.process import ProcessDisposition, run_fixed_argv
 from mote.runtime.vcs.probe import find_git_dir
 
 # How long a collected snapshot stays fresh (seconds). The collector runs once per
@@ -66,18 +67,15 @@ def _read_branch(git_dir: str) -> tuple[Optional[str], Optional[str]]:
     return None, (sha[:8] if sha else None)
 
 
-async def _git(cwd: str, args: str) -> Optional[str]:
+async def _git(cwd: str, args: tuple[str, ...]) -> Optional[str]:
     """Run ``git <args>`` in *cwd*; return stdout (stripped) or None on any failure."""
     try:
-        result = await aexecute(f"git {args}", working_dir=cwd, wait=True, timeout=_GIT_TIMEOUT_S)
+        result = await run_fixed_argv(("git", *args), working_dir=cwd, timeout=_GIT_TIMEOUT_S)
     except Exception:  # noqa: BLE001 — best-effort; never break the prompt build
         return None
-    if not result:
+    if result.disposition is not ProcessDisposition.EXITED or result.exit_code != 0:
         return None
-    rc, stdout = result[0], result[1]
-    if rc != 0:
-        return None
-    return stdout
+    return result.stdout
 
 
 def _parse_status(porcelain: str) -> tuple[int, int, int]:
@@ -116,13 +114,13 @@ async def collect_git_state(cwd: str) -> Optional[GitState]:
 
     branch, detached_sha = _read_branch(git_dir)
 
-    porcelain = await _git(cwd, "status --porcelain")
+    porcelain = await _git(cwd, ("status", "--porcelain"))
     staged = unstaged = untracked = 0
     if porcelain is not None:
         staged, unstaged, untracked = _parse_status(porcelain)
 
     commits: list[str] = []
-    log_out = await _git(cwd, f"log --oneline -{_RECENT_COMMITS}")
+    log_out = await _git(cwd, ("log", "--oneline", f"-{_RECENT_COMMITS}"))
     if log_out:
         commits = [ln for ln in log_out.splitlines() if ln.strip()]
 

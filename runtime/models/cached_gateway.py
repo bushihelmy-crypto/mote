@@ -9,10 +9,10 @@ from mote.contracts.model.invocation import (
     CanonicalModelResponse,
     GenerateInput,
     ModelInvocation,
-    ModelOperation,
     ResolvedModelResponse,
     ResponseMode,
 )
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.ports.inference.cache import InferenceCache
 from mote.contracts.ports.model.gateway import ModelGateway
 from mote.runtime.events.context import observe_event_sync

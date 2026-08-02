@@ -6,11 +6,12 @@ Everything that shapes *what the model sees* per turn lives here — how old too
 results get compacted, whether the code map surfaces per-symbol callers, and the
 layered Skills index.
 """
+
 from __future__ import annotations
 
 from pydantic import Field
 
-from mote.contracts.config.conversation.base import ConfigModel as YamlModel
+from mote.contracts.config.base import ConfigModel as YamlModel
 
 
 class CompactionConfig(YamlModel):

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import math
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Callable, Generic, TypeVar
 
 from mote.contracts.inference.identity import TrustedSchedulingClass
+
+PayloadT = TypeVar("PayloadT")
 
 
 class QueueClosedError(RuntimeError):
@@ -24,33 +27,51 @@ class QueueDeadlineExceededError(TimeoutError):
 
 
 @dataclass(frozen=True, slots=True)
-class QueueEntry:
+class QueueEntry(Generic[PayloadT]):
     entry_id: int
     tenant_id: str
     project_id: str
-    payload: Any
+    payload: PayloadT
     cost_units: int
     priority: int
     enqueued_at: float
     deadline: float
 
+    def __post_init__(self) -> None:
+        for name in ("entry_id", "cost_units"):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"queue entry {name} must be a positive integer")
+        if type(self.priority) is not int:
+            raise ValueError("queue entry priority must be an integer")
+        for name in ("tenant_id", "project_id"):
+            value = getattr(self, name)
+            if type(value) is not str or not value:
+                raise ValueError(f"queue entry {name} must be a non-empty string")
+        for name in ("enqueued_at", "deadline"):
+            value = getattr(self, name)
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ValueError(f"queue entry {name} must be finite")
+        if self.deadline <= self.enqueued_at:
+            raise ValueError("queue entry deadline must be after enqueue time")
+
 
 @dataclass
-class _ProjectQueue:
+class _ProjectQueue(Generic[PayloadT]):
     weight: int
     deficit: int = 0
-    entries: deque[QueueEntry] = field(default_factory=deque)
+    entries: deque[QueueEntry[PayloadT]] = field(default_factory=deque)
 
 
 @dataclass
-class _TenantQueue:
+class _TenantQueue(Generic[PayloadT]):
     weight: int
     deficit: int = 0
-    projects: dict[str, _ProjectQueue] = field(default_factory=dict)
+    projects: dict[str, _ProjectQueue[PayloadT]] = field(default_factory=dict)
     active_projects: deque[str] = field(default_factory=deque)
 
 
-class FairAdmissionQueue:
+class FairAdmissionQueue(Generic[PayloadT]):
     """Hard-bounded tenant/project DRR queue with deadline and aging.
 
     Capacity is reserved only while an entry is queued.  No budget or in-flight
@@ -65,14 +86,22 @@ class FairAdmissionQueue:
         aging_seconds: float = 30.0,
         clock: Callable[[], float] | None = None,
     ) -> None:
-        if capacity <= 0 or base_quantum <= 0 or aging_seconds <= 0:
+        if (
+            type(capacity) is not int
+            or capacity <= 0
+            or type(base_quantum) is not int
+            or base_quantum <= 0
+            or type(aging_seconds) not in (int, float)
+            or not math.isfinite(aging_seconds)
+            or aging_seconds <= 0
+        ):
             raise ValueError("queue capacity, quantum and aging must be positive")
         self._capacity = capacity
         self._base_quantum = base_quantum
         self._aging_seconds = aging_seconds
         self._clock = clock
         self._condition = asyncio.Condition()
-        self._tenants: dict[str, _TenantQueue] = {}
+        self._tenants: dict[str, _TenantQueue[PayloadT]] = {}
         self._active_tenants: deque[str] = deque()
         self._cancelled: set[int] = set()
         self._ids = itertools.count(1)
@@ -90,13 +119,13 @@ class FairAdmissionQueue:
 
     async def enqueue(
         self,
-        payload: Any,
+        payload: PayloadT,
         *,
         tenant_id: str,
         project_id: str,
         scheduling: TrustedSchedulingClass,
         deadline: float,
-    ) -> QueueEntry:
+    ) -> QueueEntry[PayloadT]:
         if not tenant_id or not project_id:
             raise ValueError("tenant_id and project_id are required")
         async with self._condition:
@@ -137,7 +166,7 @@ class FairAdmissionQueue:
             self._condition.notify()
             return entry
 
-    async def dequeue(self) -> QueueEntry:
+    async def dequeue(self) -> QueueEntry[PayloadT]:
         async with self._condition:
             while True:
                 self._discard_invalid_heads()
@@ -175,7 +204,7 @@ class FairAdmissionQueue:
         async with self._condition:
             await self._condition.wait_for(lambda: self._unfinished == 0)
 
-    def _select(self) -> QueueEntry | None:
+    def _select(self) -> QueueEntry[PayloadT] | None:
         rounds = max(self._size * 2, len(self._active_tenants), 1)
         for _ in range(rounds):
             if not self._active_tenants:
@@ -199,7 +228,10 @@ class FairAdmissionQueue:
             return entry
         return None
 
-    def _select_project(self, tenant: _TenantQueue) -> QueueEntry | None:
+    def _select_project(
+        self,
+        tenant: _TenantQueue[PayloadT],
+    ) -> QueueEntry[PayloadT] | None:
         for _ in range(max(len(tenant.active_projects), 1)):
             if not tenant.active_projects:
                 return None
@@ -212,7 +244,7 @@ class FairAdmissionQueue:
                 return entry
         return None
 
-    def _effective_cost(self, entry: QueueEntry) -> int:
+    def _effective_cost(self, entry: QueueEntry[PayloadT]) -> int:
         age_steps = int(max(self._now() - entry.enqueued_at, 0.0) / self._aging_seconds)
         priority_credit = max(entry.priority, 0) + age_steps
         return max(entry.cost_units - priority_credit, 1)
@@ -251,6 +283,7 @@ class FairAdmissionQueue:
             pass
 
     def _now(self) -> float:
-        if self._clock is not None:
-            return self._clock()
-        return asyncio.get_running_loop().time()
+        value = self._clock() if self._clock is not None else asyncio.get_running_loop().time()
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError("admission queue clock must return a finite number")
+        return value

@@ -35,9 +35,12 @@ so it is owned directly (no indirection needed).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Callable, Optional
 
-from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS, ModelContextRebuiltEvent
+from mote.contracts.file.identity import PresentVersion
+from mote.contracts.ports.code_intelligence.code_map import CodeMapLspQueryPort, CodeMapQueryPort
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 from mote.product.code_map.collection import collect_code_map_files
 from mote.product.code_map.enrichment import (
@@ -72,13 +75,13 @@ class CodeMapContextSource:
 
     def __init__(
         self,
-        get_touched_files: Callable[[], list],
+        get_touched_files: Callable[[], list[str]],
         code_map: Optional[CodeMap] = None,
         max_tokens: int = _DEFAULT_MAX_TOKENS,
-        lsp_query: Optional[object] = None,
-        repo_index: Optional[object] = None,
-        get_read_state: Optional[Callable[[], dict]] = None,
-        get_glimpsed_files: Optional[Callable[[], list]] = None,
+        lsp_query: CodeMapLspQueryPort | None = None,
+        repo_index: CodeMapQueryPort | None = None,
+        get_read_state: Callable[[], Mapping[str, PresentVersion]] | None = None,
+        get_glimpsed_files: Callable[[], list[str]] | None = None,
         surface_callers: bool = False,
     ) -> None:
         self._get_touched_files = get_touched_files
@@ -138,7 +141,7 @@ class CodeMapContextSource:
         self._precise: dict[str, dict[str, list[str]]] = {}
         self._surfaced: dict[str, dict[str, list[str]]] = {}
 
-    async def on_model_context_rebuilt(self, event: object) -> None:
+    async def on_model_context_rebuilt(self, event: ModelContextRebuiltEvent) -> None:
         """Reset the incremental frontier when stored history is structurally rebuilt.
 
         A compaction condenses the prior map rows away; a ``/clear`` or user
@@ -166,7 +169,8 @@ class CodeMapContextSource:
 
         # Layer C: whole-repo reverse deps when a repo index is wired; else the
         # touched-set-scoped query.
-        repo_importers = getattr(self._repo_index, "importers", None) if self._repo_index else None
+        repo_index = self._repo_index
+        repo_importers = (lambda candidates: list(repo_index.importers(candidates))) if repo_index is not None else None
         try:
             neighborhoods = self._map.neighborhood(files, repo_importers=repo_importers)
         except Exception:  # noqa: BLE001 — best-effort; never break a turn

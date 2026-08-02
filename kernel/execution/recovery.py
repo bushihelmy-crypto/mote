@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Generic, TypeVar
+from typing import Awaitable, Generic, TypeAlias, TypeVar
 
-from mote.kernel.execution.graph import AgentGraph, EffectKind, GraphRunner, NodeId
+from mote.kernel.execution.graph import AgentGraph, AgentNode, EffectKind, End, GraphRunner, NodeId, Transition
 
 StateT = TypeVar("StateT")
 ResultT = TypeVar("ResultT")
+NodeLifecycleCallback: TypeAlias = Callable[["NodeAttempt"], Awaitable[None] | None]
 
 
 class RecoveryDirective(str, Enum):
@@ -57,10 +57,10 @@ class EffectAwareGraphRunner(Generic[StateT, ResultT]):
         on_cancel: Callable[[], None],
         on_failure: Callable[[], None],
         max_steps: int = 100_000,
-        on_node_started: Callable[[NodeAttempt], Any] | None = None,
-        on_node_completed: Callable[[NodeAttempt], Any] | None = None,
-        on_node_abandoned: Callable[[NodeAttempt], Any] | None = None,
-        on_node_failed: Callable[[NodeAttempt], Any] | None = None,
+        on_node_started: NodeLifecycleCallback | None = None,
+        on_node_completed: NodeLifecycleCallback | None = None,
+        on_node_abandoned: NodeLifecycleCallback | None = None,
+        on_node_failed: NodeLifecycleCallback | None = None,
     ) -> None:
         self._runner = GraphRunner(graph, max_steps=max_steps, execute_node=self._execute_node)
         self._on_cancel = on_cancel
@@ -71,7 +71,11 @@ class EffectAwareGraphRunner(Generic[StateT, ResultT]):
         self._on_node_failed = on_node_failed
         self._active_attempt: NodeAttempt | None = None
 
-    async def _execute_node(self, node, state) -> Any:
+    async def _execute_node(
+        self,
+        node: AgentNode[StateT, ResultT],
+        state: StateT,
+    ) -> Transition | End[ResultT]:
         attempt = NodeAttempt(
             node_id=node.node_id,
             effect_kind=node.effect_kind,
@@ -98,9 +102,9 @@ class EffectAwareGraphRunner(Generic[StateT, ResultT]):
             self._active_attempt = None
 
     @staticmethod
-    async def _invoke(callback: Callable[[NodeAttempt], Any], attempt: NodeAttempt) -> None:
+    async def _invoke(callback: NodeLifecycleCallback, attempt: NodeAttempt) -> None:
         outcome = callback(attempt)
-        if inspect.isawaitable(outcome):
+        if outcome is not None:
             await outcome
 
     async def run(self, state: StateT) -> ResultT:

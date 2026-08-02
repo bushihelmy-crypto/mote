@@ -1,4 +1,5 @@
 """Ports for immutable Artifact metadata and content storage."""
+
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
@@ -21,8 +22,7 @@ from mote.contracts.artifact import (
 class ArtifactBlobStore(Protocol):
     """Content-addressed byte storage below the logical Artifact index."""
 
-    def put_bytes(self, content: bytes) -> ArtifactContentRef:
-        ...
+    def put_bytes(self, content: bytes) -> ArtifactContentRef: ...
 
     def read_bytes(self, ref: ArtifactContentRef) -> bytes:
         """Resolve only this store's CAS refs and verify their digest and size."""
@@ -40,28 +40,22 @@ class ArtifactStore(Protocol):
 class ArtifactLookupIndex(Protocol):
     """Generic strong-key lookup into already committed Artifact revisions."""
 
-    async def publish_lookup(self, lookup_key: str, artifact_id: str, revision: int) -> None:
-        ...
+    async def publish_lookup(self, lookup_key: str, artifact_id: str, revision: int) -> None: ...
 
-    async def resolve_lookup(self, lookup_key: str) -> ArtifactRevision | None:
-        ...
+    async def resolve_lookup(self, lookup_key: str) -> ArtifactRevision | None: ...
 
-    async def publish(self, request: ArtifactPublishRequest) -> ArtifactRevision:
-        ...
+    async def publish(self, request: ArtifactPublishRequest) -> ArtifactRevision: ...
 
-    async def get_revision(self, artifact_id: str, revision: int) -> ArtifactRevision:
-        ...
+    async def get_revision(self, artifact_id: str, revision: int) -> ArtifactRevision: ...
 
-    async def read(self, ref: ArtifactRef) -> bytes:
-        ...
+    async def read(self, ref: ArtifactRef) -> bytes: ...
 
     async def promote(
         self,
         artifact_id: str,
         revision: int,
         retention: ArtifactRetention,
-    ) -> ArtifactRevision:
-        ...
+    ) -> ArtifactRevision: ...
 
     async def release(self, artifact_id: str, revision: int) -> bool:
         """Remove one logical revision and unroot its unshared CAS content."""
@@ -80,8 +74,14 @@ class ArtifactResolver(Protocol):
         self,
         ref: ArtifactRef,
         policy: ArtifactResolutionPolicy,
-    ) -> ResolvedArtifact:
-        ...
+    ) -> ResolvedArtifact: ...
+
+
+@runtime_checkable
+class GenerationArtifactReader(Protocol):
+    """Read capability borrowed from one immutable Runtime generation."""
+
+    async def __call__(self, ref: ArtifactRef) -> ResolvedArtifact: ...
 
 
 @runtime_checkable
@@ -92,8 +92,7 @@ class ArtifactPublicationOutbox(Protocol):
         self,
         publication_id: str,
         request: ArtifactPublishRequest,
-    ) -> ArtifactPublication:
-        ...
+    ) -> ArtifactPublication: ...
 
     async def stage_intent(
         self,
@@ -102,24 +101,19 @@ class ArtifactPublicationOutbox(Protocol):
         """Bind trusted CAS refs to the outbox after validating every ref."""
         ...
 
-    async def pending_ids(self, limit: int = 100) -> tuple[str, ...]:
-        ...
+    async def pending_ids(self, limit: int = 100) -> tuple[str, ...]: ...
 
-    async def load(self, publication_id: str) -> ArtifactPublication:
-        ...
+    async def load(self, publication_id: str) -> ArtifactPublication: ...
 
     async def acknowledge(
         self,
         publication_id: str,
         revision: ArtifactRevision,
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    async def record_failure(self, publication_id: str, error: str) -> None:
-        ...
+    async def record_failure(self, publication_id: str, error: str) -> None: ...
 
-    async def dead_letter(self, publication_id: str, error: str) -> None:
-        ...
+    async def dead_letter(self, publication_id: str, error: str) -> None: ...
 
 
 @runtime_checkable
@@ -130,20 +124,17 @@ class ReliableArtifactPublisher(Protocol):
         self,
         publication_id: str,
         request: ArtifactPublishRequest,
-    ) -> ArtifactRevision:
-        ...
+    ) -> ArtifactRevision: ...
 
     async def publish_intent(
         self,
         intent: ArtifactPublicationIntent,
-    ) -> ArtifactRevision:
-        ...
+    ) -> ArtifactRevision: ...
 
     async def reconcile_pending(
         self,
         limit: int = 100,
-    ) -> ArtifactPublicationReconcileResult:
-        ...
+    ) -> ArtifactPublicationReconcileResult: ...
 
 
 __all__ = [
@@ -151,6 +142,7 @@ __all__ = [
     "ArtifactLookupIndex",
     "ArtifactPublicationOutbox",
     "ArtifactResolver",
+    "GenerationArtifactReader",
     "ArtifactStore",
     "ReliableArtifactPublisher",
 ]

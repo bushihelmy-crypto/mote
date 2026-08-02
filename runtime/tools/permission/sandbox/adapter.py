@@ -18,16 +18,17 @@ Two responsibilities:
      a :class:`SandboxRuntimeConfig` + a ``get_cwd`` accessor + a ``SandboxGuard``
      factory, wiring ``build_policy`` as the runtime's per-call policy provider.
 """
+
 from __future__ import annotations
 
 import os
 from pathlib import Path
 from typing import Callable, Optional
 
-from mote.runtime.sandbox import SandboxRuntime
 from mote.runtime.sandbox.backend import SandboxPolicy
 from mote.runtime.sandbox.config import SandboxRuntimeConfig
 from mote.runtime.sandbox.network.credentials import CredentialBroker, CredentialRule, SecretLookup
+from mote.runtime.sandbox.runtime import SandboxRuntime
 from mote.runtime.secrets.cipher import KeyFileProvider
 from mote.runtime.secrets.store import secrets_path
 from mote.runtime.tools.permission.sandbox.guard import SandboxGuard

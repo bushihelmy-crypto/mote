@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Generic, TypeAlias, TypeVar
 
-from mote.contracts.conversation import AIMessage
+from mote.contracts.conversation import Message
 from mote.contracts.model.turn import ModelTurn
 from mote.contracts.output import CommittedOutput
 
@@ -34,7 +34,7 @@ ExecutionTurn: TypeAlias = NoModelTurn | ModelTurn | CandidateSelection
 
 @dataclass
 class ExecutionState(Generic[OutputT]):
-    response: AIMessage
+    response: Message
     committed_output: CommittedOutput[OutputT] | None = None
     turn: ExecutionTurn = field(default_factory=NoModelTurn)
     initial_observe_complete: bool = False

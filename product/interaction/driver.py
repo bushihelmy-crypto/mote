@@ -32,13 +32,15 @@ from mote.product.i18n import keys as K
 from mote.product.i18n import t
 from mote.product.interaction.commands.catalog import CommandRegistry, default_registry
 from mote.product.interaction.human_channel import PortHumanChannel
+from mote.product.interaction.ports import DriverControlBinding, InteractivePort
 from mote.product.interaction.turn import TurnRunner, format_turn_error
 from mote.product.presentation.events import Notice, SessionListItem, SessionListShown, TranscriptCleared
-from mote.product.presentation.input_events import is_presentation_input
+from mote.product.presentation.input_events import PRESENTATION_INPUT_TYPES
 from mote.product.presentation.projection.base import BaseProjector
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleStack
 from mote.runtime.engine import EngineAgentRequest
 from mote.runtime.events.telemetry import TelemetryHandle
+from mote.runtime.session.listing import SessionInfo
 from mote.runtime.telemetry.logging import logger
 
 _format_turn_error = format_turn_error
@@ -54,7 +56,7 @@ class SessionDriver:
         role: Any,
         *,
         backend: Any,
-        port: Any,
+        port: InteractivePort,
         projector: BaseProjector,
         commands: Optional[CommandRegistry] = None,
         role_factory: Optional[Any] = None,
@@ -90,30 +92,27 @@ class SessionDriver:
         self._turn_lock = asyncio.Lock()
         self._running_turn = False
         self._current_input: Optional[str] = None
-        self._telemetry_handles: dict[Any, TelemetryHandle] = {}
+        self._telemetry_handles: dict[object, list[TelemetryHandle]] = {}
         self._telemetry_identity = TelemetryIdentity(f"mote.product.cli.session_driver.{uuid4().hex}")
-        self._last_sessions: list = []  # cached for index-based /resume
+        self._last_sessions: list[SessionInfo] = []  # cached for index-based /resume
         # Steering queue (§5.3): text captured while a turn is in flight is
         # drained at the *next* turn boundary — turn-level steering, NOT a
         # step-level mid-turn interrupt (that lives in the framework loop).
         self._steer_queue: deque[str] = deque()
 
-        # Wire the port's interrupt/turn-state/steer hooks to this driver.
-        for attr, value in (
-            ("_on_interrupt", self._interrupt_current_turn),
-            ("_is_turn_running", lambda: self._running_turn),
-            ("_on_steer", self._enqueue_steer),
-        ):
-            if hasattr(self._port, attr):
-                setattr(self._port, attr, value)
+        self._port.bind_driver_control(
+            DriverControlBinding(
+                interrupt=self._interrupt_current_turn,
+                turn_running=lambda: self._running_turn,
+                steer=self._enqueue_steer,
+            )
+        )
 
     # ------------------------------------------------------------------
     # Main loop (§2.6 pseudocode)
     # ------------------------------------------------------------------
     async def run(self) -> None:
-        start = getattr(self._port, "start", None)
-        if start is not None:
-            await start()
+        await self._port.start()
         await self._subscribe_projector(self._role)
         self._backend.bind_human_channel(self._role, PortHumanChannel(self._port))
         self._announce_tools()
@@ -173,8 +172,7 @@ class SessionDriver:
         returns nothing, so the driver's per-turn image handling degrades to a
         no-op text turn everywhere else.
         """
-        take = getattr(self._port, "take_turn_images", None)
-        return take() if take is not None else []
+        return self._port.take_turn_images()
 
     async def _run_turn(self, text: str, images: Optional[list] = None) -> None:
         """Send one input and await quiescence; output flows via projector→consumer.
@@ -198,7 +196,7 @@ class SessionDriver:
 
     def _interrupt_current_turn(self) -> None:
         """Mid-turn Ctrl+C: stage the prompt for restore, then interrupt the turn."""
-        if self._current_input and hasattr(self._port, "stage_restore"):
+        if self._current_input:
             self._port.stage_restore(self._current_input)
         asyncio.ensure_future(self._control.interrupt(self._agent_id))
 
@@ -208,7 +206,7 @@ class SessionDriver:
     def _enqueue_steer(self, text: str) -> None:
         """Producer side: stash steering text (from the port) for the next turn.
 
-        The port calls this via its ``_on_steer`` hook. Enqueueing never
+        The port calls this through its explicit driver-control binding. Enqueueing never
         preempts the in-flight turn — the text is merged in at the next turn
         boundary by :meth:`_merge_steer` (§5.3 turn-level steering).
         """
@@ -238,26 +236,32 @@ class SessionDriver:
         if telemetry is None or telemetry in self._telemetry_handles:
             return
         try:
-            handle = await telemetry.subscribe_typed(
-                TelemetrySubscriptionSpec(
-                    identity=self._telemetry_identity,
-                    capacity=4096,
-                    overflow=TelemetryOverflow.DROP_OLDEST,
-                ),
-                is_presentation_input,
-                self._projector,
-                self._projector,
-            )
-            self._telemetry_handles[telemetry] = handle
+            handles: list[TelemetryHandle] = []
+            for ordinal, event_type in enumerate(PRESENTATION_INPUT_TYPES):
+                handle = await telemetry.subscribe_typed(
+                    TelemetrySubscriptionSpec(
+                        identity=TelemetryIdentity(f"{self._telemetry_identity}.{ordinal}"),
+                        capacity=4096,
+                        overflow=TelemetryOverflow.DROP_OLDEST,
+                    ),
+                    event_type,
+                    self._projector,
+                    self._projector,
+                )
+                handles.append(handle)
+            self._telemetry_handles[telemetry] = handles
         except Exception as exc:  # noqa: BLE001 — rendering is best-effort
+            for handle in locals().get("handles", ()):
+                await handle.aclose()
             logger.warning(f"SessionDriver: projector subscribe failed: {exc}")
 
     async def _unsubscribe_projector(self) -> None:
-        for handle in tuple(self._telemetry_handles.values()):
-            try:
-                await handle.aclose()
-            except Exception:  # noqa: BLE001
-                pass
+        for handles in tuple(self._telemetry_handles.values()):
+            for handle in handles:
+                try:
+                    await handle.aclose()
+                except Exception:  # noqa: BLE001
+                    pass
         self._telemetry_handles.clear()
 
     async def _teardown(self) -> None:
@@ -293,13 +297,11 @@ class SessionDriver:
             self._projector.aclose,
             phase=LifecyclePhase.CLOSE_RESOURCES,
         )
-        port_close = getattr(self._port, "aclose", None)
-        if port_close is not None:
-            lifecycle.register_close(
-                "input-port",
-                port_close,
-                phase=LifecyclePhase.CLOSE_RESOURCES,
-            )
+        lifecycle.register_close(
+            "input-port",
+            self._port.aclose,
+            phase=LifecyclePhase.CLOSE_RESOURCES,
+        )
         if self._scheduler is not None:
             lifecycle.register_close(
                 "scheduler",
@@ -328,9 +330,7 @@ class SessionDriver:
 
     def request_exit(self) -> None:
         self._exit = True
-        request = getattr(self._port, "request_exit", None)
-        if request is not None:
-            request()
+        self._port.request_exit()
 
     async def clear_conversation(self) -> int:
         """Clear the active agent's conversation — history + rendered transcript.
@@ -486,7 +486,7 @@ class SessionDriver:
             return None
         return self.adopt_role(forked, switch=True)
 
-    def list_resumable_sessions(self) -> list:
+    def list_resumable_sessions(self) -> list[SessionInfo]:
         """List resumable sessions (newest first), caching for index-based resume."""
         try:
             sessions = self._backend.list_sessions(self._role)
@@ -507,15 +507,15 @@ class SessionDriver:
         sessions = self.list_resumable_sessions()
         items = []
         for i, info in enumerate(sessions):
-            label = getattr(info, "title", "") or getattr(info, "last_prompt", "") or getattr(info, "preview", "")
+            label = info.title or info.last_prompt or info.preview or ""
             label = (label or "(no preview)").replace("\n", " ")[:60]
-            modified = getattr(info, "modified", "") or ""
+            modified = info.modified
             items.append(
                 SessionListItem(
-                    session_id=getattr(info, "session_id", "") or "",
+                    session_id=info.session_id,
                     label=label,
                     updated_at=modified[:19] if modified else None,
-                    preview=(getattr(info, "preview", "") or "").replace("\n", " ")[:60],
+                    preview=(info.preview or "").replace("\n", " ")[:60],
                     index=i,
                 )
             )

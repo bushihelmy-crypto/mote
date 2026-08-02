@@ -53,6 +53,11 @@ class TextualPort:
         # drained once by :meth:`take_turn_images` right after the driver reads it.
         self._pending_images: list = []
 
+    def bind_driver_control(self, binding) -> None:
+        self._on_interrupt = binding.interrupt
+        self._is_turn_running = binding.turn_running
+        self._on_steer = binding.steer
+
     # ------------------------------------------------------------------
     # Binding + lifecycle (the app owns setup/teardown — these are inert)
     # ------------------------------------------------------------------

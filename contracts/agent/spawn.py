@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Generic, Optional, Protocol, TypeGuard, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Generic, Optional, Protocol, TypeVar, runtime_checkable
 
 from mote.contracts.conversation import Message
 from mote.contracts.output import RunOutcome
 
+if TYPE_CHECKING:
+    from mote.contracts.ports.agent.control import AgentControlPort
+
 OutputT = TypeVar("OutputT")
 BuilderOutputT = TypeVar("BuilderOutputT")
 RequestT_contra = TypeVar("RequestT_contra", contravariant=True)
+ChildOutputT = TypeVar("ChildOutputT")
 
 
 class Lifecycle(Enum):
@@ -27,15 +31,24 @@ class ContextPolicy(Enum):
 @dataclass
 class SpawnContext:
     parent_id: Optional[str] = None
-    agent_path: Optional[Any] = None
+    agent_path: Optional[str] = None
     cwd: Optional[str] = None
-    config: Optional[Any] = None
-    parent_cost_tracker: Optional[Any] = None
     parent_session_id: str = ""
+
+
+class CostAttributionPort(Protocol):
+    """Read-only cost facts needed by the orchestration mirror tree."""
+
+    def attributed_cost_usd(self) -> float: ...
+
+    def attributed_total_tokens(self) -> int: ...
+
+    def attributed_cost_is_estimated(self) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
 class AgentConstructionRequest:
+    logical_agent_id: str
     parent_session_id: str | None
     child_identity: str
     child_path: str
@@ -46,8 +59,7 @@ class AgentConstructionRequest:
 
 
 class AgentBuilder(Protocol[RequestT_contra, BuilderOutputT]):
-    def build(self, request: RequestT_contra) -> "RunnableAgent[BuilderOutputT]":
-        ...
+    def build(self, request: RequestT_contra) -> "RunnableAgent[BuilderOutputT]": ...
 
 
 @runtime_checkable
@@ -55,48 +67,31 @@ class RunnableAgent(Protocol[OutputT]):
     """Stable execution/lifecycle surface returned by child builders."""
 
     @property
-    def session_id(self) -> str:
-        ...
+    def session_id(self) -> str: ...
 
-    async def run(self, with_message: Message | None = None) -> RunOutcome[OutputT] | None:
-        ...
+    async def run(self, with_message: Message | None = None) -> RunOutcome[OutputT] | None: ...
 
-    async def cleanup(self) -> None:
-        ...
+    async def cleanup(self) -> None: ...
 
-    def build_child_spawn_context(self, *, parent_id: str | None, agent_path: object) -> SpawnContext:
-        ...
+    def build_child_spawn_context(self, *, parent_id: str | None, agent_path: str) -> SpawnContext: ...
 
-    def provision_spawned_child(self, child: "RunnableAgent[object]", policy: ContextPolicy) -> None:
-        ...
+    def provision_spawned_child(self, child: "RunnableAgent[ChildOutputT]", policy: ContextPolicy) -> None: ...
 
-    def provision_unparented_spawn(self, spawn_context: SpawnContext) -> None:
-        ...
+    def provision_unparented_spawn(self, spawn_context: SpawnContext) -> None: ...
 
-    def spawn_cost_tracker(self) -> object | None:
-        ...
+    def spawn_cost_attribution(self) -> CostAttributionPort: ...
 
     @property
-    def state(self) -> "AgentRuntimeState":
-        ...
-
-    def bind_agent_control(self, control: object) -> None:
-        ...
-
-
-def is_text_runnable_agent(candidate: object) -> TypeGuard[RunnableAgent[str]]:
-    return isinstance(candidate, RunnableAgent)
+    def state(self) -> "AgentRuntimeState": ...
 
 
 class MessageBuffer(Protocol):
-    def empty(self) -> bool:
-        ...
+    def empty(self) -> bool: ...
 
 
 class AgentRuntimeState(Protocol):
     @property
-    def msg_buffer(self) -> MessageBuffer:
-        ...
+    def msg_buffer(self) -> MessageBuffer: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +105,7 @@ class SpawnableAgentDefinition(Generic[OutputT]):
 
 @dataclass
 class SpawnPlan(Generic[OutputT]):
+    request_id: str
     definition: SpawnableAgentDefinition[OutputT]
     nickname: Optional[str] = None
     parent_id: Optional[str] = None
@@ -125,10 +121,10 @@ class SpawnPlan(Generic[OutputT]):
 __all__ = [
     "AgentBuilder",
     "AgentConstructionRequest",
+    "CostAttributionPort",
     "ContextPolicy",
     "Lifecycle",
     "RunnableAgent",
-    "is_text_runnable_agent",
     "SpawnContext",
     "SpawnPlan",
     "SpawnableAgentDefinition",

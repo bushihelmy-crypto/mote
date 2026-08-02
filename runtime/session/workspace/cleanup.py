@@ -32,11 +32,12 @@ import asyncio
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from mote.runtime.artifacts.layout import ArtifactRepositoryLayout
 from mote.runtime.persistence import disk_io
 from mote.runtime.session.artifact_roots import SessionFileOpsArtifactRoots
+from mote.runtime.session.run_lease import RunLeaseStore
 from mote.runtime.session.workspace.store import SessionSpace, SessionWorkspace
 from mote.runtime.telemetry.logging import logger
 
@@ -64,6 +65,7 @@ def _prune_expired_session_artifacts(
     workspace_root: Path,
     session_dir: Path,
     session_id: str,
+    mutation_guard: Callable[[], None] | None = None,
 ) -> tuple[int, int]:
     """Release one session owner, then collect the unified CAS closure."""
     layout = ArtifactRepositoryLayout(workspace_root)
@@ -83,7 +85,11 @@ def _prune_expired_session_artifacts(
         metadata_sources=(fileops_artifacts,),
         minimum_gc_age_ns=0,
     )
+    if mutation_guard is not None:
+        mutation_guard()
     released = bundle.store.release_session_scope()
+    if mutation_guard is not None:
+        mutation_guard()
     return released, bundle.collector.collect()
 
 
@@ -103,9 +109,15 @@ def _sweep_session(
     artifact_ttl_days: int,
     now: float,
     stats: CleanupStats,
+    mutation_guard: Callable[[], None] | None = None,
 ) -> None:
     """Apply the two-tier TTL to one session (liveness = rollout mtime)."""
     session_dir = store.session_dir(session_id)
+    # A stale rollout mtime is never proof that another process is inactive.
+    # Durable run ownership is the canonical liveness fact available here.
+    run_lease_path = session_dir / "run_leases.json"
+    if run_lease_path.is_file() and RunLeaseStore(run_lease_path).active_leases():
+        return
     # Liveness = rollout mtime; fall back to the directory's own mtime for a
     # session dir with no (yet) rollout, and skip if neither is stat-able.
     age = _age_days(store.rollout_path(session_id), now)
@@ -120,6 +132,7 @@ def _sweep_session(
                 store.root,
                 session_dir,
                 session_id,
+                mutation_guard,
             )
         except Exception as exc:
             logger.warning(
@@ -129,6 +142,8 @@ def _sweep_session(
             return
         stats.artifact_revisions_released += released
         stats.artifact_blobs_reclaimed += reclaimed
+        if mutation_guard is not None:
+            mutation_guard()
         if disk_io.remove_tree(session_dir):
             stats.sessions_removed += 1
         return
@@ -136,6 +151,8 @@ def _sweep_session(
     if artifact_ttl_days > 0 and age > artifact_ttl_days:
         removed_any = False
         for kind in _ARTIFACT_TIER_KINDS:
+            if mutation_guard is not None:
+                mutation_guard()
             if disk_io.remove_tree(store.space(session_id, kind)):
                 removed_any = True
         if removed_any:
@@ -150,6 +167,7 @@ def sweep_workspace(
     exclude_session_id: str = "",
     legal_hold_session_ids: frozenset[str] = frozenset(),
     now: Optional[float] = None,
+    mutation_guard: Callable[[], None] | None = None,
 ) -> CleanupStats:
     """Sweep the whole workspace once and return what was reclaimed.
 
@@ -176,6 +194,7 @@ def sweep_workspace(
                 artifact_ttl_days=artifact_ttl_days,
                 now=now,
                 stats=stats,
+                mutation_guard=mutation_guard,
             )
         except OSError as exc:
             logger.warning(f"workspace cleanup: failed to sweep session {session_id}: {exc}")
@@ -190,6 +209,7 @@ async def sweep_workspace_async(
     exclude_session_id: str = "",
     legal_hold_session_ids: frozenset[str] = frozenset(),
     now: Optional[float] = None,
+    mutation_guard: Callable[[], None] | None = None,
 ) -> CleanupStats:
     """Cooperative, cancellation-safe runtime counterpart of ``sweep_workspace``."""
     now = time.time() if now is None else now
@@ -205,6 +225,7 @@ async def sweep_workspace_async(
                     artifact_ttl_days=artifact_ttl_days,
                     now=now,
                     stats=stats,
+                    mutation_guard=mutation_guard,
                 )
             except OSError as exc:
                 logger.warning(f"workspace cleanup: failed to sweep session {session_id}: {exc}")
@@ -226,6 +247,7 @@ def run_cleanup_if_due(
     exclude_session_id: str = "",
     legal_hold_session_ids: frozenset[str] = frozenset(),
     now: Optional[float] = None,
+    mutation_guard: Callable[[], None] | None = None,
 ) -> Optional[CleanupStats]:
     """Run :func:`sweep_workspace`, at most once per 24h, when enabled.
 
@@ -244,6 +266,8 @@ def run_cleanup_if_due(
         return None
 
     try:
+        if mutation_guard is not None:
+            mutation_guard()
         disk_io.atomic_write(stamp, b"", fsync=False)
     except OSError as exc:
         # Can't record the stamp — run anyway (worst case: it runs again sooner).
@@ -256,6 +280,7 @@ def run_cleanup_if_due(
         exclude_session_id=exclude_session_id,
         legal_hold_session_ids=legal_hold_session_ids,
         now=now,
+        mutation_guard=mutation_guard,
     )
     logger.debug(
         "workspace cleanup: scanned={} sessions_removed={} artifact_dirs_removed={} "
@@ -279,6 +304,7 @@ async def run_cleanup_if_due_async(
     exclude_session_id: str = "",
     legal_hold_session_ids: frozenset[str] = frozenset(),
     now: Optional[float] = None,
+    mutation_guard: Callable[[], None] | None = None,
 ) -> Optional[CleanupStats]:
     """Cancellation-safe runtime cleanup with the same throttle contract."""
     if not enabled:
@@ -289,6 +315,8 @@ async def run_cleanup_if_due_async(
     if last is not None and (now - last) < _THROTTLE_SECONDS:
         return None
     try:
+        if mutation_guard is not None:
+            mutation_guard()
         disk_io.atomic_write(stamp, b"", fsync=False)
     except OSError as exc:
         logger.debug(f"workspace cleanup: could not write stamp {stamp}: {exc}")
@@ -299,6 +327,7 @@ async def run_cleanup_if_due_async(
         exclude_session_id=exclude_session_id,
         legal_hold_session_ids=legal_hold_session_ids,
         now=now,
+        mutation_guard=mutation_guard,
     )
 
 

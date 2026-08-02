@@ -26,6 +26,7 @@ from mote.contracts.model.errors import (
     ModelCallDeadlineExceededError,
     ModelCallExhaustedError,
     ModelCallInDoubtError,
+    ModelCapabilityUnsatisfiedError,
     ModelRouteUnavailableError,
 )
 from mote.contracts.model.failover import (
@@ -61,6 +62,7 @@ from mote.contracts.model.model_journal import (
     ModelCallRecovery,
     ModelDecisionRecord,
 )
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.topology_codec import encode_route_id
 from mote.contracts.ports.artifact.store import ArtifactResolver
 from mote.contracts.ports.model.call_journal import ModelCallJournal
@@ -74,6 +76,7 @@ from mote.runtime.events.stream import (
     interrupt_attempt_stream,
 )
 from mote.runtime.models.cost import CostTracker, TokenUsage
+from mote.runtime.models.failover.compatibility import endpoints_are_projection_compatible
 from mote.runtime.models.failover.model_journal import ModelCallJournalError
 from mote.runtime.models.failover.orchestrator import AttemptOrchestrator, AttemptResumeSeed
 from mote.runtime.models.failover.planner import FailoverPlanner
@@ -1239,7 +1242,24 @@ class GenerationBoundRuntimeModelGateway:
         group = snapshot.group_for_route(route_id)
         if group is None or not group.endpoint_ids:
             return None
-        return snapshot.endpoint(group.endpoint_ids[0])
+        profiles = tuple(
+            endpoint
+            for endpoint_id in group.endpoint_ids
+            if (endpoint := snapshot.endpoint(endpoint_id)) is not None
+            and ModelOperation.GENERATE in endpoint.capabilities.supported_operations
+        )
+        if not profiles:
+            return None
+        if not endpoints_are_projection_compatible(profiles, ModelOperation.GENERATE):
+            raise ModelCapabilityUnsatisfiedError(
+                f"route {route_id!r} mixes projection-incompatible endpoints",
+                route_id=encode_route_id(route_id),
+                group_id=group.group_id,
+                operation=ModelOperation.GENERATE.value,
+                candidates=[endpoint.endpoint_id for endpoint in profiles],
+                config_revision=snapshot.revision,
+            )
+        return min(profiles, key=lambda endpoint: endpoint.endpoint_id)
 
     def route_profiles(self, route_id) -> tuple[EndpointDescriptor, ...]:
         snapshot = self._generation.planner.snapshot

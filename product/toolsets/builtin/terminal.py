@@ -29,8 +29,8 @@ from typing import ClassVar, Optional
 from mote.contracts.authorization import PermissionDecision
 from mote.contracts.runtime import RuntimeAccessMode
 from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
+from mote.contracts.tool.errors import ToolError
 from mote.product.toolsets.builtin.runtime_action import handoff_permission, is_handoff_action, run_handoff_action
-from mote.runtime.errors import ToolError
 from mote.runtime.interactive.terminal.driver import DEFAULT_YIELD_MS, TerminalRuntimeDriver
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetCwd, GetRuntimeHost, GetSandboxRuntime, HandoffRuntime

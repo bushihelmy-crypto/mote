@@ -1,4 +1,5 @@
 """Graph output service owns Graph terminal semantics behind the capability seam."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -6,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from mote.contracts.output import RunKind
-from mote.runtime.errors import GraphError
+from mote.contracts.task.graph_errors import GraphError
 from mote.runtime.output.graph_service import GraphOutputService
 
 

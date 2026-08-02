@@ -1,12 +1,13 @@
 """Completion policy for the current text-output contract."""
-from mote.contracts.model.turn import ToolCallAction
+
+from mote.contracts.model.turn import ModelTurn, ToolCallAction
 from mote.contracts.output.completion import CompletionDecision, CompletionKind
 
 
 class TextCompletionPolicy:
     """Complete only when a channel emits one semantic final candidate."""
 
-    async def evaluate(self, turn) -> CompletionDecision:
+    async def evaluate(self, turn: ModelTurn) -> CompletionDecision:
         candidates = turn.final_candidates
         if not candidates:
             return CompletionDecision(CompletionKind.CONTINUE)

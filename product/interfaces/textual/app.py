@@ -107,15 +107,15 @@ class MoteApp(App):
         self._surface = TextualSurface(self)
         # The currently-open streaming assistant block (None between blocks).
         self._open_block: Optional[AssistantBlock] = None
-        # Tool widgets awaiting their completion event, keyed by tool_use_id.
+        # Tool widgets awaiting completion, keyed by canonical invocation id.
         self._tool_widgets: dict[str, ToolCallWidget] = {}
-        # tool_use_id → its mounted ToolCallWidget, kept PAST completion so a
+        # Invocation id → its mounted ToolCallWidget, kept PAST completion so a
         # structured ``FileDiffBlock`` (which the projector emits right after the
         # completion) folds its diff INTO the owning tool row — Edit/Write's
         # invocation + change select/fold as one unit. Distinct from
         # ``_tool_widgets`` (which pops on completion for result correlation).
         self._diff_targets: dict[str, ToolCallWidget] = {}
-        # tool_use_id → the foldable transcript unit that owns media emitted by
+        # Invocation id → the foldable transcript unit that owns media emitted by
         # that call. A Read belongs to its coalesced group; other tools own their
         # own row. The mapping survives completion because media follows it.
         self._media_targets: dict[str, FoldableRow] = {}
@@ -128,7 +128,7 @@ class MoteApp(App):
         # ``ToolGroupWidget``. ``None`` between runs — the reducer emits a
         # ``flush_group`` op on any non-transparent event (see ``TextualSurface``).
         self._tool_group: Optional[ToolGroupWidget] = None
-        # tool_use_id → the group that owns it, so a completion folds into the
+        # Invocation id → the group that owns it, so a completion folds into the
         # right group (distinct from the standalone ``_tool_widgets`` map).
         self._grouped_tool_ids: dict[str, ToolGroupWidget] = {}
         # Open nested orchestrations (a run_graph; a sub-agent / bg task) keyed by

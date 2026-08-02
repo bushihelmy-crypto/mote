@@ -87,7 +87,7 @@ async def test_ledger_short_circuit_cannot_invoke_or_settle_as_ran():
 
 @pytest.mark.asyncio
 async def test_invoke_binds_and_restores_ambient_tool_call_id():
-    from mote.runtime.errors import RecoveryRunner
+    from mote.runtime.resilience.recovery import RecoveryRunner
     from mote.runtime.tools.execution_context import current_tool_call_id
 
     seen = []

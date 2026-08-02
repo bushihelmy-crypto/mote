@@ -19,7 +19,7 @@ from mote.contracts.events.model import (
 from mote.contracts.events.telemetry import ResourceReportEvent
 from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
 from mote.runtime.events.context import current_telemetry, observe_event, observe_event_sync
-from mote.runtime.events.telemetry import TelemetryBinding, TelemetryHandle
+from mote.runtime.events.telemetry import TelemetryHandle
 from mote.runtime.telemetry.logging import logger
 
 
@@ -224,15 +224,13 @@ class ResourceReporter(BaseModel):
             telemetry = current_telemetry()
             if telemetry is not None:
                 self._llm_queue = asyncio.Queue()
-                self._llm_handle = await telemetry.subscribe(
-                    TelemetryBinding(
-                        TelemetrySubscriptionSpec(
-                            identity=TelemetryIdentity(f"mote.reporting.llm_stream.{self.uuid}"),
-                            capacity=1024,
-                            overflow=TelemetryOverflow.DROP_OLDEST,
-                        ),
-                        _StreamQueueSubscriber(self._llm_queue),
-                    )
+                self._llm_handle = await telemetry.subscribe_all(
+                    TelemetrySubscriptionSpec(
+                        identity=TelemetryIdentity(f"mote.reporting.llm_stream.{self.uuid}"),
+                        capacity=1024,
+                        overflow=TelemetryOverflow.DROP_OLDEST,
+                    ),
+                    _StreamQueueSubscriber(self._llm_queue),
                 )
                 self._llm_task = asyncio.create_task(self._llm_stream_report(self._llm_queue))
         return self

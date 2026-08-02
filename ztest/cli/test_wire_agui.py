@@ -8,8 +8,16 @@ import json
 
 import pytest
 
+from mote.contracts.activity import ActivityKind, ActivityOutcome
+from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity
 from mote.product.interfaces.agui import wire as agui
 from mote.product.presentation.events import events as ev
+
+
+def _identity(value: str) -> ToolInvocationIdentity:
+    return ToolInvocationIdentity(
+        ToolInvocationId(value), ToolAttemptOrdinal(1), "definition", 1, "digest", "owner", "run"
+    )
 
 
 @pytest.fixture
@@ -55,7 +63,7 @@ def test_non_streamed_completed_synthesizes_full_triple(state):
 
 # ── tool calls ──────────────────────────────────────────────────────────────
 def test_tool_started_emits_start_and_args(state):
-    out = agui.to_agui_events(ev.ToolCallStarted(tool_name="Bash", headline="ls -la", tool_use_id="tc1"), state)
+    out = agui.to_agui_events(ev.ToolCallStarted(identity=_identity("tc1"), tool_name="Bash", headline="ls -la"), state)
     assert out == [
         {"type": "TOOL_CALL_START", "toolCallId": "tc1", "toolCallName": "Bash"},
         {"type": "TOOL_CALL_ARGS", "toolCallId": "tc1", "delta": "ls -la"},
@@ -63,13 +71,13 @@ def test_tool_started_emits_start_and_args(state):
 
 
 def test_tool_started_without_preview_omits_args(state):
-    out = agui.to_agui_events(ev.ToolCallStarted(tool_name="Noop", tool_use_id="tc9"), state)
+    out = agui.to_agui_events(ev.ToolCallStarted(identity=_identity("tc9"), tool_name="Noop"), state)
     assert out == [{"type": "TOOL_CALL_START", "toolCallId": "tc9", "toolCallName": "Noop"}]
 
 
 def test_tool_completed_emits_end_and_result(state):
     out = agui.to_agui_events(
-        ev.ToolCallCompleted(tool_name="Bash", ok=True, summary="done", tool_use_id="tc1"),
+        ev.ToolCallCompleted(identity=_identity("tc1"), tool_name="Bash", ok=True, summary="done"),
         state,
     )
     assert out[0] == {"type": "TOOL_CALL_END", "toolCallId": "tc1"}
@@ -80,7 +88,9 @@ def test_tool_completed_emits_end_and_result(state):
 
 def test_tool_completed_failure_uses_recovery_as_content(state):
     out = agui.to_agui_events(
-        ev.ToolCallCompleted(tool_name="Bash", ok=False, summary="", recovery="check the path", tool_use_id="tc2"),
+        ev.ToolCallCompleted(
+            identity=_identity("tc2"), tool_name="Bash", ok=False, summary="", recovery="check the path"
+        ),
         state,
     )
     assert out[1]["content"] == "check the path"
@@ -93,8 +103,8 @@ def test_task_progress_maps_to_step_started(state):
 
 
 def test_activity_started_and_completed(state):
-    started = agui.to_agui_events(ev.ActivityStarted(activity_kind="graph", label="pipeline"), state)
-    completed = agui.to_agui_events(ev.ActivityCompleted(outcome="success", summary="all ok"), state)
+    started = agui.to_agui_events(ev.ActivityStarted(activity_kind=ActivityKind.GRAPH, label="pipeline"), state)
+    completed = agui.to_agui_events(ev.ActivityCompleted(outcome=ActivityOutcome.SUCCESS, summary="all ok"), state)
     assert started == [{"type": "STEP_STARTED", "stepName": "pipeline"}]
     assert completed == [{"type": "STEP_FINISHED", "stepName": "all ok"}]
 
@@ -141,7 +151,7 @@ def test_error_maps_to_run_error(state):
 
 
 def test_file_diff_rides_custom(state):
-    out = agui.to_agui_events(ev.FileDiffBlock(path="/a.py", old="x", new="y"), state)
+    out = agui.to_agui_events(ev.FileDiffBlock(identity=_identity("diff-1"), path="/a.py", old="x", new="y"), state)
     assert out[0]["name"] == "fileDiff"
     assert out[0]["value"] == {"path": "/a.py", "old": "x", "new": "y"}
 

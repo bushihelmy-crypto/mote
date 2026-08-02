@@ -9,7 +9,10 @@ manager on every request (so proactive refresh keeps a cached client alive), and
 that manager is keyed by the server name. The manager is monkeypatched so
 nothing touches the network or token storage.
 """
+
 from __future__ import annotations
+
+from pathlib import Path
 
 import httpx
 import pytest
@@ -44,7 +47,10 @@ class _FakeManager:
 
 def _oauth_cfg() -> OAuthProviderConfig:
     # A minimal valid config: token_url satisfies the _require_token_url validator.
-    return OAuthProviderConfig(token_url="https://example.com/oauth/token")
+    return OAuthProviderConfig(
+        token_url="https://example.com/oauth/token",
+        storage_root=Path("/approved/oauth"),
+    )
 
 
 def test_no_oauth_returns_none():
@@ -68,7 +74,13 @@ def test_oauth_builds_refreshing_auth(monkeypatch):
 def test_manager_built_from_server_oauth_and_name(monkeypatch):
     monkeypatch.setattr(oauth_bridge, "OAuthManager", _FakeManager)
     cfg = _oauth_cfg()
-    server = MCPServerConfig(name="mysrv", type=MCPTransportType.SSE, enabled=True, url="https://x/sse", oauth=cfg)
+    server = MCPServerConfig(
+        name="mysrv",
+        type=MCPTransportType.SSE,
+        enabled=True,
+        url="https://x/sse",
+        oauth=cfg,
+    )
     build_mcp_auth(server)
     # The manager is fed the server's oauth block, keyed by the server name so
     # its token store / lock path is stable per server.
@@ -80,7 +92,11 @@ def test_sync_flow_sets_authorization_header(monkeypatch):
     # The sync auth_flow must inject "Authorization: Bearer <token>".
     monkeypatch.setattr(oauth_bridge, "OAuthManager", _FakeManager)
     cfg = MCPServerConfig(
-        name="remote", type=MCPTransportType.SSE, enabled=True, url="https://x/sse", oauth=_oauth_cfg()
+        name="remote",
+        type=MCPTransportType.SSE,
+        enabled=True,
+        url="https://x/sse",
+        oauth=_oauth_cfg(),
     )
     auth = build_mcp_auth(cfg)
     request = httpx.Request("GET", "https://x/sse")
@@ -94,7 +110,11 @@ def test_auth_reconsults_manager_each_request(monkeypatch):
     # long-lived cached client picks up refreshes.
     monkeypatch.setattr(oauth_bridge, "OAuthManager", _FakeManager)
     cfg = MCPServerConfig(
-        name="remote", type=MCPTransportType.SSE, enabled=True, url="https://x/sse", oauth=_oauth_cfg()
+        name="remote",
+        type=MCPTransportType.SSE,
+        enabled=True,
+        url="https://x/sse",
+        oauth=_oauth_cfg(),
     )
     auth = build_mcp_auth(cfg)
     first = next(auth.auth_flow(httpx.Request("GET", "https://x/sse")))
@@ -109,7 +129,11 @@ async def test_async_flow_sets_authorization_header(monkeypatch):
     # still inject the same bearer header.
     monkeypatch.setattr(oauth_bridge, "OAuthManager", _FakeManager)
     cfg = MCPServerConfig(
-        name="remote", type=MCPTransportType.SSE, enabled=True, url="https://x/sse", oauth=_oauth_cfg()
+        name="remote",
+        type=MCPTransportType.SSE,
+        enabled=True,
+        url="https://x/sse",
+        oauth=_oauth_cfg(),
     )
     auth = build_mcp_auth(cfg)
 

@@ -11,9 +11,13 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from mote.contracts.events.session import RunLeaseEvent
+from mote.contracts.output.errors import (
+    OutputCommitFencedError,
+    RunLeaseCoordinatorUnavailableError,
+    RunLeaseUnavailableError,
+)
 from mote.contracts.ports.session.run_lease import LeaseEpoch, RunLeaseCoordinator
 from mote.contracts.session.lease import RunLease, RunLeasePolicy
-from mote.runtime.errors import OutputCommitFencedError, RunLeaseCoordinatorUnavailableError, RunLeaseUnavailableError
 from mote.runtime.events.context import observe_event
 from mote.runtime.persistence import disk_io
 
@@ -88,6 +92,12 @@ class RunLeaseStore:
     def get(self, run_id: str) -> RunLease | None:
         with self._locked():
             return self._read().get(run_id)
+
+    def active_leases(self) -> tuple[RunLease, ...]:
+        """Immutable liveness projection for fenced workspace maintenance."""
+        with self._locked():
+            now = self._clock()
+            return tuple(lease for lease in self._read().values() if lease.owner_id and lease.expires_at > now)
 
     def _assert(
         self,

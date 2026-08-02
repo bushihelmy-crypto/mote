@@ -38,8 +38,8 @@ from mote.contracts.events.telemetry import JournalEvent
 from mote.contracts.execution.models import InferenceCheckpointState
 from mote.contracts.model.inference import InferenceResult
 from mote.contracts.tool.effects import ToolEffect
-from mote.kernel.telemetry.events import emit_event_sync
 from mote.runtime.durable.backend import DurableBackend
+from mote.runtime.events.context import current_telemetry
 from mote.runtime.ledger import COMPLETED, KIND_THINK, KIND_TIMER, STARTED, RunJournal
 
 if TYPE_CHECKING:
@@ -55,7 +55,9 @@ _TIMER_EFFECT = ToolEffect.PURE.value
 
 
 def _emit_journal_event(step_id: str, kind: str, phase: str, *, effect: str = "", seq: int = 0) -> None:
-    emit_event_sync(JournalEvent(step_id=step_id, kind=kind, phase=phase, effect=effect, seq=seq))
+    telemetry = current_telemetry()
+    if telemetry is not None:
+        telemetry.emit_sync(JournalEvent(step_id=step_id, kind=kind, phase=phase, effect=effect, seq=seq))
 
 
 def assistant_message_present(messages: "list[Message]", result: InferenceResult) -> bool:
@@ -68,7 +70,7 @@ def assistant_message_present(messages: "list[Message]", result: InferenceResult
     assistant content. An empty, call-less result is degenerate and treated as
     already present (nothing meaningful to reinstate).
     """
-    want_ids = {c.get("id") for c in (result.tool_calls or []) if c.get("id")}
+    want_ids = {call.id for call in (result.tool_calls or []) if call.id}
     if want_ids:
         for m in messages:
             if m.is_ai_message():
@@ -260,9 +262,11 @@ class InferenceJournal:
         """Record the post-dedup *result* forward for a possible reinstate."""
         payload = json.dumps(
             {
-                "checkpoint": {field: getattr(state, field) for field in state.__dataclass_fields__}
-                if state is not None
-                else None,
+                "checkpoint": (
+                    {field: getattr(state, field) for field in state.__dataclass_fields__}
+                    if state is not None
+                    else None
+                ),
                 "result": result.model_dump(mode="json"),
             },
             separators=(",", ":"),

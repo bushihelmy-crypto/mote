@@ -25,10 +25,10 @@ from mote.contracts.ports.artifact.store import ArtifactBlobStore, ArtifactStore
 from mote.runtime.artifacts import (
     ArtifactGarbageCollector,
     ArtifactOwnership,
-    ArtifactRepositoryBlobStore,
+    ContentAddressedArtifactBlobStore,
     DurableArtifactStore,
 )
-from mote.runtime.artifacts.repository import ArtifactRepository
+from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
 
 
 class MemoryBlobs:
@@ -398,10 +398,10 @@ async def test_ephemeral_scope_releases_at_explicit_turn_boundary(tmp_path):
 
 @pytest.mark.asyncio
 async def test_store_gc_reclaims_only_after_last_logical_root(tmp_path):
-    repository = ArtifactRepository(tmp_path / "project" / "blobs", hard_limit_bytes=1_024)
+    repository = ContentAddressedArtifactStore(tmp_path / "project" / "blobs", hard_limit_bytes=1_024)
     project = DurableArtifactStore(
         tmp_path / "project" / "artifacts.sqlite3",
-        ArtifactRepositoryBlobStore(repository),
+        ContentAddressedArtifactBlobStore(repository),
     )
     collector = ArtifactGarbageCollector(project, repository)
     first = await project.publish(
@@ -439,10 +439,10 @@ async def test_artifact_gc_preserves_content_under_legal_hold_pin(tmp_path):
         def freeze_artifact_pins(self):
             return nullcontext(self.refs)
 
-    repository = ArtifactRepository(tmp_path / "blobs", hard_limit_bytes=1_024)
+    repository = ContentAddressedArtifactStore(tmp_path / "blobs", hard_limit_bytes=1_024)
     store = DurableArtifactStore(
         tmp_path / "artifacts.sqlite3",
-        ArtifactRepositoryBlobStore(repository),
+        ContentAddressedArtifactBlobStore(repository),
     )
     hold = LegalHoldPins()
     collector = ArtifactGarbageCollector(store, repository, pin_sources=(hold,))

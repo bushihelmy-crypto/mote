@@ -21,6 +21,7 @@ Helpers:
 - ``run`` — drive a (bound) tool's ``async call(**kwargs)`` to completion.
 - ``workspace`` — a tmp dir the test cwd is switched into.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,9 +34,9 @@ from typing import Any, Callable, Optional
 import pytest
 
 from mote.contracts.runtime import CheckpointFidelity, RuntimeCheckpoint
-from mote.runtime.artifacts import ArtifactRepositoryBlobStore, DurableArtifactStore, ReliableArtifactPublisher
-from mote.runtime.interactive import RuntimeHost
+from mote.runtime.artifacts import ContentAddressedArtifactBlobStore, DurableArtifactStore, ReliableArtifactPublisher
 from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
+from mote.runtime.interactive.host import RuntimeHost
 from mote.runtime.session.log import SessionLog
 from mote.runtime.tools.base_tool import BaseTool
 from mote.ztest.fileops_factory import FileOperations
@@ -77,7 +78,7 @@ class CapRole:
         )
         self.artifact_store = DurableArtifactStore(
             Path(self._fileops_dir.name) / "artifacts.sqlite3",
-            ArtifactRepositoryBlobStore(self.file_operations.artifacts.content_repository),
+            ContentAddressedArtifactBlobStore(self.file_operations.artifacts.content_repository),
         )
         self.artifact_publisher = ReliableArtifactPublisher(
             self.artifact_store,
@@ -226,7 +227,7 @@ class CapRole:
             RuntimeCheckpoint(
                 runtime_id=f"tool-test-{kind}",
                 kind=kind,
-                epoch=0,
+                epoch=1,
                 revision=0,
                 codec=encoded.codec,
                 schema_version=encoded.schema_version,
@@ -345,7 +346,7 @@ class CapRole:
         try:
             value = decoder.decode(output)
         except OutputDecodeError:
-            from mote.runtime.errors import GraphError
+            from mote.contracts.task.graph_errors import GraphError
 
             raise GraphError("Graph terminal output did not satisfy its output contract")
         return CommittedOutput(
@@ -399,6 +400,16 @@ class CapRole:
         raise AssertionError(f"unexpected handoff of {runtime!r} in tool test: {message!r}")
 
     # --- the allowlist bind() consults ---
+    async def commit_generated_files(self, files, *, source, transaction_id=None):
+        return self.file_operations.commit_generated_files(
+            files,
+            source=source,
+            transaction_id=transaction_id,
+        )
+
+    def try_reserve_generated_targets(self, targets):
+        return self.file_operations.try_reserve_generated_targets(targets)
+
     def tool_capabilities(self) -> dict[str, Any]:
         return {
             "get_cwd": self.get_cwd,
@@ -410,6 +421,8 @@ class CapRole:
             "search_files": self.search_files,
             "plan_file_edit": self.plan_file_edit,
             "commit_edit_plan": self.commit_edit_plan,
+            "commit_generated_files": self.commit_generated_files,
+            "try_reserve_generated_targets": self.try_reserve_generated_targets,
             "record_file_glimpsed": self.record_file_glimpsed,
             "is_resource_visible": self.is_resource_visible,
             "get_browser_stealth": self.get_browser_stealth,

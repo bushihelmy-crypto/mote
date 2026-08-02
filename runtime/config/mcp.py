@@ -1,12 +1,13 @@
 from typing import Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
+from mote.contracts.config.base import ConfigModel
 from mote.contracts.config.model.oauth import OAuthProviderConfig
 from mote.contracts.tool.transport import MCPTransportType
 
 
-class MCPServerConfig(BaseModel):
+class MCPServerConfig(ConfigModel):
     """Configuration for one Runtime-managed MCP server."""
 
     name: str = Field(default="default_name", description="Server name")

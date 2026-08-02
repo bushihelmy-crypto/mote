@@ -8,7 +8,9 @@ from typing import Callable, Literal, Protocol
 
 from mote.contracts.ports.conversation.message_activity import MessageActivity
 from mote.contracts.ports.conversation.message_sink import MessageSink
-from mote.contracts.task.models import SessionId, TaskId, TaskResultRecord
+from mote.contracts.session.identity import SessionId
+from mote.contracts.task.lifecycle import BackgroundTaskDrainReceipt, BackgroundTaskOwner, BackgroundTaskPinSnapshot
+from mote.contracts.task.models import TaskId, TaskResultRecord
 
 
 class BackgroundMessageSink(MessageSink, MessageActivity, Protocol):
@@ -30,6 +32,20 @@ class BackgroundTaskService(Protocol):
 
     def set_wake(self, wake: Callable[[], None] | None) -> None: ...
 
+    def close_admission(self, *, owner: BackgroundTaskOwner) -> BackgroundTaskPinSnapshot: ...
+
+    def pin_snapshot(self, *, owner: BackgroundTaskOwner) -> BackgroundTaskPinSnapshot: ...
+
+    async def drain(
+        self,
+        *,
+        owner: BackgroundTaskOwner,
+        timeout_seconds: float,
+    ) -> BackgroundTaskDrainReceipt: ...
+
+    @property
+    def owner(self) -> BackgroundTaskOwner: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -41,6 +57,8 @@ class TaskResultRegistry(Protocol):
 
 class TaskOutputLocationPort(Protocol):
     def output_directory(self, session_id: SessionId) -> Path: ...
+
+    def tool_result_path(self, session_id: SessionId, result_id: str) -> Path: ...
 
 
 class AgentWakePort(Protocol):
@@ -54,6 +72,7 @@ class BackgroundTaskBuildContext:
     output_locations: TaskOutputLocationPort
     session_id: SessionId
     result_registry: TaskResultRegistry
+    owner: BackgroundTaskOwner
 
 
 BackgroundTaskServiceFactory = Callable[[BackgroundTaskBuildContext], BackgroundTaskService]

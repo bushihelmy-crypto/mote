@@ -16,21 +16,23 @@ the structural contract it implements is
 from __future__ import annotations
 
 import inspect
-from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, Protocol
+from collections.abc import Mapping
+from typing import Awaitable, Callable, Iterable, Optional, Protocol
 
 from mote.product.presentation.events.capabilities import Capabilities
 from mote.product.presentation.events.events import ViewEvent
+from mote.product.presentation.wire_types import WireMapping
 from mote.runtime.telemetry.logging import logger
 
 #: An async sink the transport injects: one wire payload dict → written out (SSE
 #: frame / JSON-RPC notification / ...). The transport owns the socket; a
 #: :class:`SinkConsumer` only produces payloads and calls this.
-Sink = Callable[[Dict[str, Any]], Awaitable[None]]
+WireObject = WireMapping
+Sink = Callable[[WireObject], Awaitable[None]]
 
 
 class ViewEventHandler(Protocol):
-    def __call__(self, event: ViewEvent) -> object:
-        ...
+    def __call__(self, event: ViewEvent) -> object: ...
 
 
 class BaseConsumer:
@@ -113,7 +115,7 @@ class SinkConsumer(BaseConsumer):
         """Bind (or rebind) the async wire sink — the server calls this once."""
         self._sink = sink
 
-    def _fold(self, ev: ViewEvent) -> Iterable[Dict[str, Any]]:
+    def _fold(self, ev: ViewEvent) -> Iterable[WireObject]:
         """Map one ViewEvent to zero+ wire payloads (subclass delegates to its
         pure ``_wire`` mapper). Unknown / display-only kinds → empty."""
         raise NotImplementedError
@@ -127,7 +129,7 @@ class SinkConsumer(BaseConsumer):
         """No-op: sinks are async-only, so sync-delivered events are dropped."""
         return None
 
-    async def _emit(self, payload: Dict[str, Any]) -> None:
+    async def _emit(self, payload: WireObject) -> None:
         if self._sink is None or self._closed:
             return
         try:

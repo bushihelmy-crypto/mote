@@ -14,7 +14,7 @@ from mote.runtime.fileops.document_budgets import DEFAULT_EXTRACTION_BUDGET
 from mote.runtime.fileops.documents import extract_document_bytes, is_document
 from mote.runtime.fileops.encoding import decode_text
 from mote.runtime.fileops.identity import PathLike
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, FileMutationArtifactRepository
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class TextSourceService:
     def __init__(
         self,
         *,
-        artifacts: ArtifactRepository,
+        artifacts: FileMutationArtifactRepository,
         capture: ManagedSnapshotCapture,
         extraction_budget: ExtractionBudget = DEFAULT_EXTRACTION_BUDGET,
     ) -> None:

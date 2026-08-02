@@ -1,11 +1,14 @@
 """Engine-owned shared Runtime services and their lifecycle boundary."""
+
 from __future__ import annotations
 
 import asyncio
 import threading
 from collections.abc import Iterable
 
+from mote.contracts.ports.agent.budget import AgentBudgetPort
 from mote.contracts.ports.session.run_lease import RunLeaseCoordinator
+from mote.contracts.ports.workflow.governance import WorkflowGovernanceCompositionPort
 from mote.contracts.runtime.application import ApplicationCompositionPort, ApplicationReloadPort
 from mote.runtime.code_map.scan_gate import CodeMapScanGate
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleResource, LifecycleStack
@@ -31,6 +34,8 @@ class EngineServices:
         "workspace_cleanup_gate",
         "application_composition",
         "application_reloader",
+        "agent_budget",
+        "workflow_governance",
         "_owner_count",
         "_owner_lock",
         "_owned_close_started",
@@ -47,10 +52,14 @@ class EngineServices:
         resources: Iterable[LifecycleResource] = (),
         application_composition: ApplicationCompositionPort | None = None,
         application_reloader: ApplicationReloadPort | None = None,
+        agent_budget: AgentBudgetPort | None = None,
+        workflow_governance: WorkflowGovernanceCompositionPort | None = None,
     ) -> None:
         self.context = context
         self.application_composition = application_composition
         self.application_reloader = application_reloader
+        self.agent_budget = agent_budget
+        self.workflow_governance = workflow_governance
         self.run_lease_coordinator = run_lease_coordinator
         self.code_map_scan_gate = code_map_scan_gate or CodeMapScanGate()
         self.workspace_cleanup_gate = workspace_cleanup_gate or WorkspaceCleanupGate()

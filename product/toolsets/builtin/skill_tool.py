@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from mote.runtime.errors import ToolError
+from mote.contracts.tool.errors import ToolError
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetCwd, GetSkillPool, RegisterResource, RunSkillFork
 

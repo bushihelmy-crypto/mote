@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 """Tests for the zero-cycle spawn vocabulary + ambient discovery."""
 
+import asyncio
 import types
 
 import pytest
 
 from mote.contracts.agent import AgentConstructionRequest, Lifecycle, SpawnableAgentDefinition, SpawnContext, SpawnPlan
+from mote.contracts.agent.errors import AgentLimitReached
 from mote.runtime.agent.control import current_control, resolve_control, set_control, spawn_and_run
-from mote.runtime.errors import AgentLimitReached
 
 
 class _TestBuilder:
@@ -47,25 +48,51 @@ def test_set_control_binds_and_restores():
     assert current_control() is None
 
 
-def test_resolve_control_prefers_explicit_ctx():
-    ambient = object()
-    explicit = object()
-    ctx = types.SimpleNamespace(agent_control=explicit)
-    with set_control(ambient):
-        assert resolve_control(ctx) is explicit
+def test_set_control_nested_and_exception_restore_exact_parent():
+    outer = object()
+    inner = object()
+    with set_control(outer):
+        with pytest.raises(RuntimeError):
+            with set_control(inner):
+                assert current_control() is inner
+                raise RuntimeError("stop")
+        assert current_control() is outer
+    assert current_control() is None
+
+
+@pytest.mark.asyncio
+async def test_control_context_is_task_local_and_cancel_restores_caller():
+    first = object()
+    second = object()
+    ready = asyncio.Event()
+
+    async def worker(control):
+        with set_control(control):
+            ready.set()
+            await asyncio.Event().wait()
+
+    first_task = asyncio.create_task(worker(first))
+    await ready.wait()
+    ready.clear()
+    second_task = asyncio.create_task(worker(second))
+    await ready.wait()
+    assert current_control() is None
+    first_task.cancel()
+    second_task.cancel()
+    for task in (first_task, second_task):
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert current_control() is None
 
 
 def test_resolve_control_falls_back_to_ambient():
     ambient = object()
-    ctx = types.SimpleNamespace(agent_control=None)
     with set_control(ambient):
-        assert resolve_control(ctx) is ambient
-        assert resolve_control(None) is ambient
+        assert resolve_control() is ambient
 
 
 def test_resolve_control_none_when_unbound():
-    assert resolve_control(None) is None
-    assert resolve_control(types.SimpleNamespace(agent_control=None)) is None
+    assert resolve_control() is None
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +134,7 @@ class _FakeHandle:
         self.closed = False
         # A minimal runtime.role surface so on_spawn / builder messages resolve.
         self.runtime = types.SimpleNamespace(role=role)
+        self.agent = role
         self._events = events  # shared ordered log of lifecycle events
 
     async def run_to_completion(self, message):
@@ -145,15 +173,6 @@ async def test_spawn_and_run_with_ambient_plane():
         out = await spawn_and_run(spec, "msg")
     assert out == "from-plane"
     assert len(control.spawned) == 1
-
-
-@pytest.mark.asyncio
-async def test_spawn_and_run_with_explicit_ctx_plane():
-    control = _FakeControl(summary="explicit")
-    ctx = types.SimpleNamespace(agent_control=control)
-    spec = spawn_plan(role_factory=lambda c: None, nickname="x")
-    out = await spawn_and_run(spec, "msg", ctx=ctx)
-    assert out == "explicit"
 
 
 @pytest.mark.asyncio

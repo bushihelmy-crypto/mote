@@ -5,14 +5,17 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
+from mote.contracts.agent import ApprovedDeclaration
 from mote.contracts.file.identity import FileChangeAttribution, FileVersion, FileVersionTransition
 from mote.contracts.ports.file.changes import FileChangePort
 from mote.runtime.agent.component_graph import ComponentSpec
 from mote.runtime.agent.component_keys import FILE_OPERATIONS, FILE_WATCH_SERVICE, SKILL_MANAGER, TELEMETRY
 from mote.runtime.agent.components.integrations import hook_available
 from mote.runtime.code_map.languages import registered_extensions
+from mote.runtime.config.hook import HookConfig
 from mote.runtime.vcs import find_git_root
 from mote.runtime.watching import FileWatchService
 
@@ -65,11 +68,29 @@ class WatchingCallbacks:
     config_source_roots: Callable[[], list[str]]
 
 
-def watching_component_specs(callbacks: WatchingCallbacks) -> list[ComponentSpec]:
-    return [ComponentSpec(FILE_WATCH_SERVICE, lambda ctx: _build_file_watch_service(ctx, callbacks))]
+@dataclass(frozen=True, slots=True)
+class WatchingComponentInputs:
+    watched_config_files: tuple[Path, ...] = ()
+    approved_hooks: ApprovedDeclaration[HookConfig] | None = None
 
 
-def _build_file_watch_service(ctx, callbacks: WatchingCallbacks):
+def watching_component_specs(
+    callbacks: WatchingCallbacks, inputs: WatchingComponentInputs = WatchingComponentInputs()
+) -> list[ComponentSpec]:
+    return [
+        ComponentSpec(
+            FILE_WATCH_SERVICE,
+            lambda ctx: _build_file_watch_service(ctx, callbacks, inputs.watched_config_files, inputs.approved_hooks),
+        )
+    ]
+
+
+def _build_file_watch_service(
+    ctx,
+    callbacks: WatchingCallbacks,
+    watched_config_files: tuple[Path, ...],
+    approved_hooks: ApprovedDeclaration[HookConfig] | None,
+):
     role = ctx.role
     config = role.role_schema.file_watch
     if config is None or not config.enabled:
@@ -89,9 +110,9 @@ def _build_file_watch_service(ctx, callbacks: WatchingCallbacks):
         roots.extend(callbacks.config_source_roots())
     if config.reload_mcp:
         callbacks.register_hook("FileChanged", callbacks.reload_mcp, r"mcp\.json$")
-        roots.extend(str(path) for path in role.wiring.dependencies.watched_config_files)
+        roots.extend(str(path) for path in watched_config_files)
 
-    if hook_available(role, ctx.state):
+    if hook_available(role, ctx.state, approved_hooks):
         extensions = "|".join(re.escape(ext) for ext in sorted(registered_extensions()))
         callbacks.register_hook(
             "FileChanged",

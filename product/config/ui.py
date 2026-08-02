@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Human display-layer UI configuration (currently just the display language)."""
+
 from pydantic import Field
 
-from mote.product.config.base import ConfigModel as YamlModel
+from mote.contracts.config.base import ConfigModel as YamlModel
 
 
 class UIConfig(YamlModel):

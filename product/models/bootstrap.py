@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from mote.contracts.config.model.llm import LLMType
-from mote.product.models import AnthropicLLM, DeepSeekLLM, OpenAILLM, OpenAIResponsesLLM
+from mote.product.models.providers.anthropic import AnthropicLLM
+from mote.product.models.providers.deepseek import DeepSeekLLM
+from mote.product.models.providers.openai_chat import OpenAILLM
+from mote.product.models.providers.openai_responses import OpenAIResponsesLLM
 from mote.product.models.registry import LLMProviderRegistry
 
 

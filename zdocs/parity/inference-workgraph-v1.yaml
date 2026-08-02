@@ -281,7 +281,7 @@ packages:
     depends_on: [gateway.unary, seam.durable_single_command, gateway.session, gateway.transfer]
     contracts_read: [contracts/inference/backup.py]
     contracts_write: []
-    acceptance_tests: [ztest/inference/test_backup_barrier.py, ztest/inference/test_shared_daemon_application.py]
+    acceptance_tests: [ztest/inference/test_restore_service.py, ztest/inference/test_shared_daemon_application.py]
     performance_budget: {slo_revision: inference-slo-v1, dimensions: {backup_rpo_seconds: 900}}
     migration_steps: [raise_epoch, checkpoint_authorities, sign_recovery_set, restore_drill]
     rollback: {preconditions: [verified_prior_backup], procedure: isolated_restore_then_atomic_authority_swap, evidence: [restore_report, component_digests]}

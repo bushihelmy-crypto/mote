@@ -8,9 +8,10 @@ from mote.runtime.artifacts.layout import (
     project_artifact_identity,
 )
 from mote.runtime.artifacts.ownership import ArtifactOwnership
+from mote.runtime.artifacts.pins import ArtifactPinReceipt, ArtifactPinRegistry, ArtifactPinSnapshot
 from mote.runtime.artifacts.publication import ReliableArtifactPublisher
-from mote.runtime.artifacts.repository import ArtifactRepository
-from mote.runtime.artifacts.repository_blobs import ArtifactRepositoryBlobStore
+from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
+from mote.runtime.artifacts.repository_blobs import ContentAddressedArtifactBlobStore
 from mote.runtime.artifacts.resolver import StoreArtifactResolver
 from mote.runtime.artifacts.store import ARTIFACT_INDEX_FILENAME, DurableArtifactStore
 from mote.runtime.artifacts.transfer import ArtifactIdempotencyRecord, ArtifactRevisionTransfer
@@ -20,8 +21,11 @@ __all__ = [
     "ARTIFACT_REPOSITORY_DIRNAME",
     "ArtifactIdempotencyRecord",
     "ArtifactOwnership",
-    "ArtifactRepositoryBlobStore",
-    "ArtifactRepository",
+    "ArtifactPinReceipt",
+    "ArtifactPinRegistry",
+    "ArtifactPinSnapshot",
+    "ContentAddressedArtifactBlobStore",
+    "ContentAddressedArtifactStore",
     "ArtifactRepositoryBundle",
     "ArtifactRepositoryLayout",
     "ArtifactRevisionTransfer",

@@ -8,11 +8,12 @@ defaults to ``is_retryable`` — so ``RetryableToolError`` retries while a plain
 the original exception propagates after exhaustion. ``max_wait`` is set to ~0 in
 these tests to keep them fast.
 """
+
 from __future__ import annotations
 
 import pytest
 
-from mote.runtime.errors import RetryableToolError, ToolError
+from mote.contracts.tool.errors import RetryableToolError, ToolError
 from mote.runtime.tools.tool_retry import retryable_tool
 
 pytestmark = pytest.mark.asyncio

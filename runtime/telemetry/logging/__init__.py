@@ -8,7 +8,7 @@ decorator logging (:func:`log_call`) and base-class decorator logging
 (:class:`LoggedMixin` / :func:`log_class`) with trace-id context binding.
 
 This package is a pure leaf: it imports only stdlib + loguru, never the higher
-``common.events`` / ``common.hook`` layers. The dependency edge runs one-way
+the event and hook domains. The dependency edge runs one-way
 ``events → logs`` (Telemetry uses ``logger``). The LLM-stream emitter
 ``log_llm_stream`` therefore lives in :mod:`mote.runtime.events.stream`, not
 here — import it from ``mote.runtime.events``.

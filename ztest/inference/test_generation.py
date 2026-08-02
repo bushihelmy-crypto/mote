@@ -1,8 +1,21 @@
 import asyncio
+import json
 
 import pytest
 
-from mote.contracts.inference.generation_artifact import GenerationArtifact
+from mote.contracts.inference.generation_artifact import (
+    CapabilityPricingSnapshot,
+    DeploymentKind,
+    GenerationActivationPolicy,
+    GenerationArtifact,
+    ModelGenerationBinding,
+    RuntimeBindingKind,
+    ServiceGenerationBinding,
+    SessionGenerationBinding,
+    TransferGenerationBinding,
+    VersionBinding,
+    compute_generation_artifact_digest,
+)
 from mote.product.inference.backends.sqlite import ReceiptConflictError, SQLiteAttemptReceiptStore
 from mote.product.inference.daemon.generation import SharedGenerationBackend
 from mote.runtime.inference.generation import GatewayGenerationOwner, GenerationDomain, GenerationState
@@ -10,29 +23,28 @@ from mote.runtime.inference.generation import GatewayGenerationOwner, Generation
 
 def _artifact(generation, parent=None):
     digest = "sha256:" + generation[-1] * 64
-    return GenerationArtifact(
+    artifact = GenerationArtifact(
         generation_id=generation,
         parent_generation_id=parent,
-        model_planner_and_bindings={"model": generation},
-        service_planner_and_bindings={"service": generation},
-        session_capability_and_bindings={"session": generation},
-        transfer_capability_and_bindings={"transfer": generation},
-        credential_versions={"slot": "1"},
+        model_binding=ModelGenerationBinding(topology_revision=generation),
+        service_binding=ServiceGenerationBinding(runtime=RuntimeBindingKind.EMBEDDED, configured=True),
+        session_binding=SessionGenerationBinding(runtime=RuntimeBindingKind.EMBEDDED, configured=True),
+        transfer_binding=TransferGenerationBinding(runtime=RuntimeBindingKind.EMBEDDED, configured=True),
+        credential_versions=(VersionBinding(identity="slot", revision="1"),),
         transport_registry_revision="transport-v1",
         client_profile_revision=f"client-{generation[-1]}",
         failure_policy_revision="failure-v2",
-        capability_catalog_pricing_snapshot={},
-        governance_cache_plugin_revisions={},
+        capability_pricing=CapabilityPricingSnapshot(catalog_revision="catalog", pricing_revision="pricing"),
+        governance_plugins=(),
         required_wire_contract_range=(1, 1),
-        activation_policy={},
+        activation_policy=GenerationActivationPolicy(deployment=DeploymentKind.EMBEDDED, activate_immediately=False),
         min_reader_version=1,
         min_writer_version=1,
-        persistence_schema_versions={"receipt": 1},
+        persistence_schemas=(VersionBinding(identity="receipt", revision="1"),),
         migration_set_digest="sha256:" + "f" * 64,
         artifact_digest=digest,
-        signer_key_id="key",
-        signature="signature",
     )
+    return artifact.model_copy(update={"artifact_digest": compute_generation_artifact_digest(artifact)})
 
 
 def test_activation_is_atomic_and_old_generation_retires_after_last_reference():
@@ -46,7 +58,7 @@ def test_activation_is_atomic_and_old_generation_retires_after_last_reference():
     owner.activate(second.generation_id, second.artifact_digest)
     assert owner.active_generation_id == second.generation_id
     assert owner.state(first.generation_id) is GenerationState.DRAINING
-    assert lease.model_view().bindings["model"] == "generation-1"
+    assert lease.model_view().bindings["topology_revision"] == "generation-1"
     with pytest.raises(PermissionError):
         lease.service_view()
     lease.release()
@@ -64,6 +76,46 @@ def test_digest_mismatch_does_not_disturb_active_generation():
         owner.activate(second.generation_id, "sha256:" + "0" * 64)
     assert owner.active_generation_id == first.generation_id
     assert owner.state(first.generation_id) is GenerationState.ACTIVE
+
+
+def test_stage_rejects_typed_binding_tamper_under_stale_content_digest():
+    artifact = _artifact("generation-1")
+    tampered = artifact.model_copy(
+        update={"model_binding": artifact.model_binding.model_copy(update={"topology_revision": "tampered"})}
+    )
+    with pytest.raises(ValueError, match="content digest mismatch"):
+        GatewayGenerationOwner().stage(tampered)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda value: {**value, "schema_version": 1},
+        lambda value: {**value, "extra": True},
+        lambda value: {**value, "model_binding": {**value["model_binding"], "variant": "unknown"}},
+        lambda value: {**value, "activation_policy": {**value["activation_policy"], "activate_immediately": 1}},
+    ),
+)
+def test_generation_artifact_strict_reader_rejects_unknown_or_wrong_shape(mutate):
+    payload = json.loads(_artifact("generation-1").model_dump_json())
+    with pytest.raises(ValueError):
+        GenerationArtifact.model_validate(mutate(payload), strict=True)
+
+
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {"required_wire_contract_range": (3, 2)},
+        {"required_wire_contract_range": (2, 3), "min_reader_version": 3},
+        {"required_wire_contract_range": (2, 3), "min_writer_version": 3},
+    ),
+)
+def test_generation_artifact_rejects_incoherent_wire_version_bounds(updates):
+    payload = _artifact("generation-1").model_dump()
+    payload.update(updates)
+
+    with pytest.raises(ValueError, match="wire contract range|reader/writer"):
+        GenerationArtifact.model_validate(payload)
 
 
 def test_retired_client_profile_decoder_remains_pinned_for_open_resume():

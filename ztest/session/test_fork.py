@@ -8,6 +8,7 @@ compaction fact. Also covers parent lineage, copied cwd/model anchors,
 independence from the parent, missing-source/existing-target rejection, Role
 sibling construction, and lineage in session listing.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,9 +28,10 @@ from mote.contracts.file import ReviewStatus
 from mote.contracts.file.errors import SnapshotDurabilityError
 from mote.contracts.file.mutations import ReplaceMutation
 from mote.contracts.tool import CommandProtocol, ToolsetIdentity
+from mote.product.agents.factory import CodingAgentFactory
 from mote.runtime.fileops.edit_plans import LiteralEditPlanRequest
 from mote.runtime.fileops.identity import path_token
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository
+from mote.runtime.fileops.mutation.artifacts import FileMutationArtifactRepository
 from mote.runtime.fileops.resource_limits import ARTIFACT_WRITE_TTL_SECONDS
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
 from mote.runtime.session.codec import decode_session_event, iter_file_operations_events
@@ -348,7 +350,7 @@ def test_fork_uses_one_exact_unique_artifact_budget_per_transaction_event(
     expected_budget = sum(ref.size for ref in {ref.digest: ref for ref in refs}.values())
 
     observed_budgets = []
-    original_write_scope = ArtifactRepository.write_scope
+    original_write_scope = FileMutationArtifactRepository.write_scope
 
     def record_write_scope(repository, *, owner, maximum_bytes, ttl_seconds):
         if repository.catalog.root == tmp_path / "child" / "artifact-lifecycle":
@@ -360,7 +362,7 @@ def test_fork_uses_one_exact_unique_artifact_budget_per_transaction_event(
             ttl_seconds=ttl_seconds,
         )
 
-    monkeypatch.setattr(ArtifactRepository, "write_scope", record_write_scope)
+    monkeypatch.setattr(FileMutationArtifactRepository, "write_scope", record_write_scope)
     _fork("parent", new_session_id="child", base_dir=str(tmp_path))
 
     assert observed_budgets == [expected_budget, 0]
@@ -516,7 +518,7 @@ async def test_role_fork_session_inherits_history_and_lineage(tmp_path, monkeypa
 
     from mote.ztest.model_fakes import FakeApplicationComposition, bind_fake_runtime
 
-    context = Context(config=offline_config())
+    context = Context()
     composition = FakeApplicationComposition(FakeModelGateway(OfflineLLM("test")))
     paths = default_runtime_paths(
         user_config_root=tmp_path / "config",
@@ -528,17 +530,10 @@ async def test_role_fork_session_inherits_history_and_lineage(tmp_path, monkeypa
         wiring=AgentWiring.for_context(
             context,
             application_composition=composition,
-            dependencies=AgentDependencies(
-                deps=None,
-                output_contract=text_output_contract(),
-                routing_strategy_builders={"squilla": object},
-                user_config_root=paths.user_config_root,
-                session_workspace_root=paths.session_workspace_root,
-                browser_profiles_root=paths.browser_profiles_root,
-                sandbox_ca_root=paths.sandbox_ca_root,
-                secrets_root=paths.secrets_root,
-                oauth_root=paths.oauth_root,
-            ),
+            dependencies=CodingAgentFactory(
+                paths=paths,
+                routing_strategy_builders_factory=lambda: {"squilla": object},
+            ).dependencies(deps=None, output_contract=text_output_contract()),
         ),
     )
     bind_fake_runtime(parent, OfflineLLM("test"))

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import os
 import tempfile
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
 
 from mote.contracts.artifact import ArtifactContentRef
 from mote.contracts.content.identity import ContentIdentity
 from mote.contracts.events.file.facts import FileOperationsEvent
+from mote.contracts.file.errors import FileLockTimeoutError
 from mote.contracts.file.identity import (
     AbsentVersion,
     FileChangeAttribution,
@@ -37,7 +40,7 @@ from mote.contracts.file.views import (
     ReadRequest,
     TextReadRequest,
 )
-from mote.runtime.artifacts.repository import ArtifactRepository as ContentRepository
+from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
 from mote.runtime.fileops.byte_views import ByteViewService
 from mote.runtime.fileops.candidate_discovery import CandidateDiscoveryService
 from mote.runtime.fileops.capture import ManagedSnapshotCapture
@@ -52,12 +55,18 @@ from mote.runtime.fileops.edit_plans import (
     ExistingEditPlanSource,
 )
 from mote.runtime.fileops.hunk_projection import EditPlanHunkProjector
-from mote.runtime.fileops.identity import name_identity, path_token, project_identity
+from mote.runtime.fileops.identity import name_identity, path_token, project_identity, target_identity
 from mote.runtime.fileops.journal import DurableFileOperationsJournal
-from mote.runtime.fileops.locking import TIMELINE_LOCK_LEVEL, HierarchicalLockManager
+from mote.runtime.fileops.locking import (
+    NAME_LOCK_LEVEL,
+    PROJECT_LOCK_LEVEL,
+    TARGET_LOCK_LEVEL,
+    TIMELINE_LOCK_LEVEL,
+    HierarchicalLockManager,
+)
 from mote.runtime.fileops.mutation.artifact_catalog import ArtifactObjectState
 from mote.runtime.fileops.mutation.artifact_roots import ArtifactReachabilityProjector, ExternalArtifactRootSource
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, FileMutationArtifactRepository
 from mote.runtime.fileops.mutation_factory import MutationFactory
 from mote.runtime.fileops.pdf_views import PdfViewService
 from mote.runtime.fileops.publisher import AtomicPublisher
@@ -124,6 +133,21 @@ def _directory_fsync_writable(path: Path) -> bool:
                 pass
 
 
+@dataclass
+class GeneratedTargetReservation:
+    """Process-incarnation lease over canonical FileOps path locks."""
+
+    targets: tuple[str, ...]
+    _lease: AbstractContextManager[None]
+    _released: bool = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._lease.__exit__(None, None, None)
+        self._released = True
+
+
 class FileOperations:
     """Owns one session's snapshots, observed versions, and mutation protocol."""
 
@@ -133,7 +157,7 @@ class FileOperations:
         session_id: str,
         journal_path: Path,
         get_project_root: Callable[[], str],
-        artifact_repository: ContentRepository,
+        artifact_repository: ContentAddressedArtifactStore,
         artifact_lifecycle_root: Path,
         flush_pending: Optional[Callable[[], None]] = None,
         lock_root: Optional[Path] = None,
@@ -143,7 +167,7 @@ class FileOperations:
         journal_path = Path(journal_path)
         self.session_id = session_id
         self._get_project_root = get_project_root
-        artifacts = ArtifactRepository(
+        artifacts = FileMutationArtifactRepository(
             artifact_repository,
             lifecycle_root=artifact_lifecycle_root,
             hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
@@ -275,6 +299,12 @@ class FileOperations:
             for ref in referenced
         }
         return tuple(roots[digest] for digest in sorted(roots))
+
+    @contextmanager
+    def freeze_artifact_pins(self):
+        """Project the durable cursor lease snapshot into the Artifact pin Port."""
+        with self.cursor_registry.freeze_pins() as snapshot:
+            yield tuple(ArtifactContentRef(identity=ref, locator=f"sha256:{ref.digest}") for ref in snapshot.artifacts)
 
     def prune_artifact_metadata(self, _reachable: Sequence[ArtifactContentRef]) -> None:
         """Reconcile FileOps lifecycle metadata with shared-CAS reachability."""
@@ -517,10 +547,15 @@ class FileOperations:
         files: dict[str, bytes],
         *,
         source: str,
+        transaction_id: str | None = None,
     ) -> MutationResult:
         """Atomically create or replace generated binary files."""
         if not files:
             raise ValueError("generated file batch must be non-empty")
+        if transaction_id is not None:
+            resumed = self.mutations.resume(transaction_id)
+            if resumed is not None:
+                return resumed
         snapshots = {path: self.capture(path)[0] for path in files if os.path.lexists(path)}
         maximum_bytes = sum(len(content) for content in files.values()) + (
             (len(files) - len(snapshots)) * MAX_METADATA_MANIFEST_BYTES
@@ -531,22 +566,66 @@ class FileOperations:
             ttl_seconds=ARTIFACT_WRITE_TTL_SECONDS,
         ) as scope:
             mutations = tuple(
-                self.mutation_factory.replacement(
-                    snapshots[path],
-                    content,
-                    scope=scope,
+                (
+                    self.mutation_factory.replacement(
+                        snapshots[path],
+                        content,
+                        scope=scope,
+                    )
+                    if path in snapshots
+                    else self.mutation_factory.creation(path, content, scope=scope)
                 )
-                if path in snapshots
-                else self.mutation_factory.creation(path, content, scope=scope)
                 for path, content in files.items()
             )
             return self.mutations.commit(
                 self.mutation_factory.mutation_set(
                     source=source,
                     mutations=mutations,
+                    transaction_id=transaction_id,
                 ),
                 ScopedMutationArtifacts(scope),
             )
+
+    def try_reserve_generated_targets(
+        self,
+        targets: tuple[str, ...],
+    ) -> GeneratedTargetReservation | None:
+        """Non-blockingly reserve exact canonical targets before remote effects."""
+        if not targets or len(set(targets)) != len(targets):
+            raise ValueError("generated targets must be non-empty and unique")
+        root = path_token(self._get_project_root())
+        resolved_root = os.path.realpath(root.native)
+        specs: list[LockSpec] = [
+            LockSpec(PROJECT_LOCK_LEVEL, project_identity(root).key, LockMode.SHARED, root.display)
+        ]
+        canonical: list[str] = []
+        for value in targets:
+            target = path_token(value)
+            parent = os.path.dirname(target.native) or "."
+            resolved_parent = os.path.realpath(parent)
+            try:
+                inside = os.path.commonpath((resolved_root, resolved_parent)) == resolved_root
+            except ValueError:
+                inside = False
+            if not inside:
+                raise ValueError(f"generated target is outside project root: {target.display}")
+            canonical.append(target.display)
+            specs.append(LockSpec(NAME_LOCK_LEVEL, name_identity(target).key, LockMode.EXCLUSIVE, target.display))
+            if os.path.lexists(target.native):
+                specs.append(
+                    LockSpec(
+                        TARGET_LOCK_LEVEL,
+                        target_identity(target).key,
+                        LockMode.EXCLUSIVE,
+                        target.display,
+                    )
+                )
+        lease = self.locks.acquire_many(specs, timeout=0.0, reentrant=False)
+        try:
+            lease.__enter__()
+        except FileLockTimeoutError:
+            return None
+        return GeneratedTargetReservation(tuple(canonical), lease)
 
     def _observe_edit_plan_commit(
         self,

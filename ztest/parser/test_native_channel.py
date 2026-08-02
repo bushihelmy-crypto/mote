@@ -8,6 +8,7 @@ is a :class:`CommandChannel`. The think round is faked via
 :class:`FakeThinkEngine` (a real :class:`InferenceResult` behind ``done`` /
 ``join``), so no LLM is involved.
 """
+
 from __future__ import annotations
 
 import base64
@@ -25,6 +26,7 @@ from mote.contracts.conversation.fields import (
     TOOL_REFERENCES,
     TOOL_RESULT_RESOURCE_PATH,
 )
+from mote.contracts.model.invocation import CanonicalToolCall
 from mote.contracts.tool.catalog import MaterializedToolCatalog, MaterializedToolDefinition, ToolCatalogIdentity
 from mote.kernel.commands.channel import CommandChannel
 from mote.kernel.commands.native import FINAL_OUTPUT_TOOL_NAME, NativeToolChannel
@@ -35,9 +37,9 @@ from mote.ztest.artifact_fakes import ArtifactTestResolver, artifact_media
 from .conftest import FakeExecutor, FakeMemory, FakeThinkEngine, apply_projection, collect, executed_command
 
 
-def native_call(id="1", command_name="Read", args=None) -> dict:
+def native_call(id="1", command_name="Read", args=None) -> CanonicalToolCall:
     """Build a think-result tool-call entry (the unified IR shape)."""
-    return {"id": id, "command_name": command_name, "args": args or {}}
+    return CanonicalToolCall(id=id, name=command_name, arguments=args or {})
 
 
 def materialized_catalog(specs):
@@ -55,7 +57,7 @@ def materialized_catalog(specs):
 
 
 def endpoint(*, model="test-model", native_schema=False, tool_search=False):
-    from mote.contracts.model import EndpointCapabilities, EndpointDescriptor
+    from mote.contracts.model import EndpointDescriptor, ResolvedEndpointCapabilities
 
     return EndpointDescriptor(
         endpoint_id="test",
@@ -65,7 +67,7 @@ def endpoint(*, model="test-model", native_schema=False, tool_search=False):
         base_url_identity="https://test.invalid",
         credential_pool_id="test",
         lifecycle_revision="test",
-        capabilities=EndpointCapabilities(
+        capabilities=ResolvedEndpointCapabilities(
             supports_native_schema=native_schema,
             supports_native_tool_search=tool_search,
         ),
@@ -298,8 +300,7 @@ class TestIterCommands:
 
     @pytest.mark.asyncio
     async def test_missing_id_and_args_default(self):
-        # cmd has only command_name -> id None, args {}.
-        engine = FakeThinkEngine(tool_calls=[{"command_name": "Glob"}])
+        engine = FakeThinkEngine(tool_calls=[native_call("", "Glob")])
         cmds = await collect(NativeToolChannel(), engine, set())
         assert cmds == [
             {
@@ -312,8 +313,8 @@ class TestIterCommands:
         ]
 
     @pytest.mark.asyncio
-    async def test_null_args_normalized_to_empty_dict(self):
-        engine = FakeThinkEngine(tool_calls=[{"id": "1", "command_name": "X", "args": None}])
+    async def test_arguments_are_canonical_json_object(self):
+        engine = FakeThinkEngine(tool_calls=[native_call("1", "X")])
         cmds = await collect(NativeToolChannel(), engine, set())
         assert cmds[0]["args"] == {}
 

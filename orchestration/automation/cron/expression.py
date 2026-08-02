@@ -21,10 +21,11 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
-from mote.orchestration.automation.cron.task import DEFAULT_CRON_JITTER_CONFIG, CronJitterConfig
+from mote.orchestration.automation.cron.task import DEFAULT_CRON_JITTER_CONFIG, CronDstPolicy, CronJitterConfig
 
 
 @dataclass
@@ -134,13 +135,13 @@ def parse_cron_expression(expr: str) -> Optional[CronFields]:
     )
 
 
-def _start_of_next_month(t: datetime) -> datetime:
-    if t.month == 12:
-        return t.replace(year=t.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-    return t.replace(month=t.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
-
-
-def compute_next_cron_run(fields: CronFields, from_ms: int) -> Optional[int]:
+def compute_next_cron_run(
+    fields: CronFields,
+    from_ms: int,
+    *,
+    timezone_name: str | None = None,
+    dst_policy: CronDstPolicy = CronDstPolicy.EARLIEST_FOLD_SKIP_GAP,
+) -> Optional[int]:
     """Compute the next fire time (epoch ms) strictly after ``from_ms``.
 
     Walks forward minute-by-minute in local time, bounded at 366 days. When both
@@ -157,18 +158,28 @@ def compute_next_cron_run(fields: CronFields, from_ms: int) -> Optional[int]:
     dom_wild = len(fields.day_of_month) == 31
     dow_wild = len(fields.day_of_week) == 7
 
-    # Round up to the next whole minute (strictly after `from`).
-    t = datetime.fromtimestamp(from_ms / 1000.0).replace(second=0, microsecond=0) + timedelta(minutes=1)
+    if dst_policy is not CronDstPolicy.EARLIEST_FOLD_SKIP_GAP:
+        raise ValueError("unsupported cron DST policy")
+    zone = datetime.now().astimezone().tzinfo if timezone_name is None else ZoneInfo(timezone_name)
+    if zone is None:
+        raise ValueError("local timezone is unavailable")
+    # Walk absolute UTC minutes, then project each candidate into the declared
+    # timezone. Gaps have no candidate; fold=1 is skipped by the fixed policy.
+    t = datetime.fromtimestamp(from_ms / 1000.0, timezone.utc).replace(second=0, microsecond=0) + timedelta(minutes=1)
 
     max_iter = 366 * 24 * 60
     for _ in range(max_iter):
-        if t.month not in month_set:
-            t = _start_of_next_month(t)
+        local = t.astimezone(zone)
+        if local.fold == 1:
+            t += timedelta(minutes=1)
+            continue
+        if local.month not in month_set:
+            t += timedelta(minutes=1)
             continue
 
-        dom = t.day
+        dom = local.day
         # Python weekday(): Mon=0..Sun=6; cron dow: Sun=0..Sat=6.
-        dow = (t.weekday() + 1) % 7
+        dow = (local.weekday() + 1) % 7
         if dom_wild and dow_wild:
             day_matches = True
         elif dom_wild:
@@ -179,15 +190,15 @@ def compute_next_cron_run(fields: CronFields, from_ms: int) -> Optional[int]:
             day_matches = dom in dom_set or dow in dow_set
 
         if not day_matches:
-            t = t.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            t += timedelta(minutes=1)
             continue
 
-        if t.hour not in hour_set:
-            t = t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        if local.hour not in hour_set:
+            t += timedelta(minutes=1)
             continue
 
-        if t.minute not in minute_set:
-            t = t + timedelta(minutes=1)
+        if local.minute not in minute_set:
+            t += timedelta(minutes=1)
             continue
 
         return int(t.timestamp() * 1000)
@@ -195,12 +206,23 @@ def compute_next_cron_run(fields: CronFields, from_ms: int) -> Optional[int]:
     return None
 
 
-def _next_cron_run_ms(cron: str, from_ms: int) -> Optional[int]:
+def _next_cron_run_ms(
+    cron: str,
+    from_ms: int,
+    *,
+    timezone_name: str | None = None,
+    dst_policy: CronDstPolicy = CronDstPolicy.EARLIEST_FOLD_SKIP_GAP,
+) -> Optional[int]:
     """Parse + compute next fire (epoch ms) for a cron string, or ``None``."""
     fields = parse_cron_expression(cron)
     if fields is None:
         return None
-    return compute_next_cron_run(fields, from_ms)
+    return compute_next_cron_run(
+        fields,
+        from_ms,
+        timezone_name=timezone_name,
+        dst_policy=dst_policy,
+    )
 
 
 # --- jitter -----------------------------------------------------------------
@@ -227,6 +249,9 @@ def jittered_next_cron_run_ms(
     from_ms: int,
     task_id: str,
     cfg: CronJitterConfig = DEFAULT_CRON_JITTER_CONFIG,
+    *,
+    timezone_name: str | None = None,
+    dst_policy: CronDstPolicy = CronDstPolicy.EARLIEST_FOLD_SKIP_GAP,
 ) -> Optional[int]:
     """Next recurring fire (epoch ms) plus a deterministic forward delay.
 
@@ -234,10 +259,10 @@ def jittered_next_cron_run_ms(
     (``recurring_frac``, capped at ``recurring_cap_ms``) so an hourly task spreads
     across several minutes while a per-minute task spreads by only seconds.
     """
-    t1 = _next_cron_run_ms(cron, from_ms)
+    t1 = _next_cron_run_ms(cron, from_ms, timezone_name=timezone_name, dst_policy=dst_policy)
     if t1 is None:
         return None
-    t2 = _next_cron_run_ms(cron, t1)
+    t2 = _next_cron_run_ms(cron, t1, timezone_name=timezone_name, dst_policy=dst_policy)
     if t2 is None:
         # No second match (e.g. pinned date) → nothing to proportion against.
         return t1
@@ -250,6 +275,9 @@ def one_shot_jittered_next_cron_run_ms(
     from_ms: int,
     task_id: str,
     cfg: CronJitterConfig = DEFAULT_CRON_JITTER_CONFIG,
+    *,
+    timezone_name: str | None = None,
+    dst_policy: CronDstPolicy = CronDstPolicy.EARLIEST_FOLD_SKIP_GAP,
 ) -> Optional[int]:
     """Next one-shot fire (epoch ms) minus a deterministic lead on round minutes.
 
@@ -258,11 +286,14 @@ def one_shot_jittered_next_cron_run_ms(
     landing on minutes matching ``one_shot_minute_mod`` get jitter. Clamped to
     ``from_ms`` so a task created inside its own window never fires before creation.
     """
-    t1 = _next_cron_run_ms(cron, from_ms)
+    t1 = _next_cron_run_ms(cron, from_ms, timezone_name=timezone_name, dst_policy=dst_policy)
     if t1 is None:
         return None
     # Cron resolution is 1 minute → computed times always have :00 seconds.
-    minute = datetime.fromtimestamp(t1 / 1000.0).minute
+    zone = datetime.now().astimezone().tzinfo if timezone_name is None else ZoneInfo(timezone_name)
+    if zone is None:
+        raise ValueError("local timezone is unavailable")
+    minute = datetime.fromtimestamp(t1 / 1000.0, zone).minute
     if minute % cfg.one_shot_minute_mod != 0:
         return t1
     lead = cfg.one_shot_floor_ms + _jitter_frac(task_id) * (cfg.one_shot_max_ms - cfg.one_shot_floor_ms)

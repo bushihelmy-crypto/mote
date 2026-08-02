@@ -9,11 +9,12 @@ A provider mixes this in and implements :meth:`_rebuild_client` (build a fresh
 SDK client from the current credential). It must call :meth:`_init_credentials`
 during its client init, before the first :meth:`_rebuild_client`.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mote.runtime.models.auth.oauth import OAuthManager
+from mote.runtime.models.auth.oauth.manager import OAuthManager
 
 if TYPE_CHECKING:
     from mote.contracts.config.model.llm import LLMConfig

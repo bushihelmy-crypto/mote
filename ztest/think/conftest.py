@@ -14,6 +14,7 @@ The fixtures keep ``InferenceEngine._run`` fully offline and deterministic:
   would open an LLM stream task and POST to a callback URL) for a no-op async
   context manager, so ``_run`` never touches the network or the stream queue.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -24,10 +25,10 @@ from mote.contracts.conversation import Message, UserMessage
 from mote.contracts.conversation.fields import TOOL_CALLS
 from mote.contracts.model import (
     CanonicalModelResponse,
+    CanonicalToolCall,
     EndpointDescriptor,
     GenerateOutput,
     LLMResponse,
-    LLMToolCall,
     ResponseMode,
 )
 from mote.contracts.model.topology import SemanticRoute
@@ -181,7 +182,7 @@ def make_tool_response(*calls, content: str = "") -> LLMResponse:
     """Build an LLMResponse from ``(id, name, arguments)`` tuples."""
     return LLMResponse(
         content=content,
-        tool_calls=[LLMToolCall(id=i, name=n, arguments=a) for (i, n, a) in calls],
+        tool_calls=tuple(CanonicalToolCall(id=i, name=n, arguments=a) for (i, n, a) in calls),
     )
 
 

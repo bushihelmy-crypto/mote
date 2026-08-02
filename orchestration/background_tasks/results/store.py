@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Optional, Union
 
 from mote.contracts.ports.task.operations import TaskOutputLocationPort
-from mote.contracts.task.models import SessionId
+from mote.contracts.session.identity import SessionId
 from mote.orchestration.background_tasks.constants import (
     DEFAULT_MAX_READ_BYTES,
     MAX_TASK_OUTPUT_BYTES,
@@ -59,6 +59,9 @@ class DiskTaskOutput:
         self._capped: bool = False
         self._closed: bool = False
         self._drain_task: asyncio.Task | None = None
+        self._write_lock = asyncio.Lock()
+        self._flushed = asyncio.Event()
+        self._flushed.set()
         self._on_cap = on_cap
 
     @property
@@ -76,6 +79,7 @@ class DiskTaskOutput:
             return
         if isinstance(data, str):
             data = data.encode("utf-8")
+        self._flushed.clear()
         self._queue.put_nowait(data)
         self._ensure_drain()
 
@@ -110,6 +114,26 @@ class DiskTaskOutput:
             self._queue.put_nowait(_SENTINEL)
             await self._drain_task
         # else: drain loop was never started — nothing to flush
+
+    async def flush(self) -> None:
+        """Wait until all output accepted before this call is written."""
+        if self._flushed.is_set():
+            return
+        drain = self._drain_task
+        if drain is None:
+            self._sync_flush()
+            self._flushed.set()
+            return
+        waiter = asyncio.create_task(self._flushed.wait())
+        done, _ = await asyncio.wait(
+            {waiter, drain},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if drain in done:
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+            await drain
+        await waiter
 
     def cleanup(self) -> None:
         """Delete the disk file."""
@@ -198,16 +222,19 @@ class DiskTaskOutput:
             if self._bytes_written + len(payload) > MAX_TASK_OUTPUT_BYTES
             else b""
         )
-        written_data, capped = await run_disk_io(
-            disk_io.write_capped,
-            self._file_path,
-            payload,
-            MAX_TASK_OUTPUT_BYTES,
-            current_size=self._bytes_written,
-            append=True,
-            cap_notice=cap_notice,
-        )
+        async with self._write_lock:
+            written_data, capped = await run_disk_io(
+                disk_io.write_capped,
+                self._file_path,
+                payload,
+                MAX_TASK_OUTPUT_BYTES,
+                current_size=self._bytes_written,
+                append=True,
+                cap_notice=cap_notice,
+            )
         self._bytes_written += written_data
+        if self._queue.empty():
+            self._flushed.set()
 
         if capped:
             self._capped = True
@@ -309,6 +336,12 @@ class TaskOutputStore:
     ) -> bytes:
         """Tail read from a task's output."""
         return await self._get(task_id).get_tail(max_bytes)
+
+    async def flush(self, task_id: str) -> None:
+        """Settle all output accepted for one task without closing its stream."""
+        output = self._outputs.get(task_id)
+        if output is not None:
+            await output.flush()
 
     def get_size(self, task_id: str) -> int:
         """Get the output size for a task."""

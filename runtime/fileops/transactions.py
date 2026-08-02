@@ -31,7 +31,7 @@ from mote.contracts.file.transactions import (
     TransactionRecord,
     TransactionStatus,
 )
-from mote.runtime.artifacts.repository import ArtifactRepository as ContentRepository
+from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
 from mote.runtime.fileops.control import ProjectOperationControl
 from mote.runtime.fileops.encoding import decode_text, editable_text
 from mote.runtime.fileops.fences import RecoveryFence
@@ -41,7 +41,11 @@ from mote.runtime.fileops.journal import DurableFileOperationsJournal
 from mote.runtime.fileops.locking import NAME_LOCK_LEVEL, PROJECT_LOCK_LEVEL, TARGET_LOCK_LEVEL, HierarchicalLockManager
 from mote.runtime.fileops.metadata_manifest import PreservedMetadata, decode_metadata_manifest
 from mote.runtime.fileops.mutation.artifact_roots import ArtifactReachabilityProjector, ArtifactRoot, ArtifactRootKind
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope, ArtifactWriteScopeState
+from mote.runtime.fileops.mutation.artifacts import (
+    ArtifactWriteScope,
+    ArtifactWriteScopeState,
+    FileMutationArtifactRepository,
+)
 from mote.runtime.fileops.publisher import AtomicPublisher
 from mote.runtime.fileops.resource_limits import ARTIFACT_HARD_LIMIT_BYTES
 from mote.runtime.fileops.snapshots import SealedSnapshotReader
@@ -111,7 +115,7 @@ class MutationCoordinator:
         self,
         *,
         session_id: str,
-        artifacts: ArtifactRepository,
+        artifacts: FileMutationArtifactRepository,
         reader: SealedSnapshotReader,
         locks: HierarchicalLockManager,
         publisher: AtomicPublisher,
@@ -219,6 +223,22 @@ class MutationCoordinator:
                 self._resolve_prepared(mutation_set)
                 raise
 
+    def resume(self, transaction_id: str) -> MutationResult | None:
+        """Return/reconcile an existing durable transaction without rebuilding it."""
+        if type(transaction_id) is not str or not transaction_id:
+            raise ValueError("transaction id must be a non-empty string")
+        existing = self.journal.get(transaction_id)
+        if existing is None:
+            return None
+        if existing.status == TransactionStatus.PREPARED:
+            mutation_set = existing.mutation_set
+            for project in self._projects_for_mutations(mutation_set.mutations):
+                self.control.reconcile(project, label=project.key)
+            existing = self.journal.get(transaction_id)
+            if existing is None or existing.status == TransactionStatus.PREPARED:
+                return self._reconcile(existing or self._prepared_record(mutation_set))
+        return self._result_from_record(existing)
+
     @staticmethod
     def _prepared_record(mutation_set: MutationSet) -> TransactionRecord:
         return TransactionRecord(
@@ -310,7 +330,7 @@ class MutationCoordinator:
         if os.path.abspath(self.journal.path) == fence_path:
             return self.journal
         return DurableFileOperationsJournal(
-            fence_path,
+            Path(fence_path),
             session_id=fence.session_id,
             locks=self.locks,
         )
@@ -323,8 +343,8 @@ class MutationCoordinator:
     ) -> "MutationCoordinator":
         if journal is self.journal:
             return self
-        artifacts = ArtifactRepository(
-            ContentRepository(Path(artifact_root), hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES),
+        artifacts = FileMutationArtifactRepository(
+            ContentAddressedArtifactStore(Path(artifact_root), hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES),
             lifecycle_root=Path(journal.path).parent / "artifact-lifecycle",
             hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
         )

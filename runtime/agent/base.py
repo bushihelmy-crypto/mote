@@ -1,60 +1,51 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-BaseRole — persistent polymorphic base for Runtime roles.
-Provides the polymorphic registry for serialization. No ABC, no Pydantic.
-"""
+"""Nominal Runtime Role lifecycle and Residency state boundary."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+from mote.contracts.content import ContentDigest
+from mote.contracts.conversation import Message
+from mote.contracts.events.envelope import JsonValue
+from mote.contracts.task.lifecycle import BackgroundTaskPinSnapshot
 
 if TYPE_CHECKING:
     from mote.runtime.agent.incarnation import AgentIncarnationBlueprint
-
-# ============================================================================
-# Polymorphic registry for serialization/deserialization
-# ============================================================================
-
-_ROLE_REGISTRY: dict[str, type["BaseRole"]] = {}
-
-
-def _qualified_name(cls: type) -> str:
-    return f"{cls.__module__}.{cls.__qualname__}"
 
 
 class BaseRole:
     """Base class for all roles.
 
-    Provides:
-      - Automatic subclass registration for polymorphic deserialization
-      - dump()/load() serialization protocol
-
     Subclasses must implement: think, act, react, run, get_memories, is_idle.
     """
 
     role_type_id: ClassVar[str | None] = None
-    replace_role_type_registration: ClassVar[bool] = False
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        # Only an ID declared on this exact subclass registers it.  Inheriting a
-        # parent's ID would make every test/helper subclass silently replace the
-        # persisted type owner.
-        type_id = cls.__dict__.get("role_type_id")
-        if type_id:
-            existing = _ROLE_REGISTRY.get(type_id)
-            replace = bool(cls.__dict__.get("replace_role_type_registration", False))
-            if existing is not None and existing is not cls and not replace:
-                raise TypeError(f"duplicate role type id {type_id!r}: {existing} and {cls}")
-            _ROLE_REGISTRY[type_id] = cls
+    @property
+    def session_id(self) -> str:
+        raise NotImplementedError
 
-    # =========================================================================
-    # Serialization protocol
-    # =========================================================================
+    @property
+    def residency_definition_id(self) -> str:
+        raise NotImplementedError
 
-    def dump(self) -> dict[str, Any]:
-        """Serialize role to a dict. Subclasses should override."""
-        raise NotImplementedError(f"{type(self).__name__}.dump() not implemented")
+    @property
+    def residency_config_digest(self) -> ContentDigest:
+        raise NotImplementedError
+
+    def export_residency_state(self, *, session_history_is_durable: bool) -> Mapping[str, JsonValue]:
+        raise NotImplementedError
+
+    def restore_residency_message_buffer(self, snapshot: JsonValue) -> None:
+        raise NotImplementedError
+
+    def restore_residency_history(
+        self,
+        messages: tuple[Message, ...],
+        session_meta: Mapping[str, object],
+    ) -> None:
+        raise NotImplementedError
 
     def validate_resume_identity(self, meta: Mapping[str, object]) -> None:
         """Validate durable session metadata before restoring any state.
@@ -71,25 +62,7 @@ class BaseRole:
 
         raise NotImplementedError(f"{type(self).__name__}.incarnation_blueprint() not implemented")
 
-    async def prepare_for_eviction(self) -> None:
+    async def prepare_for_eviction(self) -> BackgroundTaskPinSnapshot | None:
         """Close incarnation resources while transferring shared ownership."""
 
         raise NotImplementedError(f"{type(self).__name__}.prepare_for_eviction() not implemented")
-
-    @classmethod
-    def load(cls, data: dict[str, Any]) -> "BaseRole":
-        """Deserialize a role from a dict. Uses the polymorphic registry."""
-        if "type_id" not in data:
-            raise ValueError("Missing type_id in serialized role data")
-        type_id = data["type_id"]
-        if type(type_id) is not str or not type_id:
-            raise ValueError("Serialized role type_id must be a non-empty string")
-        klass = _ROLE_REGISTRY.get(type_id)
-        if klass is None:
-            raise TypeError(f"Unknown role type: {type_id}. Has it been registered?")
-        return klass._from_dict(data)
-
-    @classmethod
-    def _from_dict(cls, data: dict[str, Any]) -> "BaseRole":
-        """Reconstruct this specific class from serialized data. Override in subclasses."""
-        raise NotImplementedError(f"{cls.__name__}._from_dict() not implemented")

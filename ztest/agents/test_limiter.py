@@ -2,10 +2,12 @@
 # -*- coding: utf-8 -*-
 """Tests for AgentExecutionLimiter — ported from execution_tests.rs."""
 
+import asyncio
+
 import pytest
 
-from mote.orchestration.agents.execution.limiter import AgentExecutionLimiter
-from mote.runtime.errors import AgentLimitReached
+from mote.contracts.agent.errors import AgentLimitReached
+from mote.orchestration.agents.turn_queue.limiter import AgentExecutionLimiter
 
 
 def test_execution_guards_count_active_turns():
@@ -19,7 +21,7 @@ def test_execution_guards_count_active_turns():
 
     with pytest.raises(AgentLimitReached) as exc:
         limiter.ensure_capacity()
-    assert exc.value.max_agents == 1
+    assert "concurrent Agent turn capacity" in str(exc.value)
 
     guard.release()
     limiter.ensure_capacity()  # capacity released
@@ -33,6 +35,17 @@ def test_uninitialized_limiter_is_unbounded():
     assert limiter.active == 5
     for g in guards:
         g.release()
+
+
+@pytest.mark.parametrize("invalid", (0, -1, True, False, 1.5))
+def test_initialize_rejects_invalid_capacity_without_consuming_one_time_init(invalid):
+    limiter = AgentExecutionLimiter()
+
+    with pytest.raises(ValueError, match="positive integer"):
+        limiter.initialize(invalid)
+
+    limiter.initialize(1)
+    assert limiter.max_concurrent_turns() == 1
 
 
 def test_guard_context_manager_releases():
@@ -52,4 +65,37 @@ def test_double_release_is_safe():
     guard = limiter.guard()
     guard.release()
     guard.release()
+    assert limiter.active == 0
+
+
+@pytest.mark.asyncio
+async def test_acquire_waits_for_atomic_permit_and_preserves_receipt_identity():
+    limiter = AgentExecutionLimiter()
+    limiter.initialize(1)
+    first = await limiter.acquire()
+    waiting = asyncio.create_task(limiter.acquire())
+    await asyncio.sleep(0)
+    assert not waiting.done()
+    assert limiter.active == 1
+
+    first.release()
+    second = await waiting
+    assert second.receipt.permit_id != first.receipt.permit_id
+    assert limiter.active == 1
+    second.release()
+    assert limiter.active == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_does_not_leak_permit():
+    limiter = AgentExecutionLimiter()
+    limiter.initialize(1)
+    held = await limiter.acquire()
+    waiting = asyncio.create_task(limiter.acquire())
+    await asyncio.sleep(0)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    held.release()
+    await asyncio.sleep(0)
     assert limiter.active == 0

@@ -13,15 +13,15 @@ from mote.runtime.fileops.mutation.artifact_catalog import (
     ArtifactReservationState,
 )
 from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScopeState
-from mote.ztest.fileops_factory import ArtifactRepository
+from mote.ztest.fileops_factory import FileMutationArtifactRepository
 
 
-def _repository(tmp_path, limit=1_024) -> ArtifactRepository:
-    return ArtifactRepository(tmp_path / "blobs", hard_limit_bytes=limit)
+def _repository(tmp_path, limit=1_024) -> FileMutationArtifactRepository:
+    return FileMutationArtifactRepository(tmp_path / "blobs", hard_limit_bytes=limit)
 
 
 def _write_same_payload(root: str, ready, start, outcomes) -> None:
-    repository = ArtifactRepository(root, hard_limit_bytes=64)
+    repository = FileMutationArtifactRepository(root, hard_limit_bytes=64)
     reservation = repository.reserve(16, "worker", 60)
     stage = repository.stage(reservation, 16)
     ready.put(True)
@@ -168,7 +168,7 @@ def test_competing_stage_reconciles_a_durably_sealed_staging_owner(
 
 def test_cross_process_publication_converges_on_one_verified_payload(tmp_path):
     root = tmp_path / "blobs"
-    ArtifactRepository(root, hard_limit_bytes=64)
+    FileMutationArtifactRepository(root, hard_limit_bytes=64)
     context = multiprocessing.get_context("spawn")
     ready = context.Queue()
     start = context.Event()
@@ -191,7 +191,7 @@ def test_cross_process_publication_converges_on_one_verified_payload(tmp_path):
 
     references = tuple(ContentIdentity(*outcomes.get(timeout=2)) for _ in processes)
     assert references[0] == references[1]
-    reopened = ArtifactRepository(root, hard_limit_bytes=64)
+    reopened = FileMutationArtifactRepository(root, hard_limit_bytes=64)
     assert reopened.read_bytes(references[0]) == b"shared-payload"
     assert reopened.catalog.health().physical_bytes == len(b"shared-payload")
 

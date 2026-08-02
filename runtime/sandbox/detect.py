@@ -1,12 +1,12 @@
 """Backend detection — best-effort host probe for the isolation backend.
 
-Filesystem-first / no-spawn where possible, mirroring ``common.git_state``'s
-``find_git_root`` philosophy: we use ``shutil.which`` (a PATH scan, no
-subprocess) to decide whether ``bwrap`` is available, plus a platform check.
+Filesystem-first and no-spawn where possible: ``shutil.which`` performs the PATH
+scan without a subprocess, followed by an explicit platform check.
 
 Never raises: an unprobeable host degrades to ``"none"`` so the runtime can
 decide (per ``fail_if_unavailable``) whether that is fatal or a soft passthrough.
 """
+
 from __future__ import annotations
 
 import shutil

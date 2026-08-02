@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from mote.contracts.tool.catalog import ToolDispatchRequest
-from mote.runtime.tools.bound_registry import BoundTool, BoundToolRegistry
+from mote.runtime.tools.bound_registry import BoundToolRegistry, PinnedToolInvocation
 
 
 async def _invoke(arguments):
@@ -12,7 +12,7 @@ async def _invoke(arguments):
 
 def test_duplicate_snapshot_revision_is_rejected():
     registry = BoundToolRegistry()
-    registry.pin("snapshot", 1, {"Read": BoundTool("read@1", _invoke)})
+    registry.pin("snapshot", 1, {"Read": PinnedToolInvocation("read@1", _invoke)})
     with pytest.raises(ValueError, match="already pinned"):
         registry.pin("snapshot", 1, {})
 
@@ -20,7 +20,7 @@ def test_duplicate_snapshot_revision_is_rejected():
 @pytest.mark.asyncio
 async def test_dispatch_requires_exact_pinned_revision():
     registry = BoundToolRegistry()
-    registry.pin("snapshot", 2, {"Read": BoundTool("read@2", _invoke)})
+    registry.pin("snapshot", 2, {"Read": PinnedToolInvocation("read@2", _invoke)})
     stale = await registry.dispatch(ToolDispatchRequest("snapshot", 1, "Read", {"value": 1}))
     current = await registry.dispatch(ToolDispatchRequest("snapshot", 2, "Read", {"value": 2}))
 

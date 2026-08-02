@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any
 from urllib.parse import urlparse
 
 from mote.contracts.model import WebSearchHit
 from mote.contracts.model.failover import (
     AttemptBudget,
+    EndpointDescriptor,
     FailureDisposition,
     FailureDomain,
     FailureReason,
     HealthVerdict,
     Retryability,
 )
+from mote.contracts.model.invocation import WebSearchHitOutput
+from mote.contracts.model.topology import TaskRoute
 from mote.contracts.ports.model.gateway import ModelGateway, ModelRoute
 from mote.contracts.service import (
     ServiceAcceptance,
@@ -25,18 +27,21 @@ from mote.contracts.service import (
     ServiceInvocation,
     ServiceReceipt,
     ServiceResponse,
+    WebSearchPayload,
+    WebSearchResult,
 )
+from mote.contracts.tool.errors import ToolNotConfiguredError
 from mote.product.config.web_search import WebSearchConfig
 from mote.product.web_search.registry import SearchBackendRegistry
-from mote.runtime.errors import ToolNotConfiguredError, classify_llm_error
 from mote.runtime.models.model_calls import web_search as search_with_model
 from mote.runtime.resilience.admission import AdmissionRejectedError
+from mote.runtime.resilience.error_classification import classify_llm_error
 from mote.runtime.resilience.failover.classification import classify_failure
 from mote.runtime.service_gateway.snapshot import ServiceFailoverGroup, ServiceRuntimeSnapshot
 
 _CAPABILITY = "web.search"
 _ROUTE = "web.search"
-_MODEL_ROUTE = "web_search"
+_MODEL_ROUTE = TaskRoute(name="web_search")
 
 
 class WebSearchServiceEndpointAdapter:
@@ -69,21 +74,21 @@ class WebSearchServiceEndpointAdapter:
         del timeout_seconds
         self._validate_binding(invocation, endpoint)
         payload = invocation.payload
-        query = payload.get("query")
-        if not isinstance(query, str) or not query.strip():
-            raise ValueError("web-search service requires a non-empty query")
-        allowed_domains = _string_list(payload.get("allowed_domains"))
-        blocked_domains = _string_list(payload.get("blocked_domains"))
+        if not isinstance(payload, WebSearchPayload):
+            raise ValueError("web-search endpoint requires a WebSearchPayload")
+        query = payload.query
+        allowed_domains = list(payload.allowed_domains)
+        blocked_domains = list(payload.blocked_domains)
 
         async def provider_search(
-            provider_query: str,
+            query: str,
             *,
             allowed_domains: list[str] | None = None,
             blocked_domains: list[str] | None = None,
         ) -> list[WebSearchHit]:
             return await self._provider_search(
                 invocation,
-                provider_query,
+                query,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains,
             )
@@ -99,16 +104,16 @@ class WebSearchServiceEndpointAdapter:
         )
         return ServiceCompleted(
             response=ServiceResponse(
-                value={
-                    "hits": [
-                        {
-                            "title": hit.title,
-                            "url": hit.url,
-                            "snippet": hit.snippet,
-                        }
+                value=WebSearchResult(
+                    hits=tuple(
+                        WebSearchHitOutput(
+                            title=hit.title,
+                            url=hit.url,
+                            snippet=hit.snippet,
+                        )
                         for hit in hits
-                    ]
-                }
+                    )
+                )
             )
         )
 
@@ -192,7 +197,7 @@ class WebSearchServiceEndpointAdapter:
             model_call_id=_model_call_id(invocation.service_call_id),
             allowed_domains=allowed_domains,
             blocked_domains=blocked_domains,
-            max_uses=_positive_int(invocation.payload.get("max_uses"), default=8),
+            max_uses=(invocation.payload.max_uses if isinstance(invocation.payload, WebSearchPayload) else 8),
             trace_id=invocation.trace_id,
         )
         return [WebSearchHit(title=hit.title, url=hit.url, snippet=hit.snippet) for hit in output.hits]
@@ -291,18 +296,6 @@ def build_web_search_service_snapshot(
     )
 
 
-def _string_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError("web-search domain filters must be string lists")
-    return list(value)
-
-
-def _positive_int(value: Any, *, default: int) -> int:
-    return value if isinstance(value, int) and value > 0 else default
-
-
 def _model_call_id(service_call_id: str) -> str:
     return hashlib.sha256(f"web-search-model\0{service_call_id}".encode("utf-8")).hexdigest()
 
@@ -317,8 +310,8 @@ def _tenant_fingerprint(config: WebSearchConfig) -> str:
     return _fingerprint(config.api_key or f"backend:{config.backend}")
 
 
-def _config_revision(config: WebSearchConfig, profile: Any) -> str:
-    profile_revision = getattr(profile, "lifecycle_revision", "")
+def _config_revision(config: WebSearchConfig, profile: EndpointDescriptor | None) -> str:
+    profile_revision = profile.lifecycle_revision if profile is not None else ""
     return _fingerprint(
         "\0".join(
             (

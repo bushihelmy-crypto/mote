@@ -8,11 +8,11 @@ import pytest
 from mote.contracts.file import ContentChangedError, IdentityChangedError, SnapshotDurabilityError
 from mote.runtime.fileops.resource_limits import ARTIFACT_HARD_LIMIT_BYTES, snapshot_budget
 from mote.runtime.fileops.snapshots import SealedSnapshotReader
-from mote.ztest.fileops_factory import ArtifactRepository
+from mote.ztest.fileops_factory import FileMutationArtifactRepository
 
 
 def _reader(tmp_path):
-    store = ArtifactRepository(
+    store = FileMutationArtifactRepository(
         tmp_path / "artifacts",
         hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
     )

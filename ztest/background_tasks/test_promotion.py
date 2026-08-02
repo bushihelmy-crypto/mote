@@ -7,13 +7,14 @@ Covers the three outcomes: the coroutine finishes inside the foreground window
 and it overruns the window (adopted into the pool, ``BgTaskResult`` returned and
 the task later completing through the pool).
 """
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
 
-from mote.orchestration.background_tasks import BgStatus, BgTaskResult, auto_background
+from mote.orchestration.background_tasks import BackgroundTaskStatus, BgTaskResult, auto_background
 
 from .conftest import boom, echo, gated, wait_started
 
@@ -50,7 +51,7 @@ class TestPromotion:
         release.set()
         await pool.wait_all()
         meta = pool.get_task_info("bg_1")
-        assert meta.status == BgStatus.SUCCESS
+        assert meta.status == BackgroundTaskStatus.SUCCESS
         assert meta.result == "late"
         assert not msg_buffer.empty()  # completion notification was pushed
 

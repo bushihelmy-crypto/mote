@@ -6,10 +6,12 @@
 framework-agnostic frozen ``BreakerConfig``. Parsing remains pure; the Runtime
 Context composition boundary applies it to the Engine-owned registry.
 """
+
 from __future__ import annotations
 
 import pytest
 
+from mote.contracts.config.runtime_client import RuntimeClientActivationSpec
 from mote.product.config.model.inputs import ProductEndpointInput, ShortcutModelsConfig
 from mote.product.config.resilience import ResilienceConfig
 from mote.product.config.schema import Config
@@ -21,7 +23,8 @@ def _context(resilience: ResilienceConfig | None = None) -> Context:
     kwargs = {"models": ShortcutModelsConfig(default=ProductEndpointInput(api_key="sk-x", model="gpt-4o"))}
     if resilience is not None:
         kwargs["resilience"] = resilience
-    return Context(config=Config(**kwargs))
+    config = Config(**kwargs)
+    return Context(activation=RuntimeClientActivationSpec(breaker=config.resilience.to_breaker_config()))
 
 
 class TestResilienceConfig:

@@ -18,15 +18,25 @@ or Runtime gateway. This is the
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, ClassVar, Optional, Protocol
 
-from mote.runtime.errors import ToolNotConfiguredError
+from mote.contracts.tool.errors import ToolNotConfiguredError
+from mote.product.config.web_search import WebSearchConfig
 
 if TYPE_CHECKING:
     from mote.contracts.model import WebSearchHit
 
-ProviderSearch = Callable[..., "Awaitable[list[WebSearchHit]]"]
+
+class ProviderSearch(Protocol):
+    async def __call__(
+        self,
+        query: str,
+        *,
+        allowed_domains: list[str] | None = None,
+        blocked_domains: list[str] | None = None,
+    ) -> "list[WebSearchHit]": ...
 
 
 class SearchBackend(ABC):
@@ -43,7 +53,7 @@ class SearchBackend(ABC):
 
     def __init__(
         self,
-        config: Any,
+        config: WebSearchConfig,
         provider_search: Optional[ProviderSearch] = None,
     ) -> None:
         self._config = config
@@ -65,31 +75,46 @@ class SearchBackendRegistry:
     """Isolated map ``name -> SearchBackend subclass``."""
 
     def __init__(self) -> None:
-        self.backends: dict[str, type[SearchBackend]] = {}
+        self._backends: dict[str, type[SearchBackend]] = {}
 
-    def register(self, name: str, backend_cls: type[SearchBackend]) -> None:
-        existing = self.backends.get(name)
-        if existing is not None and existing is not backend_cls:
+    @property
+    def backends(self) -> Mapping[str, type[SearchBackend]]:
+        """Immutable diagnostic projection; mutation remains catalog-owned."""
+
+        return MappingProxyType(self._backends)
+
+    def register(self, name: str, backend_factory: type[SearchBackend]) -> None:
+        if not name or name != name.strip():
+            raise ValueError("Search backend identity must be a non-empty canonical name")
+        if backend_factory.name != name:
+            raise ValueError("Search backend registration identity does not match its declaration")
+        existing = self._backends.get(name)
+        if existing is not None and existing is not backend_factory:
             raise ValueError(f"Search backend {name!r} is already registered by {existing!r}")
-        self.backends[name] = backend_cls
+        self._backends[name] = backend_factory
 
     def get_backend(self, name: str) -> type[SearchBackend]:
         try:
-            return self.backends[name]
+            return self._backends[name]
         except KeyError as e:
-            available = sorted(self.backends)
+            available = sorted(self._backends)
             raise ToolNotConfiguredError(
                 f"No web-search backend {name!r} registered. " f"Set tools.web_search.backend to one of: {available}."
             ) from e
 
     def create(
         self,
-        config: Any,
+        config: WebSearchConfig,
         *,
         provider_search: Optional[ProviderSearch] = None,
     ) -> SearchBackend:
-        name = getattr(config, "backend", "provider") or "provider"
-        return self.get_backend(name)(config, provider_search)
+        if not isinstance(config, WebSearchConfig):
+            raise TypeError("Search backend requires a validated WebSearchConfig")
+        name = config.backend or "provider"
+        backend = self.get_backend(name)(config, provider_search)
+        if not isinstance(backend, SearchBackend):
+            raise TypeError(f"Search backend factory {name!r} returned an invalid implementation")
+        return backend
 
 
 class ProviderSearchBackend(SearchBackend):

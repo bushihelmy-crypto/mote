@@ -1,9 +1,13 @@
 """FileOps-scoped mutation artifacts and reachability."""
 
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope, ArtifactWriteScopeState
+from mote.runtime.fileops.mutation.artifacts import (
+    ArtifactWriteScope,
+    ArtifactWriteScopeState,
+    FileMutationArtifactRepository,
+)
 
 __all__ = [
-    "ArtifactRepository",
+    "FileMutationArtifactRepository",
     "ArtifactWriteScope",
     "ArtifactWriteScopeState",
 ]

@@ -8,7 +8,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 from mote.contracts.events.model import RoutingDecisionEvent
-from mote.contracts.model.invocation import ModelOperation, ResponseMode
+from mote.contracts.model.invocation import ResponseMode
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.routing import (
     RecentRoutingDecision,
     RouteCandidate,
@@ -21,6 +22,7 @@ from mote.contracts.model.routing import (
     SeedFloor,
 )
 from mote.contracts.model.routing_errors import RoutingProposalInvalidError, RoutingUnavailableError
+from mote.contracts.model.topology_codec import encode_route_id
 from mote.contracts.ports.model.routing import RoutingPolicy, RoutingStateStore
 from mote.contracts.ports.session.facts import SessionFactSink
 from mote.runtime.models.routing.catalog import RouteCatalogSnapshot
@@ -317,12 +319,14 @@ class RoutingService:
                 reasons.append("disabled")
             reasons.extend(self._missing_constraints(candidate, routing_input))
             if reasons:
-                missing[candidate.route_id] = reasons
+                missing[encode_route_id(candidate.route_id)] = reasons
             else:
                 admitted.append(candidate)
         if scoped_ids is not None:
-            for unknown in sorted(scoped_ids - {item.route_id for item in self.catalog.candidates}):
-                missing[unknown] = ["unknown_route"]
+            known = tuple(item.route_id for item in self.catalog.candidates)
+            unknown_routes = (route_id for route_id in scoped_ids if route_id not in known)
+            for unknown in sorted(unknown_routes, key=encode_route_id):
+                missing[encode_route_id(unknown)] = ["unknown_route"]
         return tuple(admitted), missing
 
     @staticmethod
@@ -367,6 +371,8 @@ class RoutingService:
     ) -> list[str]:
         requirements = routing_input.requirements
         missing: list[str] = []
+        if routing_input.operation not in capabilities.supported_operations:
+            missing.append(f"operation:{routing_input.operation.value}")
         if governance_domain != requirements.governance_domain:
             missing.append("governance_domain")
         if requirements.allowed_regions and not (allowed_regions & requirements.allowed_regions):
@@ -402,12 +408,12 @@ class RoutingService:
         proposal: RoutingProposal,
         candidates: tuple[RouteCandidate, ...],
     ) -> None:
-        candidate_ids = {candidate.route_id for candidate in candidates}
+        candidate_ids = tuple(candidate.route_id for candidate in candidates)
         if proposal.selected_route_id not in candidate_ids:
             raise RoutingProposalInvalidError(
                 "routing policy selected a route outside the admissible set",
                 selected_route_id=proposal.selected_route_id,
-                admissible_route_ids=sorted(candidate_ids),
+                admissible_route_ids=sorted(encode_route_id(route_id) for route_id in candidate_ids),
             )
 
     @staticmethod

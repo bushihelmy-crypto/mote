@@ -48,7 +48,7 @@ from mote.contracts.file.search import (
 from mote.runtime.fileops.candidate_discovery import CandidateDiscoveryService
 from mote.runtime.fileops.cursor_registry import DurableCursorRegistry
 from mote.runtime.fileops.identity import path_token
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, FileMutationArtifactRepository
 from mote.runtime.fileops.query_semantics import CandidateDiscoveryRequest, RegexProgram, RegexProgramError
 from mote.runtime.fileops.reservation_owners import artifact_owner
 from mote.runtime.fileops.resource_limits import (
@@ -83,7 +83,7 @@ class SearchEngine:
     def __init__(
         self,
         *,
-        artifacts: ArtifactRepository,
+        artifacts: FileMutationArtifactRepository,
         sources: TextSourceService,
         discovery: CandidateDiscoveryService,
         cursors: DurableCursorRegistry,

@@ -2,28 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from mote.contracts.artifact import ArtifactRef
+from mote.contracts.events.envelope import freeze_json
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.topology import RouteId
 
 
 class _FrozenContract(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-class ModelOperation(StrEnum):
-    GENERATE = "generate"
-    EMBEDDING = "embedding"
-    IMAGE_GENERATION = "image_generation"
-    SPEECH = "speech"
-    TRANSCRIPTION = "transcription"
-    WEB_SEARCH = "web_search"
-    IMAGE_DESCRIPTION = "image_description"
 
 
 class ResponseMode(StrEnum):
@@ -36,7 +29,15 @@ class ResponseMode(StrEnum):
 class CanonicalToolCall(_FrozenContract):
     id: str = ""
     name: str = Field(min_length=1)
-    arguments: dict[str, JsonValue] = Field(default_factory=dict)
+    arguments: Mapping[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("arguments")
+    @classmethod
+    def _freeze_arguments(cls, value: object) -> Mapping[str, JsonValue]:
+        frozen = freeze_json(value, path="arguments")
+        if not isinstance(frozen, Mapping):
+            raise ValueError("tool-call arguments must be a JSON object")
+        return frozen
 
 
 class CanonicalMessage(_FrozenContract):
@@ -276,7 +277,6 @@ __all__ = [
     "ImageDescriptionInput",
     "ImageDescriptionOutput",
     "ModelInvocation",
-    "ModelOperation",
     "ModelQuotaObservation",
     "ModelUsage",
     "RequestRequirements",

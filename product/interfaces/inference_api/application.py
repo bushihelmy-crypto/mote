@@ -14,13 +14,8 @@ from aiohttp.multipart import BodyPartReader
 from pydantic import JsonValue, ValidationError
 
 from mote.contracts.artifact import ArtifactRef, ResolvedArtifact
-from mote.contracts.model.invocation import (
-    CanonicalMessage,
-    GenerateInput,
-    ModelInvocation,
-    ModelOperation,
-    ResolvedModelResponse,
-)
+from mote.contracts.model.invocation import CanonicalMessage, GenerateInput, ModelInvocation, ResolvedModelResponse
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.topology import DefaultRoute, RouteId
 from mote.contracts.ports.model.gateway import ModelGateway
 from mote.product.inference.session_gateway import RealtimeSessionOwner
@@ -46,22 +41,17 @@ _MAX_MULTIPART_FIELD_BYTES = 16 * 1024
 
 
 class InferenceApiAuthorizer(Protocol):
-    async def authorize(self, bearer_token: str, scope: str) -> bool:
-        ...
+    async def authorize(self, bearer_token: str, scope: str) -> bool: ...
 
 
 class DurableResponseOwner(Protocol):
-    async def retrieve(self, response_id: str) -> dict | None:
-        ...
+    async def retrieve(self, response_id: str) -> dict | None: ...
 
-    async def cancel(self, response_id: str) -> dict | None:
-        ...
+    async def cancel(self, response_id: str) -> dict | None: ...
 
-    async def delete(self, response_id: str) -> dict | None:
-        ...
+    async def delete(self, response_id: str) -> dict | None: ...
 
-    async def input_items(self, response_id: str, query: dict[str, str]) -> dict | None:
-        ...
+    async def input_items(self, response_id: str, query: dict[str, str]) -> dict | None: ...
 
 
 ArtifactReader = Callable[[ArtifactRef], Awaitable[ResolvedArtifact]]

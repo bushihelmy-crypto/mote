@@ -8,6 +8,7 @@ so concurrent processes/threads don't stampede the token endpoint, and re-reads
 the store under the lock (mtime check) to skip a refresh another worker already
 did.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -39,7 +40,8 @@ class OAuthManager:
         client: Optional[OAuthClient] = None,
     ) -> None:
         self.config = config
-        # A stable provider key derives the store filename + lock path.
+        # The external name is display/config identity only; stores derive a
+        # fixed credential subject before constructing any durable path.
         self.provider = provider or (config.client_id or "default")
         storage_root = config.storage_root
         if store is None and storage_root is None:
@@ -54,8 +56,10 @@ class OAuthManager:
         self._store = store
         self._client = client if client is not None else OAuthClient(config)
         self._cached: Optional[OAuthToken] = None
-        lock_root = storage_root or getattr(self._store, "path", Path(".")).parent
-        self._lock_path = lock_root / f"{self.provider}.lock"
+        lock_root = Path(storage_root or getattr(self._store, "path", Path(".")).parent).resolve()
+        self._lock_path = (lock_root / f"{self._store.subject}.lock").resolve()
+        if self._lock_path.parent != lock_root:
+            raise ValueError("OAuth lock path escaped storage root")
 
     # --- public API --------------------------------------------------------
 
@@ -67,11 +71,6 @@ class OAuthManager:
         may have just refreshed), and mint/refresh only if still expired.
         """
         buffer = self.config.expiry_buffer_s
-
-        token = self._cached or self._store.load()
-        if token is not None and not token.is_expired(buffer):
-            self._cached = token
-            return token.access_token
 
         return self._refresh_locked(buffer=buffer).access_token
 
@@ -94,17 +93,28 @@ class OAuthManager:
         or ``device_code`` (RFC 8628). Raises :class:`OAuthConfigError` for a
         headless grant type (which has no interactive login).
         """
-        grant = self.config.grant_type
-        if grant == GrantType.AUTHORIZATION_CODE:
-            token = run_auth_code_flow(self.config, callbacks)
-        elif grant == GrantType.DEVICE_CODE:
-            token = run_device_code_flow(self.config, callbacks)
-        else:
-            raise OAuthConfigError(f"login() requires an interactive grant_type; {grant.value!r} is headless")
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(self._lock_path)):
+            grant = self.config.grant_type
+            if grant == GrantType.AUTHORIZATION_CODE:
+                token = run_auth_code_flow(self.config, callbacks)
+            elif grant == GrantType.DEVICE_CODE:
+                token = run_device_code_flow(self.config, callbacks)
+            else:
+                raise OAuthConfigError(f"login() requires an interactive grant_type; {grant.value!r} is headless")
+            current = self._store.load_record()
+            self._store.commit(token, expected_revision=current.revision if current is not None else 0)
+            self._cached = token
+            return token
 
-        self._store.save(token)
-        self._cached = token
-        return token
+    def delete(self) -> None:
+        """Commit a revisioned credential tombstone under the subject lock."""
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(self._lock_path)):
+            current = self._store.load_record()
+            if current is not None and current.token is not None:
+                self._store.commit(None, expected_revision=current.revision)
+            self._cached = None
 
     # --- internals ---------------------------------------------------------
 
@@ -113,21 +123,21 @@ class OAuthManager:
         with FileLock(str(self._lock_path)):
             # Cross-process re-read: another worker may have refreshed while we
             # waited for the lock. Skip redundant network refresh when valid.
+            current = self._store.load_record()
+            stored = current.token if current is not None else None
             if not force:
-                stored = self._store.load()
                 if stored is not None and not stored.is_expired(buffer or 0):
                     self._cached = stored
                     return stored
 
-            token = self._mint_or_refresh()
-            self._store.save(token)
+            token = self._mint_or_refresh(stored)
+            self._store.commit(token, expected_revision=current.revision if current is not None else 0)
             self._cached = token
             return token
 
-    def _mint_or_refresh(self) -> OAuthToken:
+    def _mint_or_refresh(self, existing: OAuthToken | None) -> OAuthToken:
         """Decide between refresh and client_credentials based on available material."""
         # Prefer refreshing an existing/configured refresh token.
-        existing = self._cached or self._store.load()
         refresh_token = (existing.refresh_token if existing else None) or self.config.refresh_token
 
         if refresh_token:

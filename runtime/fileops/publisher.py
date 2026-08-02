@@ -27,7 +27,7 @@ from mote.runtime.fileops.identity import (
 )
 from mote.runtime.fileops.metadata import apply_metadata, capture_metadata
 from mote.runtime.fileops.metadata_manifest import MAX_METADATA_MANIFEST_BYTES, decode_metadata_manifest
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository
+from mote.runtime.fileops.mutation.artifacts import FileMutationArtifactRepository
 
 _CHUNK_SIZE = 1024 * 1024
 
@@ -65,9 +65,9 @@ def _fsync_parent(target) -> None:
 class AtomicPublisher:
     """Publishes one verified blob with same-directory replace semantics."""
 
-    def __init__(self, repository: ArtifactRepository) -> None:
-        if type(repository) is not ArtifactRepository:
-            raise TypeError("atomic publisher requires an ArtifactRepository")
+    def __init__(self, repository: FileMutationArtifactRepository) -> None:
+        if type(repository) is not FileMutationArtifactRepository:
+            raise TypeError("atomic publisher requires a FileMutationArtifactRepository")
         self._repository = repository
 
     def replace_from_blob(

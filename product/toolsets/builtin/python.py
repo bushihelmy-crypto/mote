@@ -37,8 +37,9 @@ from mote.contracts.artifact import (
 from mote.contracts.authorization import PermissionDecision
 from mote.contracts.runtime import RuntimeAccessMode, RuntimeProjectionIntent
 from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
+from mote.contracts.tool.errors import ToolError
+from mote.contracts.tool.result import json_tool_payload
 from mote.product.toolsets.builtin.runtime_action import handoff_permission, is_handoff_action, run_handoff_action
-from mote.runtime.errors import ToolError
 from mote.runtime.interactive.kernel.driver import DEFAULT_TIMEOUT_S, KernelRuntimeDriver
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import (
@@ -290,7 +291,7 @@ class Python(BaseTool):
             )
         return ToolResult(
             output=text,
-            data=document,
+            payload=json_tool_payload(document.model_dump(mode="json")),
         )
 
     def check_permissions(self, args: dict) -> PermissionDecision | None:

@@ -4,24 +4,27 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from typing import Generic, TypeVar
 
 from mote.runtime.inference.bulkhead import BulkheadController, BulkheadIdentity, BulkheadPermit
 from mote.runtime.inference.fair_queue import FairAdmissionQueue, QueueClosedError, QueueEntry
 
-DispatchHandler = Callable[[QueueEntry, BulkheadPermit], Awaitable[None]]
-DispatchTimeoutHandler = Callable[[QueueEntry], Awaitable[None]]
-IdentityResolver = Callable[[QueueEntry], BulkheadIdentity]
+PayloadT = TypeVar("PayloadT")
+
+DispatchHandler = Callable[[QueueEntry[PayloadT], BulkheadPermit], Awaitable[None]]
+DispatchTimeoutHandler = Callable[[QueueEntry[PayloadT]], Awaitable[None]]
+IdentityResolver = Callable[[QueueEntry[PayloadT]], BulkheadIdentity]
 
 
-class Dispatcher:
+class Dispatcher(Generic[PayloadT]):
     def __init__(
         self,
         *,
-        queue: FairAdmissionQueue,
+        queue: FairAdmissionQueue[PayloadT],
         bulkheads: BulkheadController,
-        identity_resolver: IdentityResolver,
-        handler: DispatchHandler,
-        timeout_handler: DispatchTimeoutHandler,
+        identity_resolver: IdentityResolver[PayloadT],
+        handler: DispatchHandler[PayloadT],
+        timeout_handler: DispatchTimeoutHandler[PayloadT],
         worker_count: int,
     ) -> None:
         if worker_count <= 0:

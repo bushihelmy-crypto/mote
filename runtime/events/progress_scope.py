@@ -3,27 +3,26 @@
 from __future__ import annotations
 
 import contextvars
-from typing import Any, Callable
 
-ProgressWriter = Callable[[str, Any, Any], None]
-_progress_ctx: contextvars.ContextVar[ProgressWriter | None] = contextvars.ContextVar("_progress_ctx", default=None)
+from mote.contracts.task.progress import ProgressEventSink
+
+_progress_ctx: contextvars.ContextVar[ProgressEventSink | None] = contextvars.ContextVar("_progress_ctx", default=None)
 
 
-def current_progress_writer() -> ProgressWriter | None:
+def current_progress_sink() -> ProgressEventSink | None:
     return _progress_ctx.get()
 
 
-def bind_progress_writer(writer: ProgressWriter | None) -> contextvars.Token:
-    return _progress_ctx.set(writer)
+def bind_progress_sink(sink: ProgressEventSink | None) -> contextvars.Token:
+    return _progress_ctx.set(sink)
 
 
-def reset_progress_writer(token: contextvars.Token) -> None:
+def reset_progress_sink(token: contextvars.Token) -> None:
     _progress_ctx.reset(token)
 
 
 __all__ = [
-    "ProgressWriter",
-    "bind_progress_writer",
-    "current_progress_writer",
-    "reset_progress_writer",
+    "bind_progress_sink",
+    "current_progress_sink",
+    "reset_progress_sink",
 ]

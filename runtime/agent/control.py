@@ -11,38 +11,39 @@ It deliberately imports nothing from ``environment`` / ``roles``: the concrete
 (they reference ``AgentRuntime`` / the registry), while every *caller*
 (executor tools, role capabilities) only needs the duck-typed vocabulary here.
 
-Discovery mirrors :mod:`mote.runtime.events.context`: **control walks an
-explicit reference** (``ctx.agent_control``) first, then falls back to an
-**ambient contextvar** (:func:`current_control`) bound by the scheduler around
-each turn and inherited by child asyncio tasks via context-copy. A lost
-contextvar can only ever degrade a spawn to a local, plane-less construction —
-it never breaks the cap/lineage invariants, because the single authority
-(``spawn_agent``) is still the only place those are enforced.
+Discovery mirrors :mod:`mote.runtime.events.context`: the Contracts-owned
+control Port is held only in an **ambient contextvar** bound by the scheduler
+around each turn and inherited by child asyncio tasks via context-copy.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
-from typing import Any, Awaitable, Callable, Iterator, Optional
+from typing import Awaitable, Callable, Iterator, TypeVar
 
-from mote.contracts.agent import ContextPolicy, Lifecycle, SpawnContext, SpawnPlan
+from mote.contracts.agent import ContextPolicy, Lifecycle, RunnableAgent, SpawnContext, SpawnPlan
 from mote.contracts.agent.errors import AgentLimitReached
+from mote.contracts.conversation import Message
+from mote.contracts.output import RunOutcome
+from mote.contracts.ports.agent.control import AgentControlPort
 from mote.runtime.telemetry.logging import logger
 
 # ----------------------------------------------------------------------
 # Ambient discovery (mirrors events/context.py's _ACTIVE_BUS)
 # ----------------------------------------------------------------------
-_ACTIVE_CONTROL: ContextVar[Optional[Any]] = ContextVar("mote_agent_control", default=None)
+OutputT = TypeVar("OutputT")
+
+_ACTIVE_CONTROL: ContextVar[AgentControlPort | None] = ContextVar("mote_agent_control", default=None)
 
 
-def current_control() -> Optional[Any]:
+def current_control() -> AgentControlPort | None:
     """Return the control plane bound in the current context, or ``None``."""
     return _ACTIVE_CONTROL.get()
 
 
 @contextmanager
-def set_control(control: Optional[Any]) -> Iterator[Optional[Any]]:
+def set_control(control: AgentControlPort | None) -> Iterator[AgentControlPort | None]:
     """Bind *control* as the ambient plane for the duration of the block."""
     token = _ACTIVE_CONTROL.set(control)
     try:
@@ -51,17 +52,8 @@ def set_control(control: Optional[Any]) -> Iterator[Optional[Any]]:
         _ACTIVE_CONTROL.reset(token)
 
 
-def resolve_control(ctx: Any = None) -> Optional[Any]:
-    """Resolve the authoritative control plane (explicit ref → ambient → None).
-
-    Prefers an explicit ``ctx.agent_control`` (a :class:`Context` carrying the
-    plane), then the ambient :func:`current_control` bound by the scheduler. The
-    explicit reference always wins so a caller that knows its plane is never
-    overridden by a stale ambient one.
-    """
-    explicit = getattr(ctx, "agent_control", None) if ctx is not None else None
-    if explicit is not None:
-        return explicit
+def resolve_control() -> AgentControlPort | None:
+    """Resolve only the scheduler-bound authoritative ambient control plane."""
     return current_control()
 
 
@@ -69,16 +61,15 @@ def resolve_control(ctx: Any = None) -> Optional[Any]:
 # Unified spawn → run → release helper
 # ----------------------------------------------------------------------
 async def spawn_and_run(
-    spec: SpawnPlan,
-    message: Any,
+    spec: SpawnPlan[OutputT],
+    message: Message | Callable[[RunnableAgent[OutputT]], Message],
     *,
-    ctx: Any = None,
-    on_spawn: Optional[Callable[[Any], Awaitable[None]]] = None,
-) -> Optional[Any]:
+    on_spawn: Callable[[RunnableAgent[OutputT]], Awaitable[None]] | None = None,
+) -> RunOutcome[OutputT] | None:
     """Spawn a child through the resolved plane, run it to completion, release it.
 
     The one helper every ephemeral spawn site funnels through. Resolves the
-    plane (explicit ``ctx.agent_control`` → ambient), spawns through the single
+    ambient plane, spawns through the single
     authority, runs the child inline, and tears it down — all via the handle's
     context manager so the slot is released on every exit path.
 
@@ -101,11 +92,10 @@ async def spawn_and_run(
     (:class:`AgentLimitReached`); other run failures propagate to the caller,
     which decides how to degrade.
     """
-    control = resolve_control(ctx)
+    control = resolve_control()
     if control is None:
         raise RuntimeError(
-            "spawn_and_run requires an active control plane; none is bound "
-            "(explicit ctx.agent_control or ambient current_control())."
+            "spawn_and_run requires an active control plane; none is bound " "(ambient current_control())."
         )
     try:
         handle = await control.spawn_agent(spec)
@@ -113,7 +103,7 @@ async def spawn_and_run(
         logger.warning(f"spawn_and_run: agent limit reached for '{spec.nickname or spec.agent_role or 'agent'}': {exc}")
         return None
     async with handle:
-        role = handle.runtime.role
+        role = handle.agent
         # Only reach into the spawned role when ``message`` is a builder — a
         # plain message/string never needs the role.
         msg = message(role) if callable(message) else message

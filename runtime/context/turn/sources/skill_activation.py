@@ -8,8 +8,8 @@ trajectory) against each conditional skill's activation patterns, and — only o
 a match — emits that skill's index row into the per-turn ``<system-reminder>``
 (request-only; never cached, never stored in history).
 
-Duck-typed (mirrors :class:`TokenPressureContextSource`): it holds two plain
-callables so the low ``context`` layer never imports the skill pool or the Role.
+The source consumes two narrow structural contracts, so the low ``context``
+layer never imports the skill pool or the Role.
 ``get_pool()`` yields the live pool (or ``None`` when skills are disabled);
 ``get_touched_files()`` yields the recently-touched absolute file paths.
 """
@@ -24,15 +24,20 @@ from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 from mote.runtime.file_paths import display_path
 
 
+class _ConditionalSkill(Protocol):
+    name: str
+    description: str
+    when_to_use: str
+    argument_hint: str
+    activation_patterns: tuple[str, ...] | list[str]
+    is_conditional: bool
+    disable_model_invocation: bool
+
+
 class _SkillPool(Protocol):
-    """The skill-pool slice this source reads (duck-typed).
+    """The exact skill-pool query slice consumed by this source."""
 
-    Structural only — keeps the low ``context`` layer from importing the skill
-    pool; any object exposing ``get_all()`` satisfies it.
-    """
-
-    def get_all(self) -> Iterable[object]:
-        ...
+    def get_all(self) -> Iterable[_ConditionalSkill]: ...
 
 
 class SkillActivationContextSource:
@@ -52,25 +57,21 @@ class SkillActivationContextSource:
     def __init__(
         self,
         get_pool: Callable[[], Optional[_SkillPool]],
-        get_touched_files: Callable[[], list],
+        get_touched_files: Callable[[], list[str]],
     ) -> None:
         self._get_pool = get_pool
         self._get_touched_files = get_touched_files
 
     async def render(self, *, cwd: Optional[str] = None) -> Optional[str]:
-        pool = self._get_pool() if self._get_pool else None
+        pool = self._get_pool()
         if pool is None:
             return None
 
-        conditional = [
-            s
-            for s in pool.get_all()
-            if getattr(s, "is_conditional", False) and not getattr(s, "disable_model_invocation", False)
-        ]
+        conditional = [s for s in pool.get_all() if s.is_conditional and not s.disable_model_invocation]
         if not conditional:
             return None
 
-        touched = self._get_touched_files() if self._get_touched_files else []
+        touched = self._get_touched_files()
         if not touched:
             return None
 
@@ -89,9 +90,13 @@ class SkillActivationContextSource:
         return "\n".join(lines)
 
     @staticmethod
-    def _matches(skill, touched: list, cwd: Optional[str]) -> bool:
+    def _matches(
+        skill: _ConditionalSkill,
+        touched: list[str],
+        cwd: Optional[str],
+    ) -> bool:
         """True if any touched file matches any of the skill's activation patterns."""
-        patterns = getattr(skill, "activation_patterns", None) or []
+        patterns = skill.activation_patterns
         if not patterns:
             return False
         for raw in touched:
@@ -104,13 +109,13 @@ class SkillActivationContextSource:
         return False
 
     @staticmethod
-    def _row(skill) -> str:
-        desc = getattr(skill, "description", "") or ""
-        when = getattr(skill, "when_to_use", "") or ""
+    def _row(skill: _ConditionalSkill) -> str:
+        desc = skill.description
+        when = skill.when_to_use
         if when:
             desc = f"{desc} (use when: {when})" if desc else when
         row = f"- {skill.name}: {desc}".rstrip()
-        hint = getattr(skill, "argument_hint", "") or ""
+        hint = skill.argument_hint
         if hint:
             row += f" [args: {hint}]"
         return row

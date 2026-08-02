@@ -10,9 +10,25 @@ from mote.contracts.inference.events import AttemptLifecycleEvent, SessionLifecy
 from mote.contracts.inference.executions import BoundExecutionRequest, SessionApplicationMessage, TransferPartRequest
 from mote.contracts.inference.wire_permit import WirePermit
 from mote.product.inference.daemon.client_port import SharedRuntimeClient
-from mote.product.inference.daemon.grpc_client import pb
+from mote.product.inference.daemon.messages import (
+    RpcEnvelopeBinding,
+    SessionMessageCommand,
+    StartExecutionCommand,
+    TransferExecutionCommand,
+)
 
-SharedClient = SharedRuntimeClient[object, object, object]
+SharedClient = SharedRuntimeClient
+
+
+def _binding(request: InferenceAttemptRequest | BoundExecutionRequest) -> RpcEnvelopeBinding:
+    return RpcEnvelopeBinding(
+        generation_id=request.generation_id,
+        generation_artifact_digest=request.generation_artifact_digest,
+        idempotency_key=(request.attempt_id if isinstance(request, InferenceAttemptRequest) else request.execution_id),
+        deadline_utc=request.deadline.deadline_utc.isoformat(),
+        remaining_seconds_at_send=request.deadline.remaining_seconds_at_send,
+        sent_at_utc=request.deadline.sent_at_utc.isoformat(),
+    )
 
 
 class SharedInferenceRuntime:
@@ -33,15 +49,8 @@ class SharedInferenceRuntime:
                 raise ValueError("attempt id reused with a different Shared request")
             return existing
         response = await self._client.start_unary(
-            pb.StartRequest(
-                envelope=self._client.envelope(
-                    generation_id=request.generation_id,
-                    generation_artifact_digest=request.generation_artifact_digest,
-                    idempotency_key=request.attempt_id,
-                    deadline_utc=request.deadline.deadline_utc.isoformat(),
-                    remaining_seconds_at_send=(request.deadline.remaining_seconds_at_send),
-                    sent_at_utc=request.deadline.sent_at_utc.isoformat(),
-                ),
+            StartExecutionCommand(
+                envelope=_binding(request),
                 execution_id=request.attempt_id,
                 operation=str(request.invocation.get("operation", "generate")),
                 canonical_request=request.model_dump_json().encode(),
@@ -110,7 +119,7 @@ class _SharedAttemptExecution:
     async def authorize_wire(self, permit: WirePermit) -> None:
         await self._client.authorize_wire(
             self.request.attempt_id,
-            permit.model_dump_json().encode(),
+            permit,
             generation_id=self.request.generation_id,
             timeout=self.request.deadline.remaining_seconds_at_send,
         )
@@ -170,15 +179,8 @@ class SharedServiceCommandRuntime:
             if existing.request != request:
                 raise ValueError("execution id reused with a different Shared request")
             return existing
-        start = pb.StartRequest(
-            envelope=self._client.envelope(
-                generation_id=request.generation_id,
-                generation_artifact_digest=request.generation_artifact_digest,
-                idempotency_key=request.execution_id,
-                deadline_utc=request.deadline.deadline_utc.isoformat(),
-                remaining_seconds_at_send=request.deadline.remaining_seconds_at_send,
-                sent_at_utc=request.deadline.sent_at_utc.isoformat(),
-            ),
+        start = StartExecutionCommand(
+            envelope=_binding(request),
             execution_id=request.execution_id,
             operation=request.operation,
             canonical_request=request.model_dump_json().encode(),
@@ -186,7 +188,7 @@ class SharedServiceCommandRuntime:
         if transfer:
             assert isinstance(request, TransferPartRequest)
             response = await self._client.execute_transfer_part(
-                pb.TransferPartRequest(
+                TransferExecutionCommand(
                     start=start,
                     part_number=request.part_number,
                     offset=request.offset,
@@ -258,7 +260,7 @@ class _SharedCommandExecution:
     async def authorize_wire(self, permit: WirePermit) -> None:
         await self._client.authorize_wire(
             self.request.execution_id,
-            permit.model_dump_json().encode(),
+            permit,
             generation_id=self.request.generation_id,
             timeout=self.request.deadline.remaining_seconds_at_send,
         )
@@ -316,15 +318,8 @@ class SharedSessionRuntime:
                 raise ValueError("session id reused with a different Shared request")
             return existing
         response = await self._client.open_session(
-            pb.StartRequest(
-                envelope=self._client.envelope(
-                    generation_id=request.generation_id,
-                    generation_artifact_digest=request.generation_artifact_digest,
-                    idempotency_key=request.execution_id,
-                    deadline_utc=request.deadline.deadline_utc.isoformat(),
-                    remaining_seconds_at_send=request.deadline.remaining_seconds_at_send,
-                    sent_at_utc=request.deadline.sent_at_utc.isoformat(),
-                ),
+            StartExecutionCommand(
+                envelope=_binding(request),
                 execution_id=request.execution_id,
                 operation=request.operation,
                 canonical_request=request.model_dump_json().encode(),
@@ -381,7 +376,7 @@ class _SharedSessionExecution:
         self._cursor = 0
         self._initial_events: AsyncIterator[SessionLifecycleEvent] | None = None
         self._stream_events: AsyncIterator[SessionLifecycleEvent] | None = None
-        self._requests: asyncio.Queue[object | None] = asyncio.Queue(maxsize=256)
+        self._requests: asyncio.Queue[SessionMessageCommand | None] = asyncio.Queue(maxsize=256)
         self._stream_started = False
         self._on_terminal = on_terminal
         self._terminal_seen = False
@@ -402,7 +397,7 @@ class _SharedSessionExecution:
     async def authorize_open(self, permit: WirePermit) -> None:
         await self._client.authorize_wire(
             self.request.execution_id,
-            permit.model_dump_json().encode(),
+            permit,
             generation_id=self.request.generation_id,
             timeout=self.request.deadline.remaining_seconds_at_send,
         )
@@ -414,16 +409,16 @@ class _SharedSessionExecution:
             self._stream_started = True
             self._stream_events = self._stream_event_source()
         await self._requests.put(
-            pb.SessionMessage(
-                envelope=self._client.envelope(
+            SessionMessageCommand(
+                envelope=RpcEnvelopeBinding(
                     generation_id=self.request.generation_id,
                     generation_artifact_digest=self.request.generation_artifact_digest,
                     idempotency_key=(f"session:{message.session_id}:{message.sequence}"),
                 ),
                 execution_id=message.session_id,
                 application_sequence=message.sequence,
-                payload=message.model_dump_json().encode(),
-                wire_permit=permit.model_dump_json().encode(),
+                message=message,
+                permit=permit,
             )
         )
 

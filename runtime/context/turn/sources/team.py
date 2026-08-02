@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional, Set
 
-from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS, ModelContextRebuiltEvent
 from mote.contracts.ports.agent.team_roster import TeamRosterMember, TeamRosterProvider
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 from mote.runtime.telemetry.logging import logger
@@ -67,7 +67,7 @@ class TeamContextSource:
         # Frontier of teammate session ids already announced into history.
         self._sent_ids: Set[str] = set()
 
-    async def on_model_context_rebuilt(self, event: object) -> None:
+    async def on_model_context_rebuilt(self, event: ModelContextRebuiltEvent) -> None:
         """Reset the frontier whenever stored history is structurally rebuilt.
 
         A compaction condenses the earlier roster announcement away; a ``/clear``

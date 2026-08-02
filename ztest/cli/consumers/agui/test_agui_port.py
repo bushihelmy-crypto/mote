@@ -28,6 +28,7 @@ from mote.product.interfaces.agui import wire as agui
 from mote.product.interfaces.agui.port import AguiPort
 from mote.product.presentation.events.events import ApprovalRequested
 from mote.product.session_hosting import PromptBroker
+from mote.product.session_hosting.prompt_broker import PromptHandle, PromptKind, PromptResolveDisposition, PromptScope
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -43,7 +44,9 @@ def _wired_port(*, timeout_s: float = 5.0):
         frames.append(frame)
 
     broker = PromptBroker()
-    port = AguiPort("x", sink=sink, broker=broker, thread_id="t", run_id="r", timeout_s=timeout_s)
+    port = AguiPort(
+        "x", sink=sink, broker=broker, thread_id="t", run_id="r", principal="p", agent_id="a", timeout_s=timeout_s
+    )
     return port, frames, broker
 
 
@@ -51,6 +54,22 @@ def _prompt_id(frame: Dict[str, Any]) -> str:
     """Pull the minted correlation id out of an emitted approval/question frame."""
     value = frame["value"]
     return value.get("approvalId") or value.get("questionId") or ""
+
+
+def _resolve(broker: PromptBroker, frame: Dict[str, Any], payload: Dict[str, Any]) -> PromptResolveDisposition:
+    value = frame["value"]
+    handle = PromptHandle(
+        prompt_id=value["promptId"],
+        nonce=value["promptNonce"],
+        scope=PromptScope(
+            principal="p",
+            agent_id=value["agentId"],
+            thread_id=value["threadId"],
+            run_id=value["runId"],
+            kind=PromptKind(value["promptKind"]),
+        ),
+    )
+    return broker.resolve(handle, payload)
 
 
 # ── Phase 2: turn boundary + safe defaults (no back-channel) ────────────────
@@ -108,7 +127,7 @@ async def test_decide_approval_accept_round_trip():
     assert pid  # a fresh minted correlation id, not the ViewEvent id
     assert pid != "ap-1"
 
-    assert broker.resolve(pid, {"promptId": pid, "outcome": "accept"}) is True
+    assert _resolve(broker, frame, {"promptId": pid, "outcome": "accept"}) is PromptResolveDisposition.RESOLVED
     decision = await task
     assert decision.approval_id == pid
     assert decision.outcome == "accept"
@@ -122,7 +141,7 @@ async def test_decide_approval_reject_round_trip():
     task = asyncio.create_task(port.decide_approval(None, req))
     await asyncio.sleep(0)
     pid = _prompt_id(frames[0])
-    assert broker.resolve(pid, {"promptId": pid, "outcome": "reject"}) is True
+    assert _resolve(broker, frames[0], {"promptId": pid, "outcome": "reject"}) is PromptResolveDisposition.RESOLVED
     decision = await task
     assert decision.outcome == "reject"
 
@@ -136,7 +155,7 @@ async def test_decide_approval_edited_args_passthrough():
     await asyncio.sleep(0)
     pid = _prompt_id(frames[0])
     edited = {"command": "echo edited"}
-    broker.resolve(pid, {"promptId": pid, "outcome": "accept", "editedArgs": edited})
+    _resolve(broker, frames[0], {"promptId": pid, "outcome": "accept", "editedArgs": edited})
     decision = await task
     assert decision.outcome == "accept"
     assert decision.edited_args == edited
@@ -150,7 +169,7 @@ async def test_decide_approval_always_allow_round_trip():
     task = asyncio.create_task(port.decide_approval(None, req))
     await asyncio.sleep(0)
     pid = _prompt_id(frames[0])
-    broker.resolve(pid, {"promptId": pid, "outcome": "always_allow"})
+    _resolve(broker, frames[0], {"promptId": pid, "outcome": "always_allow"})
     decision = await task
     assert decision.outcome == "always_allow"
 
@@ -164,7 +183,7 @@ async def test_decide_approval_garbled_reply_rejects():
     task = asyncio.create_task(port.decide_approval(None, req))
     await asyncio.sleep(0)
     pid = _prompt_id(frames[0])
-    broker.resolve(pid, {"promptId": pid, "outcome": "maybe"})
+    _resolve(broker, frames[0], {"promptId": pid, "outcome": "maybe"})
     decision = await task
     assert decision.outcome == "reject"
 
@@ -179,7 +198,7 @@ async def test_ask_round_trip_returns_reply_text():
     assert frame["type"] == agui.CUSTOM
     assert frame["name"] == "question"
     pid = _prompt_id(frame)
-    broker.resolve(pid, {"promptId": pid, "answer": "Ada"})
+    _resolve(broker, frame, {"promptId": pid, "answer": "Ada"})
     assert await task == "Ada"
 
 
@@ -205,8 +224,9 @@ async def test_ask_questions_round_trip_structured_answers():
     assert frame["name"] == "question"
     assert frame["value"].get("structured") is not None  # rich payload for the frontend
     pid = _prompt_id(frame)
-    broker.resolve(
-        pid,
+    _resolve(
+        broker,
+        frame,
         {
             "promptId": pid,
             "answers": [{"header": "Color", "question": "Pick a color", "selected": ["red"]}],

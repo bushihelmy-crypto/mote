@@ -2,26 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Any
 
 from mote.runtime.config.mcp import MCPServerConfig
 from mote.runtime.tools.mcp.toolsets import NativeMcpToolset, XmlMcpToolset
 from mote.runtime.tools.mcp.universal import UniversalMCP
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
-
-
-class XmlMcpRegistrar(Protocol):
-    """Registration boundary accepted by :meth:`McpLifecycle.bind_xml`."""
-
-    def register_xml_tool(self, definition: XmlToolDefinition[Any], capability: Any) -> None:
-        ...
-
-
-class NativeMcpRegistrar(Protocol):
-    """Registration boundary accepted by :meth:`McpLifecycle.bind_native`."""
-
-    def register_native_tool(self, definition: NativeToolDefinition[Any], capability: Any) -> None:
-        ...
 
 
 class McpLifecycle:
@@ -46,33 +33,42 @@ class McpLifecycle:
     def active(self) -> bool:
         return self._mcp is not None
 
-    async def bind_xml(self, mcps: list[str] | None, registrar: XmlMcpRegistrar) -> None:
-        """Discover MCP capabilities and install only their XML definitions."""
-
+    async def prepare_xml(self, mcps: list[str] | None) -> "McpCandidate":
         owner = await self._connect(mcps)
         try:
             toolset = XmlMcpToolset(owner)
-            for definition in toolset.definitions():
-                registrar.register_xml_tool(definition, definition.capability_factory())
+            definitions = tuple(toolset.definitions())
+            capabilities = tuple(definition.capability_factory() for definition in definitions)
         except BaseException:
             await owner.cleanup_clients()
             raise
-        self._mcp = owner
-        self._toolset = toolset
+        return McpCandidate(owner, toolset, tuple(zip(definitions, capabilities)))
 
-    async def bind_native(self, mcps: list[str] | None, registrar: NativeMcpRegistrar) -> None:
-        """Discover MCP capabilities and install only their Native definitions."""
-
+    async def prepare_native(self, mcps: list[str] | None) -> "McpCandidate":
         owner = await self._connect(mcps)
         try:
             toolset = NativeMcpToolset(owner)
-            for definition in toolset.definitions():
-                registrar.register_native_tool(definition, definition.capability_factory())
+            definitions = tuple(toolset.definitions())
+            capabilities = tuple(definition.capability_factory() for definition in definitions)
         except BaseException:
             await owner.cleanup_clients()
             raise
-        self._mcp = owner
-        self._toolset = toolset
+        return McpCandidate(owner, toolset, tuple(zip(definitions, capabilities)))
+
+    def activate(self, candidate: "McpCandidate") -> UniversalMCP | None:
+        previous = self._mcp
+        self._mcp = candidate.owner
+        self._toolset = candidate.toolset
+        return previous
+
+    @staticmethod
+    async def discard(candidate: "McpCandidate") -> None:
+        await candidate.owner.cleanup_clients()
+
+    @staticmethod
+    async def cleanup_owner(owner: UniversalMCP | None) -> None:
+        if owner is not None:
+            await owner.cleanup_clients()
 
     async def _connect(self, mcps: list[str] | None) -> UniversalMCP:
         owner = UniversalMCP(
@@ -89,4 +85,11 @@ class McpLifecycle:
         self._toolset = None
 
 
-__all__ = ["McpLifecycle", "NativeMcpRegistrar", "XmlMcpRegistrar"]
+@dataclass(frozen=True, slots=True)
+class McpCandidate:
+    owner: UniversalMCP
+    toolset: XmlMcpToolset | NativeMcpToolset
+    bindings: tuple[tuple[XmlToolDefinition[Any] | NativeToolDefinition[Any], Any], ...]
+
+
+__all__ = ["McpCandidate", "McpLifecycle"]

@@ -71,7 +71,7 @@ class AuditReport:
 
 
 # --- secret shapes (pattern detection of EMBEDDED unknown credentials) --------
-# Distinct from common/secrets/policy.redact (which masks KNOWN values); here we
+# Distinct from runtime secret-value redaction (which masks known values); here we
 # detect credential-SHAPED strings a third party may have embedded in the body.
 _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("AWS access key id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),

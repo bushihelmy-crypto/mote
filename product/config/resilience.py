@@ -10,12 +10,13 @@ It maps onto the framework-agnostic frozen :class:`~mote.contracts.config.model.
 dependency points one way (config → primitive), so the state machine stays a
 domain-agnostic leaf.
 """
+
 from __future__ import annotations
 
 from pydantic import Field, model_validator
 
+from mote.contracts.config.base import ConfigModel as YamlModel
 from mote.contracts.config.model.breaker import BreakerConfig
-from mote.product.config.base import ConfigModel as YamlModel
 
 
 class ResilienceConfig(YamlModel):

@@ -2,8 +2,7 @@
 
 ``ToolError`` is the exception every tool raises to signal a recoverable
 failure, caught by ``ToolExecutor`` and turned into ``ToolResult(success=False)``.
-It is re-exported from ``mote.runtime.tools.tool_result`` so tool code can raise it
-from there.
+Tool code imports it from this authoritative Contracts module.
 
 ``NonRetryableToolError`` additionally inherits ``ValueError`` so code that
 catches ``ValueError`` and the MCP retry predicate treat it as non-retryable.

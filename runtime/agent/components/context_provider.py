@@ -22,9 +22,10 @@ from mote.contracts.output import OutputBindingKind
 from mote.kernel.commands.prompts import BUDGET_EXHAUSTED
 from mote.kernel.execution.context import PROCEED, BudgetVerdict, ExecutionContext
 from mote.kernel.execution.context_provider import BaseContextProvider
+from mote.kernel.execution.request import InferenceRequest
 from mote.kernel.inference import build_routing_signals
 from mote.kernel.inference.prompt_builder import InferenceContext, InferenceInputs, InferenceSubsystems, PromptBuilder
-from mote.kernel.inference.request import InferenceRequest
+from mote.runtime.models.model_calls import canonical_tool
 from mote.runtime.run_context import current_run_context
 
 if TYPE_CHECKING:
@@ -261,7 +262,10 @@ class ContextProvider(BaseContextProvider):
             include_hidden=target.capabilities.supports_native_tool_search,
         )
         request.tool_snapshot = snapshot
-        request.tool_specs = channel.tool_specs(snapshot.catalog, self._role.output_contract)
+        projected_specs = channel.tool_specs(snapshot.catalog, self._role.output_contract)
+        request.tool_specs = (
+            tuple(canonical_tool(spec) for spec in projected_specs) if projected_specs is not None else None
+        )
         request.tool_projection_fingerprint = snapshot.catalog.fingerprint
         request.protocol_fingerprint = f"{target.command_protocol}:{target.command_protocol_version}"
         request.command_channel = channel
@@ -282,7 +286,6 @@ class ContextProvider(BaseContextProvider):
         return InferenceInputs(
             working_dir=self._get_cwd(),
             original_working_dir=self._state.original_working_dir,
-            project_root=self._state.project_root,
             role_info=self._schema.role_info,
         )
 

@@ -1,19 +1,25 @@
 """Generic in-memory and crash-durable lease coordinators."""
+
 from __future__ import annotations
 
 import asyncio
 import fcntl
 import json
+import math
 import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
 
+from mote.contracts.clock import UNIX_UTC_CLOCK, AbsoluteInstant
 from mote.contracts.ports.runtime.lease import LeaseCoordinator, LeaseEpoch
 from mote.contracts.runtime.errors import LeaseCoordinatorUnavailableError, LeaseFencedError, LeaseUnavailableError
 from mote.contracts.runtime.lease import RuntimeLease, RuntimeLeasePolicy
 from mote.runtime.persistence import disk_io
+
+_FILE_LEASE_SCHEMA = "mote.file-lease-coordinator/v1"
+_FILE_LEASE_SCHEMA_VERSION = 1
 
 
 class InMemoryLeaseCoordinator:
@@ -52,6 +58,13 @@ class InMemoryLeaseCoordinator:
     def guard(self, subject: str, fencing_token: int) -> Iterator[None]:
         with self._lock:
             _assert_current(self._leases, subject, fencing_token, self._clock())
+            yield
+
+    @contextmanager
+    def guard_many(self, bindings: tuple[tuple[str, int], ...]) -> Iterator[None]:
+        with self._lock:
+            for subject, fencing_token in bindings:
+                _assert_current(self._leases, subject, fencing_token, self._clock())
             yield
 
     def get(self, subject: str) -> RuntimeLease | None:
@@ -103,6 +116,15 @@ class FileLeaseCoordinator:
             _assert_current(self._read(), subject, fencing_token, self._clock())
             yield
 
+    @contextmanager
+    def guard_many(self, bindings: tuple[tuple[str, int], ...]) -> Iterator[None]:
+        with self._locked():
+            leases = self._read()
+            now = self._clock()
+            for subject, fencing_token in bindings:
+                _assert_current(leases, subject, fencing_token, now)
+            yield
+
     def get(self, subject: str) -> RuntimeLease | None:
         with self._locked():
             return self._read().get(subject)
@@ -128,32 +150,83 @@ class FileLeaseCoordinator:
 
     def _read(self) -> dict[str, RuntimeLease]:
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            raw = self._load_json()
         except FileNotFoundError:
             return {}
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
             raise self._unavailable("invalid lease state", exc) from exc
         try:
-            return {
-                subject: RuntimeLease(
-                    subject=subject,
-                    owner_id=str(item["owner_id"]),
-                    fencing_token=int(item["fencing_token"]),
-                    expires_at=float(item["expires_at"]),
-                )
-                for subject, item in raw.items()
-            }
+            return self._decode_v1(raw)
         except (KeyError, TypeError, ValueError) as exc:
             raise self._unavailable("invalid lease record", exc) from exc
 
+    def _load_json(self) -> object:
+        return json.loads(self._path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _decode_v1(raw: object) -> dict[str, RuntimeLease]:
+        if type(raw) is not dict or set(raw) != {"schema", "schema_version", "leases"}:
+            raise ValueError("lease envelope fields are not canonical")
+        assert isinstance(raw, dict)
+        if raw["schema"] != _FILE_LEASE_SCHEMA:
+            raise ValueError("unknown lease state schema")
+        if type(raw["schema_version"]) is not int or raw["schema_version"] != _FILE_LEASE_SCHEMA_VERSION:
+            raise ValueError("unsupported lease state version")
+        records = raw["leases"]
+        if type(records) is not dict:
+            raise ValueError("lease records must be an object")
+        leases: dict[str, RuntimeLease] = {}
+        for subject, record in records.items():
+            if type(subject) is not str or not subject:
+                raise ValueError("lease index subject is invalid")
+            lease = FileLeaseCoordinator._decode_record(record)
+            if lease.subject != subject:
+                raise ValueError("lease subject does not match its index identity")
+            leases[subject] = lease
+        return leases
+
+    @staticmethod
+    def _decode_record(record: object) -> RuntimeLease:
+        if type(record) is not dict or set(record) != {
+            "subject",
+            "owner_id",
+            "fencing_token",
+            "expires_at",
+        }:
+            raise ValueError("lease record fields are not canonical")
+        assert isinstance(record, dict)
+        subject = record["subject"]
+        owner_id = record["owner_id"]
+        token = record["fencing_token"]
+        if type(subject) is not str or not subject:
+            raise ValueError("lease subject is invalid")
+        if type(owner_id) is not str:
+            raise ValueError("lease owner_id is invalid")
+        if type(token) is not int or token < 1:
+            raise ValueError("lease fencing_token is invalid")
+        expires_at = AbsoluteInstant.from_dict(record["expires_at"])
+        expires_at.require_clock(UNIX_UTC_CLOCK)
+        return RuntimeLease(
+            subject,
+            owner_id,
+            token,
+            expires_at.epoch_nanoseconds / 1_000_000_000,
+            expires_at,
+        )
+
     def _write(self, leases: dict[str, RuntimeLease]) -> None:
         payload = {
-            subject: {
-                "owner_id": lease.owner_id,
-                "fencing_token": lease.fencing_token,
-                "expires_at": lease.expires_at,
-            }
-            for subject, lease in leases.items()
+            "schema": _FILE_LEASE_SCHEMA,
+            "schema_version": _FILE_LEASE_SCHEMA_VERSION,
+            "leases": {
+                subject: {
+                    "subject": subject,
+                    "owner_id": lease.owner_id,
+                    "fencing_token": lease.fencing_token,
+                    "expires_at": lease.durable_expiry().to_dict(),
+                }
+                for subject, lease in sorted(leases.items())
+            },
         }
         try:
             disk_io.atomic_write(
@@ -202,6 +275,27 @@ class LeaseHandle:
         self._heartbeat = asyncio.create_task(self._renew_loop())
         return self
 
+    async def adopt(self, lease: LeaseEpoch) -> "LeaseHandle":
+        """Manage an epoch already acquired by the same coordinator owner."""
+        if self.lease is not None or self._heartbeat is not None:
+            raise RuntimeError("lease handle is already active")
+        if lease.subject != self.subject or lease.owner_id != self.owner_id:
+            raise ValueError("adopted lease identity does not match the handle")
+        self.coordinator.assert_current(lease.subject, lease.fencing_token)
+        self.lease = lease
+        self._stop.clear()
+        self._heartbeat = asyncio.create_task(self._renew_loop())
+        return self
+
+    async def wait_for_loss(self) -> None:
+        """Wait until heartbeat stops and fail closed if renewal was lost."""
+        task = self._heartbeat
+        if task is None:
+            raise RuntimeError("lease handle is not active")
+        await asyncio.shield(task)
+        self._raise_renew_error()
+        raise RuntimeError("lease heartbeat stopped without ownership loss")
+
     async def close(self) -> None:
         task, self._heartbeat = self._heartbeat, None
         if task is not None:
@@ -249,9 +343,9 @@ class LeaseHandle:
 
 
 def _validate_request(subject: str, owner_id: str, ttl_seconds: float) -> None:
-    if not subject or not owner_id:
+    if type(subject) is not str or not subject or type(owner_id) is not str or not owner_id:
         raise ValueError("lease subject and owner_id must be non-empty")
-    if ttl_seconds <= 0:
+    if type(ttl_seconds) not in {int, float} or not math.isfinite(ttl_seconds) or ttl_seconds <= 0:
         raise ValueError("lease ttl_seconds must be positive")
 
 

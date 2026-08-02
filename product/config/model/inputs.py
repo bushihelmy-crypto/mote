@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import Field, TypeAdapter, field_validator, model_validator
+
+from mote.contracts.config.base import ConfigModel
+from mote.contracts.model.operations import ModelOperation
 
 
 def Sensitive(default: Any = None, **kwargs: Any) -> Any:
@@ -13,8 +17,8 @@ def Sensitive(default: Any = None, **kwargs: Any) -> Any:
     return Field(default=default, json_schema_extra=extra, **kwargs)
 
 
-class ProductInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class ProductInput(ConfigModel):
+    pass
 
 
 class ProductOAuthInput(ProductInput):
@@ -52,6 +56,7 @@ class ProductEndpointInput(ProductInput):
 
 
 class ProductEndpointCapabilitiesInput(ProductInput):
+    supported_operations: frozenset[ModelOperation] | None = None
     supports_tools: bool | None = None
     supports_native_schema: bool | None = None
     supports_server_web_search: bool | None = None
@@ -101,12 +106,25 @@ class ProductRoutesInput(ProductInput):
     semantic: dict[str, str] = Field(default_factory=dict)
 
 
+class ApiKeyHelperInput(ProductInput):
+    argv: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("argv")
+    @classmethod
+    def _fixed_executable(cls, argv: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not argument for argument in argv):
+            raise ValueError("api_key_helper argv entries must be non-empty")
+        if not Path(argv[0]).is_absolute():
+            raise ValueError("api_key_helper executable must be an absolute path")
+        return argv
+
+
 class ShortcutModelsConfig(ProductInput):
     mode: Literal["shortcut"] = "shortcut"
     default: ProductEndpointInput
     tasks: dict[str, ProductEndpointInput] = Field(default_factory=dict)
     recovery_defaults: ProductRecoveryInput = Field(default_factory=ProductRecoveryInput)
-    api_key_helper: str = Sensitive(default="")
+    api_key_helper: ApiKeyHelperInput | None = Sensitive(default=None)
     response_language: str = "chinese"
 
 
@@ -165,6 +183,7 @@ def parse_product_models_config(value: Any) -> ProductModelsConfig:
 
 __all__ = [
     "ExplicitModelsConfig",
+    "ApiKeyHelperInput",
     "ProductCredentialPoolInput",
     "ProductEndpointInput",
     "ProductExplicitEndpointInput",

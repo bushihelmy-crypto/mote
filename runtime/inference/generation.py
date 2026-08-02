@@ -9,7 +9,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from mote.contracts.inference.generation_artifact import GenerationArtifact
+from mote.contracts.inference.generation_artifact import GenerationArtifact, verify_generation_artifact_digest
 
 
 class GenerationState(StrEnum):
@@ -109,6 +109,7 @@ class GatewayGenerationOwner:
             return self._active_id
 
     def stage(self, artifact: GenerationArtifact) -> None:
+        verify_generation_artifact_digest(artifact)
         with self._lock:
             existing = self._records.get(artifact.generation_id)
             if existing is not None:
@@ -123,6 +124,8 @@ class GatewayGenerationOwner:
 
     def restore(self, records: Iterable[tuple[GenerationArtifact, GenerationState]]) -> None:
         restored = tuple(records)
+        for artifact, _ in restored:
+            verify_generation_artifact_digest(artifact)
         active = tuple(artifact.generation_id for artifact, state in restored if state is GenerationState.ACTIVE)
         if len(active) > 1:
             raise ValueError("generation recovery found multiple active generations")
@@ -205,16 +208,16 @@ class GatewayGenerationOwner:
     @staticmethod
     def _view(artifact: GenerationArtifact, domain: GenerationDomain) -> GenerationView:
         bindings = {
-            GenerationDomain.MODEL: artifact.model_planner_and_bindings,
-            GenerationDomain.SERVICE: artifact.service_planner_and_bindings,
-            GenerationDomain.SESSION: artifact.session_capability_and_bindings,
-            GenerationDomain.TRANSFER: artifact.transfer_capability_and_bindings,
+            GenerationDomain.MODEL: artifact.model_binding,
+            GenerationDomain.SERVICE: artifact.service_binding,
+            GenerationDomain.SESSION: artifact.session_binding,
+            GenerationDomain.TRANSFER: artifact.transfer_binding,
         }[domain]
         return GenerationView(
             generation_id=artifact.generation_id,
             artifact_digest=artifact.artifact_digest,
             domain=domain,
-            bindings=MappingProxyType(dict(bindings)),
+            bindings=MappingProxyType(bindings.model_dump(mode="json")),
             transport_registry_revision=artifact.transport_registry_revision,
             client_profile_revision=artifact.client_profile_revision,
             failure_policy_revision=artifact.failure_policy_revision,

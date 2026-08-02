@@ -4,7 +4,7 @@ import pytest
 
 from mote.contracts.inference.identity import TrustedSchedulingClass
 from mote.runtime.inference.capacity import InFlightCapacity
-from mote.runtime.inference.fair_queue import FairAdmissionQueue, QueueDeadlineExceededError, QueueFullError
+from mote.runtime.inference.fair_queue import FairAdmissionQueue, QueueDeadlineExceededError, QueueEntry, QueueFullError
 
 
 def _scheduling(*, tenant_weight=1, project_weight=1, cost=1, priority=0):
@@ -26,6 +26,48 @@ def test_queue_is_hard_bounded_and_deadline_aware():
         with pytest.raises(QueueDeadlineExceededError):
             await FairAdmissionQueue(capacity=1, clock=lambda: now).enqueue(
                 "expired", tenant_id="a", project_id="p", scheduling=_scheduling(), deadline=10
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        {"capacity": True},
+        {"capacity": 0},
+        {"capacity": 1, "base_quantum": True},
+        {"capacity": 1, "aging_seconds": float("nan")},
+        {"capacity": 1, "aging_seconds": float("inf")},
+    ),
+)
+def test_queue_rejects_invalid_capacity_quantum_and_aging(kwargs):
+    with pytest.raises(ValueError, match="capacity, quantum and aging"):
+        FairAdmissionQueue(**kwargs)
+
+
+def test_queue_entry_and_enqueue_reject_non_finite_time() -> None:
+    with pytest.raises(ValueError, match="deadline must be finite"):
+        QueueEntry(1, "tenant", "project", "payload", 1, 0, 1.0, float("nan"))
+
+    async def scenario() -> None:
+        queue = FairAdmissionQueue(capacity=1, clock=lambda: 1.0)
+        with pytest.raises(ValueError, match="deadline must be finite"):
+            await queue.enqueue(
+                "payload",
+                tenant_id="tenant",
+                project_id="project",
+                scheduling=_scheduling(),
+                deadline=float("nan"),
+            )
+        invalid_clock = FairAdmissionQueue(capacity=1, clock=lambda: float("nan"))
+        with pytest.raises(ValueError, match="clock must return a finite"):
+            await invalid_clock.enqueue(
+                "payload",
+                tenant_id="tenant",
+                project_id="project",
+                scheduling=_scheduling(),
+                deadline=2.0,
             )
 
     asyncio.run(scenario())

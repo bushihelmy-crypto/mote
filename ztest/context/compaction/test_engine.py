@@ -1,17 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for ContextEngine policy enforcement and compaction facts."""
+
 from __future__ import annotations
 
 import asyncio
 
 from mote.contracts.conversation.compaction_policy import CompactionDecision
+from mote.contracts.events.conversation import ContextCompactedEvent, PostCompactEvent
 from mote.runtime.context.compaction.engine import ContextEngine
 from mote.runtime.context.compaction.pipeline import ReductionPipeline
 from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
 from mote.runtime.context.compaction.request import ReductionRequest, Urgency
 from mote.runtime.context.compaction.transcript import Transcript
-from mote.runtime.events import ContextCompactedEvent, PostCompactEvent
 
 from ..conftest import text_msg
 

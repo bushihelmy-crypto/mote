@@ -27,7 +27,14 @@ from typing import AsyncGenerator, Generator, Optional
 import httpx
 
 from mote.runtime.config.mcp import MCPServerConfig
-from mote.runtime.models.auth.oauth import OAuthManager
+from mote.runtime.models.auth.oauth.manager import OAuthManager
+
+
+class McpAuthenticationConfigurationError(RuntimeError):
+    def __init__(self, server_name: str, detail: str) -> None:
+        self.server_name = server_name
+        self.detail = detail
+        super().__init__(f"MCP server {server_name!r} authentication is unavailable: {detail}")
 
 
 class _OAuthManagerAuth(httpx.Auth):
@@ -67,8 +74,14 @@ def build_mcp_auth(server_config: MCPServerConfig) -> Optional[httpx.Auth]:
     if oauth is None:
         return None
 
-    manager = OAuthManager(oauth, provider=server_config.name)
+    if oauth.storage_root is None:
+        raise McpAuthenticationConfigurationError(server_config.name, "credential storage root is missing")
+
+    try:
+        manager = OAuthManager(oauth, provider=server_config.name)
+    except Exception as error:
+        raise McpAuthenticationConfigurationError(server_config.name, f"{type(error).__name__}: {error}") from error
     return _OAuthManagerAuth(manager)
 
 
-__all__ = ["build_mcp_auth"]
+__all__ = ["McpAuthenticationConfigurationError", "build_mcp_auth"]

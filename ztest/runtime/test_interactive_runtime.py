@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -28,8 +29,8 @@ from mote.contracts.runtime.errors import (
 )
 from mote.contracts.runtime.lease import RuntimeLeasePolicy
 from mote.runtime.control.leases import FileLeaseCoordinator, InMemoryLeaseCoordinator
-from mote.runtime.interactive import RuntimeHost
 from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
+from mote.runtime.interactive.host import RuntimeHost
 from mote.runtime.interactive.kernel.driver import KernelRuntimeDriver
 from mote.runtime.interactive.terminal.driver import TerminalRuntimeDriver
 
@@ -540,6 +541,32 @@ async def test_staged_checkpoint_is_restored_once_by_lazy_ensure():
     recreated = await host.ensure(second)
     assert recreated.ref.runtime_id != "runtime-staged"
     assert second.started_with is None
+
+
+def test_staged_checkpoint_rejects_alias_identity_replacement_and_regression():
+    current = RuntimeCheckpoint(
+        runtime_id="runtime-staged",
+        kind="fake",
+        epoch=2,
+        revision=7,
+        codec="fake@1",
+        schema_version=1,
+        payload_ref="memory:7",
+        fidelity=CheckpointFidelity.FULL,
+    )
+    host = RuntimeHost()
+    host.stage_checkpoint(current)
+    host.stage_checkpoint(current)
+
+    candidates = (
+        (replace(current, runtime_id="replacement", epoch=3), None),
+        (replace(current, revision=6), None),
+        (replace(current, payload_ref="memory:fork"), None),
+        (current, "other"),
+    )
+    for candidate, alias in candidates:
+        with pytest.raises(ManagedRuntimeStateError):
+            host.stage_checkpoint(candidate, alias=alias)
 
 
 @pytest.mark.asyncio

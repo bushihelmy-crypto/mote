@@ -8,13 +8,14 @@ first turn emits the whole index; later turns emit only newly-added skills
 (tracked by ``_sent_names``). It is duck-typed over a single ``get_injector``
 callable so it never imports the skill manager or the Role.
 """
+
 from __future__ import annotations
 
 import asyncio
 
+from mote.contracts.events.conversation import PostCompactEvent
 from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
 from mote.runtime.context.turn import SkillListingContextSource
-from mote.runtime.events import PostCompactEvent
 
 
 def run(coro):
@@ -48,7 +49,10 @@ class _FakeInjector:
 
 
 def _source(injector):
-    return SkillListingContextSource(get_injector=lambda: injector)
+    return SkillListingContextSource(
+        get_injector=lambda: injector,
+        is_enabled=lambda: True,
+    )
 
 
 class TestProtocol:
@@ -67,7 +71,10 @@ class TestProtocol:
 
 class TestSilent:
     def test_none_injector_silent(self):
-        src = SkillListingContextSource(get_injector=lambda: None)
+        src = SkillListingContextSource(
+            get_injector=lambda: None,
+            is_enabled=lambda: True,
+        )
         assert run(src.render()) is None
 
     def test_no_indexable_skills_silent(self):
@@ -98,10 +105,12 @@ class TestEnabledGate:
         assert out is not None
         assert "alpha" in out
 
-    def test_no_gate_falls_back_to_original_logic(self):
-        # is_enabled None → gate on injector/skills alone (backwards-compatible).
+    def test_enabled_policy_is_explicit(self):
         inj = _FakeInjector([_FakeSkill("alpha")])
-        src = SkillListingContextSource(get_injector=lambda: inj)
+        src = SkillListingContextSource(
+            get_injector=lambda: inj,
+            is_enabled=lambda: True,
+        )
         assert run(src.render()) is not None
 
 

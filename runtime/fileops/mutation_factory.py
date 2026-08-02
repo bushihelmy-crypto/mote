@@ -19,7 +19,7 @@ from mote.contracts.file.mutations import (
 )
 from mote.runtime.fileops.identity import name_identity, path_token, project_identity
 from mote.runtime.fileops.metadata_manifest import PreservedMetadata, encode_metadata_manifest
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, FileMutationArtifactRepository
 
 
 class MutationFactory:
@@ -29,7 +29,7 @@ class MutationFactory:
         self,
         *,
         session_id: str,
-        artifacts: ArtifactRepository,
+        artifacts: FileMutationArtifactRepository,
         get_project_root: Callable[[], str],
     ) -> None:
         self.session_id = session_id

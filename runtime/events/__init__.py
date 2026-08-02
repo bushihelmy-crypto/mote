@@ -10,7 +10,7 @@ from mote.runtime.events.log_subscriber import LogSubscriber
 from mote.runtime.events.scope import ScopePath, ScopeRef, current_scope, push_scope
 from mote.runtime.events.stream import log_llm_stream
 from mote.runtime.events.telemetry import (
-    TelemetryBinding,
+    AllTelemetryBinding,
     TelemetryHandle,
     TelemetryManifest,
     TelemetryRuntime,
@@ -22,7 +22,7 @@ __all__ = [
     "EventFabric",
     "SubscriptionBinding",
     "SubscriptionManifest",
-    "TelemetryBinding",
+    "AllTelemetryBinding",
     "TelemetryHandle",
     "TelemetryManifest",
     "TelemetryRuntime",

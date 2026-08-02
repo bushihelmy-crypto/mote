@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import hmac
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from secrets import token_bytes
@@ -26,7 +27,9 @@ from mote.product.models.secrets import (
     SecretHandle,
     SecretIdentity,
 )
-from mote.runtime.models.auth.oauth import OAuthManager
+from mote.runtime.models.auth.oauth.manager import OAuthManager
+from mote.runtime.process import FixedExecutableBinding, ProcessDisposition, run_verified_fixed_argv
+from mote.runtime.telemetry.logging import logger
 
 _EPOCH_KEY = token_bytes(32)
 
@@ -59,6 +62,17 @@ class _OAuthSource:
     provider: str
 
 
+@dataclass(frozen=True, slots=True)
+class _HelperSource:
+    argv: tuple[str, ...]
+    executable_device: int
+    executable_inode: int
+
+
+_HELPER_TIMEOUT_SECONDS = 30.0
+_HELPER_MAX_OUTPUT_BYTES = 65_536
+
+
 class ProductCredentialSourceCatalog:
     def __init__(
         self,
@@ -69,7 +83,7 @@ class ProductCredentialSourceCatalog:
     ) -> None:
         self._oauth_root = oauth_root
         self._environ = environ if environ is not None else os.environ
-        self._sources: dict[str, _StaticSource | _EnvironmentSource | _OAuthSource] = {}
+        self._sources: dict[str, _StaticSource | _EnvironmentSource | _OAuthSource | _HelperSource] = {}
         self._index(source)
 
     def _index(self, source: ProductModelsConfig) -> None:
@@ -82,7 +96,11 @@ class ProductCredentialSourceCatalog:
                 },
             }
             for endpoint_id, endpoint in endpoints.items():
-                self._index_direct(endpoint_id, endpoint)
+                self._index_direct(
+                    endpoint_id,
+                    endpoint,
+                    helper=(source.api_key_helper.argv if source.api_key_helper else None),
+                )
             return
         assert isinstance(source, ExplicitModelsConfig)
         for endpoint_id, endpoint in source.endpoints.items():
@@ -97,7 +115,13 @@ class ProductCredentialSourceCatalog:
                     raise ValueError(f"credential slot {slot.id!r} has an empty env ref")
                 self._sources[slot.secret_ref] = _EnvironmentSource(variable)
 
-    def _index_direct(self, endpoint_id: str, endpoint: ProductEndpointInput) -> None:
+    def _index_direct(
+        self,
+        endpoint_id: str,
+        endpoint: ProductEndpointInput,
+        *,
+        helper: tuple[str, ...] | None = None,
+    ) -> None:
         if endpoint.oauth is not None:
             oauth = OAuthProviderConfig.model_validate(endpoint.oauth.model_dump() | {"storage_root": self._oauth_root})
             self._sources[f"{endpoint_id}:oauth"] = _OAuthSource(oauth, endpoint.provider or endpoint_id)
@@ -105,7 +129,18 @@ class ProductCredentialSourceCatalog:
         keys = endpoint.api_key if isinstance(endpoint.api_key, list) else [endpoint.api_key]
         for index, value in enumerate(keys):
             if not value:
-                raise ValueError(f"endpoint {endpoint_id!r} has no credential")
+                if helper is None:
+                    raise ValueError(f"endpoint {endpoint_id!r} has no credential")
+                executable = Path(helper[0]).resolve(strict=True)
+                metadata = executable.stat()
+                if not stat.S_ISREG(metadata.st_mode) or not os.access(executable, os.X_OK):
+                    raise ValueError("api_key_helper executable must be an executable regular file")
+                self._sources[f"{endpoint_id}:key:{index}"] = _HelperSource(
+                    (str(executable), *helper[1:]),
+                    metadata.st_dev,
+                    metadata.st_ino,
+                )
+                continue
             self._sources[f"{endpoint_id}:key:{index}"] = _StaticSource(value)
 
     def describe(self, source_ids: tuple[str, ...]) -> tuple[CredentialSourceDescriptor, ...]:
@@ -119,9 +154,13 @@ class ProductCredentialSourceCatalog:
                 if not value:
                     raise ValueError(f"credential environment variable {source.variable!r} is unset")
                 epoch = _epoch(value)
-            else:
+            elif isinstance(source, _OAuthSource):
                 public = source.config.model_dump_json(exclude={"storage_root"})
                 epoch = _epoch(public)
+            else:
+                epoch = _epoch(
+                    f"helper-v1\0{source.executable_device}\0{source.executable_inode}\0" + "\0".join(source.argv)
+                )
             descriptors.append(CredentialSourceDescriptor(source_id, epoch))
         return tuple(descriptors)
 
@@ -136,6 +175,40 @@ class ProductCredentialSourceCatalog:
                 epoch=self.describe((source_id,))[0].epoch,
                 manager=OAuthManager(source.config, provider=source.provider),
                 force_refresh=slot_id.endswith("oauth-refresh"),
+            )
+        if isinstance(source, _HelperSource):
+            command_identity = hashlib.sha256("\0".join(source.argv).encode()).hexdigest()
+            logger.info(
+                f"api_key_helper activation source={source_id} command_sha256={command_identity} "
+                f"executable_device={source.executable_device} executable_inode={source.executable_inode}"
+            )
+            result = await run_verified_fixed_argv(
+                FixedExecutableBinding(
+                    source.argv[0],
+                    source.executable_device,
+                    source.executable_inode,
+                ),
+                source.argv[1:],
+                working_dir=str(self._oauth_root.parent),
+                env={},
+                timeout=_HELPER_TIMEOUT_SECONDS,
+                max_output_bytes=_HELPER_MAX_OUTPUT_BYTES,
+            )
+            logger.info(
+                f"api_key_helper settlement source={source_id} command_sha256={command_identity} "
+                f"disposition={result.disposition.value} exit_code={result.exit_code}"
+            )
+            if result.disposition is not ProcessDisposition.EXITED or result.exit_code != 0:
+                raise RuntimeError(f"api_key_helper failed: {result.disposition.value}")
+            value = result.stdout
+            if not value or "\n" in value or "\x00" in value:
+                raise RuntimeError("api_key_helper returned an invalid credential payload")
+            return InMemorySecretHandle(
+                endpoint_id=endpoint_id,
+                slot_id=slot_id,
+                identity=identity,
+                epoch=self.describe((source_id,))[0].epoch,
+                value=value,
             )
         value = source.value if isinstance(source, _StaticSource) else self._environ.get(source.variable)
         if not value:

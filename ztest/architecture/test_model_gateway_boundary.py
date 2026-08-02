@@ -103,7 +103,9 @@ def test_runtime_composition_injects_product_policy_only_through_wiring() -> Non
     path = ROOT / "runtime/agent/components/cognition.py"
     imports = [module for _lineno, module in _runtime_imports(path)]
     assert not any(module.startswith("mote.product") for module in imports)
-    assert "routing_strategy_builders" in path.read_text(encoding="utf-8")
+    source = path.read_text(encoding="utf-8")
+    assert "RoutingStrategyFactory" in source
+    assert "routing_strategy_builders" not in source
 
 
 def test_legacy_semantic_router_state_and_strategy_surfaces_are_deleted() -> None:

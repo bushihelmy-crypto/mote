@@ -25,19 +25,26 @@ round-trip ACP *does* model — permission — is fully wired.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from collections.abc import Mapping
+from typing import Awaitable, Callable, Optional
 
-from mote.contracts.interaction import AskUserQuestionAnswers, AskUserQuestionInput
+from mote.contracts.events.envelope import JsonValue, freeze_json
+from mote.contracts.interaction import ApprovalRequest, AskUserQuestionAnswers, AskUserQuestionInput
+from mote.contracts.interaction.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus, HumanHandoffOutcome
+from mote.contracts.surface import LiveSurfaceSession
+from mote.product.interaction.ports import DriverControlBinding
 from mote.product.interfaces.acp import wire as acp
 from mote.product.presentation.events.events import ApprovalDecision
 from mote.product.presentation.projection.approval import approval_action, approval_preview, approval_risk
+from mote.product.presentation.wire_types import WireMapping, to_wire_json
 from mote.runtime.telemetry.logging import logger
 
 #: An async request sender the server injects: ``(method, params) -> result``.
 #: The server binds this to the JSON-RPC endpoint's ``request`` so the port can
 #: send a client-bound request (``session/request_permission``) and await the
 #: reply on the same live connection. Returns ``None`` on transport failure.
-RequestFn = Callable[[str, Dict[str, Any]], Awaitable[Optional[Dict[str, Any]]]]
+WireObject = WireMapping
+RequestFn = Callable[[str, WireObject], Awaitable[WireObject | None]]
 
 #: The one agent→client request method ACP defines for HITL — the port sends it
 #: and blocks on the inline reply (server imports this so both agree on the name).
@@ -74,6 +81,29 @@ class AcpPort:
         self._timeout_s = timeout_s
         self._closed = False
 
+    def bind_driver_control(self, binding: DriverControlBinding) -> None:
+        return None
+
+    async def start(self) -> None:
+        return None
+
+    def take_turn_images(self) -> list[Mapping[str, JsonValue]]:
+        return []
+
+    def request_exit(self) -> None:
+        self._closed = True
+
+    async def open_handoff(
+        self,
+        request: HandoffRequest,
+        handle: DriverHandoffHandle,
+        surface: LiveSurfaceSession | None = None,
+    ) -> HumanHandoffOutcome:
+        return HumanHandoffOutcome(status=HandoffStatus.UNAVAILABLE)
+
+    def stage_restore(self, text: str) -> None:
+        return None
+
     # ------------------------------------------------------------------
     # Turn boundary
     # ------------------------------------------------------------------
@@ -91,7 +121,7 @@ class AcpPort:
     # ------------------------------------------------------------------
     # HITL — permission is ACP's one native interactive round-trip
     # ------------------------------------------------------------------
-    async def ask(self, ctx: Any, question: str, options: Optional[List[str]] = None, multi: bool = False) -> str:
+    async def ask(self, ctx: object, question: str) -> str:
         """Free-text question — no ACP client method delivers it, so return empty.
 
         ACP models only permission as an agent→client request; a free-text ask
@@ -102,7 +132,7 @@ class AcpPort:
         logger.debug("AcpPort.ask: ACP has no free-text prompt channel; returning empty answer")
         return ""
 
-    async def ask_questions(self, ctx: Any, questions: "AskUserQuestionInput") -> "AskUserQuestionAnswers":
+    async def ask_questions(self, ctx: object, questions: AskUserQuestionInput) -> AskUserQuestionAnswers:
         """Structured multiple-choice — likewise undeliverable over ACP → empty.
 
         No ``session/request_*`` method carries a structured question, so this
@@ -111,7 +141,7 @@ class AcpPort:
         """
         return AskUserQuestionAnswers(answers=[])
 
-    async def decide_approval(self, ctx: Any, request: Any) -> "ApprovalDecision":
+    async def decide_approval(self, ctx: object, request: ApprovalRequest) -> ApprovalDecision:
         """Gated action: send ``session/request_permission``, await the client's pick.
 
         The engine hands a language-neutral ``ApprovalRequest``; we build the ACP
@@ -129,8 +159,8 @@ class AcpPort:
             logger.debug("AcpPort.decide_approval: no live link; rejecting (fail-safe)")
             return ApprovalDecision(approval_id="", outcome="reject")
 
-        tool_name = getattr(request, "tool_name", "") or ""
-        params: Dict[str, Any] = {
+        tool_name = request.tool_name
+        params_value: dict[str, object] = {
             "sessionId": self._session_id,
             "toolCall": acp.tool_call_update_for_permission(
                 tool_call_id=self._permission_tool_id(request),
@@ -143,15 +173,18 @@ class AcpPort:
         # context (beyond the tool call itself) has it; harmless if ignored.
         preview = approval_preview(request)
         if preview:
-            params["_meta"] = {"preview": preview, "risk": approval_risk(request)}
+            params_value["_meta"] = {"preview": preview, "risk": approval_risk(request)}
 
-        reply = await self._send(params)
+        wire_value = to_wire_json(params_value)
+        if not isinstance(wire_value, dict):
+            raise TypeError("ACP permission request must be a JSON object")
+        reply = await self._send(wire_value)
         return self._parse_outcome(reply)
 
     # ------------------------------------------------------------------
     # Wire round-trip + reply parsing
     # ------------------------------------------------------------------
-    async def _send(self, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _send(self, params: WireObject) -> WireObject | None:
         """Send the permission request, bounded by the timeout; ``None`` on failure."""
         if self._request is None:
             return None
@@ -169,16 +202,12 @@ class AcpPort:
             return None
 
     @staticmethod
-    def _permission_tool_id(request: Any) -> str:
-        """Correlate the permission to its tool call if the request carries an id."""
-        for attr in ("tool_use_id", "approval_id", "call_id"):
-            val = getattr(request, attr, None)
-            if isinstance(val, str) and val:
-                return val
+    def _permission_tool_id(request: ApprovalRequest) -> str:
+        """Use the stable target when present; ACP otherwise uses a pending marker."""
         return "pending"
 
     @staticmethod
-    def _parse_outcome(reply: Optional[Dict[str, Any]]) -> "ApprovalDecision":
+    def _parse_outcome(reply: WireObject | None) -> ApprovalDecision:
         """Map a ``RequestPermissionResponse`` to an ``ApprovalDecision`` (reject-default).
 
         Response shape: ``{outcome: {outcome:"selected", optionId} | {outcome:"cancelled"}}``.
@@ -198,12 +227,12 @@ class AcpPort:
     # ------------------------------------------------------------------
     # Control affordances (server owns the run task; these stay inert)
     # ------------------------------------------------------------------
-    def signal_interrupt(self, ctx: Any) -> None:
+    def signal_interrupt(self, ctx: object = None) -> None:
         """Cancel the in-flight turn. The server maps ``session/cancel`` to this;
         Phase 4 leaves the actual cancel to the server's run-task ownership."""
         return None
 
-    def submit_steer(self, ctx: Any, text: str) -> None:
+    def submit_steer(self, ctx: object, text: str) -> None:
         """Turn-level steering. No-op (ACP has no mid-turn steer method)."""
         return None
 

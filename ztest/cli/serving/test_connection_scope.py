@@ -18,12 +18,14 @@ end-to-end without a real engine.
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import Any, List, Optional
 
 import pytest
 
-from mote.contracts.events.conversation import MESSAGE_APPENDED
+from mote.contracts.conversation import AIMessage
+from mote.contracts.events.conversation import MessageAppendedEvent
 from mote.product.presentation.consumer import BaseConsumer
 from mote.product.presentation.events import Capabilities, MessageBlockCompleted
 from mote.product.session_hosting.connection import ConnectionScope, _format_turn_error
@@ -34,28 +36,30 @@ from mote.product.session_hosting.registry import ResidentSession
 # Fakes
 # --------------------------------------------------------------------------
 class _FakeHandle:
-    def __init__(self, telemetry: "FakeTelemetry", handler: Any) -> None:
+    def __init__(self, telemetry: "FakeTelemetry", binding: tuple[type, Any]) -> None:
         self._telemetry = telemetry
-        self._handler = handler
+        self._binding = binding
 
     async def aclose(self) -> None:
-        if self._handler in self._telemetry.handlers:
-            self._telemetry.handlers.remove(self._handler)
+        if self._binding in self._telemetry.handlers:
+            self._telemetry.handlers.remove(self._binding)
 
 
 class FakeTelemetry:
     """A minimal observation plane that fans events out to handlers."""
 
     def __init__(self) -> None:
-        self.handlers: List[Any] = []
+        self.handlers: List[tuple[type, Any]] = []
 
-    async def subscribe(self, binding: Any) -> _FakeHandle:
-        self.handlers.append(binding.handler)
-        return _FakeHandle(self, binding.handler)
+    async def subscribe_typed(self, _spec: Any, event_type: type, handler: Any, _sync_handler: Any) -> _FakeHandle:
+        binding = (event_type, handler)
+        self.handlers.append(binding)
+        return _FakeHandle(self, binding)
 
     async def emit(self, event: Any) -> None:
-        for handler in list(self.handlers):
-            await handler.handle(event)
+        for event_type, handler in list(self.handlers):
+            if type(event) is event_type:
+                await handler.handle(event)
 
 
 class FakeAgentEvt:
@@ -67,15 +71,27 @@ class FakeAgentEvt:
             setattr(self, k, v)
 
 
-def ev_message(role: str, content: str) -> FakeAgentEvt:
-    return FakeAgentEvt(MESSAGE_APPENDED, message=SimpleNamespace(role=role, content=content))
+def ev_message(role: str, content: str) -> MessageAppendedEvent:
+    if role != "assistant":
+        raise ValueError("this fixture only constructs assistant output")
+    return MessageAppendedEvent(message=AIMessage(content=content))
 
 
 class FakeRole:
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
-        self.state = SimpleNamespace(env=None)
+        self._human = ContextVar(f"human-{session_id}", default=None)
         self.telemetry = FakeTelemetry()
+
+    @property
+    def human_interaction(self):
+        return self._human.get()
+
+    def bind_human_interaction(self, interaction):
+        return self._human.set(interaction)
+
+    def reset_human_interaction(self, token):
+        self._human.reset(token)
 
 
 class FakeRuntime:
@@ -124,7 +140,13 @@ class RecordingConsumer(BaseConsumer):
 def make_session(session_id: str, *, quiescent_seq=None, last_error=None) -> ResidentSession:
     role = FakeRole(session_id)
     control = FakeControl(FakeRuntime(last_error=last_error), quiescent_seq=quiescent_seq)
-    return ResidentSession(session_id=session_id, control=control, role=role, agent_id=session_id)
+    return ResidentSession(
+        session_id=session_id,
+        control=control,
+        role=role,
+        runtime=SimpleNamespace(role=role),
+        agent_id=session_id,
+    )
 
 
 def _texts(consumer: RecordingConsumer) -> List[str]:
@@ -141,9 +163,9 @@ async def test_open_subscribes_projector_to_role_telemetry():
     consumer = RecordingConsumer()
     scope = ConnectionScope(session, consumers=[consumer])
     await scope.open()
-    assert scope.projector in session.role.telemetry.handlers
+    assert any(handler is scope.projector for _, handler in session.role.telemetry.handlers)
     await scope.aclose()
-    assert scope.projector not in session.role.telemetry.handlers
+    assert not any(handler is scope.projector for _, handler in session.role.telemetry.handlers)
 
 
 @pytest.mark.asyncio
@@ -159,15 +181,13 @@ async def test_aclose_closes_consumers():
 @pytest.mark.asyncio
 async def test_port_bound_and_restored():
     session = make_session("s1")
-    prior = object()
-    session.role.state.env = prior
     port = SimpleNamespace()
     scope = ConnectionScope(session, consumers=[], port=port)
     await scope.open()
     # A human channel wrapping the port is now bound.
-    assert session.role.state.env is not prior
+    assert session.role.human_interaction is not None
     await scope.aclose()
-    assert session.role.state.env is prior  # restored on close
+    assert session.role.human_interaction is None
 
 
 @pytest.mark.asyncio
@@ -175,8 +195,8 @@ async def test_context_manager_opens_and_closes():
     session = make_session("s1")
     consumer = RecordingConsumer()
     async with ConnectionScope(session, consumers=[consumer]) as scope:
-        assert scope.projector in session.role.telemetry.handlers
-    assert scope.projector not in session.role.telemetry.handlers
+        assert any(handler is scope.projector for _, handler in session.role.telemetry.handlers)
+    assert not any(handler is scope.projector for _, handler in session.role.telemetry.handlers)
     assert consumer.closed is True
 
 

@@ -11,7 +11,8 @@ while sharing the one engine (``config`` + ``context`` + ``role_factory``).
 This package is the thin orchestration layer that sits **above** the
 :class:`~mote.product.interaction.driver.SessionDriver`, adding only that multiplexing — it
 imports no transport, touches no core engine class (only the ``backend`` seam),
-and reuses the exact same construction path (:func:`~mote.product.entrypoints.cli.bootstrap.build_engine`).
+and reuses the canonical Product construction path
+(:func:`~mote.product.composition.bootstrap.activate_application`).
 The two pieces:
 
 * :class:`SessionRegistry` — the resident ``session_id → {control, role}`` map

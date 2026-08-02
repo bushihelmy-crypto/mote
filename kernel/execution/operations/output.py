@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from mote.contracts.conversation import AIMessage, CauseBy, Message
 from mote.contracts.execution.models import MutationResult, MutationStatus
+from mote.contracts.model.inference import InferenceResult
 from mote.contracts.model.turn import FinalCandidateAction
 from mote.contracts.output import CommittedOutput, OutputEvaluation
 from mote.contracts.ports.execution.transaction import ExecutionOutputTransactionPort
 from mote.contracts.ports.output.evaluation import OutputEngine
+from mote.kernel.commands import CommandChannel
 from mote.kernel.execution.context import ExecutionContext
 from mote.kernel.execution.result import ExecutionResult
+from mote.kernel.inference.base import BaseInferenceEngine
 
 OutputT = TypeVar("OutputT")
 
@@ -25,11 +28,11 @@ class OutputOperation(Generic[OutputT]):
         self,
         *,
         context: Callable[[], ExecutionContext],
-        channel: Callable[[], Any],
-        inference_engine: Any,
+        channel: Callable[[], CommandChannel],
+        inference_engine: BaseInferenceEngine,
         transaction: ExecutionOutputTransactionPort[OutputT],
         output_engine: OutputEngine[OutputT],
-        report_inference_result: Callable[[Any], None],
+        report_inference_result: Callable[[InferenceResult], None],
     ) -> None:
         self._context = context
         self._channel = channel

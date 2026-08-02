@@ -65,9 +65,10 @@ models:
   # 与用户输入语言无关；留空则镜像用户语言。
   response_language: "chinese"
 
-  # 打印 api key 到 stdout 的 shell 命令（仅受信任层生效）。
-  # 仅当没有静态/环境变量 key 时用于填充 default.api_key（env > 静态 > helper）。
-  # api_key_helper: ""
+  # 输出 api key 的固定 argv helper（仅 USER/MANAGED 来源生效；不经过 shell）。
+  # 仅当没有静态 key 时在 credential activation 阶段执行；普通 config load/report 不执行。
+  # api_key_helper:
+  #   argv: ["/absolute/path/to/helper", "--print-token"]
 
   # 任务级模型覆盖（键为路由任务名）。默认仅 model 不同，transport/凭据继承自 default。
   # 内置任务：

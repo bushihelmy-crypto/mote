@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Validated configuration for provider-neutral semantic model routing."""
+
 from __future__ import annotations
 
 from typing import Literal, Optional
 
 from pydantic import Field, field_validator, model_validator
 
-from mote.contracts.config.model.base import ConfigModel as YamlModel
+from mote.contracts.config.base import ConfigModel as YamlModel
 
 _ROUTE_CLASSES = frozenset({"R0", "R1", "R2", "R3"})
 

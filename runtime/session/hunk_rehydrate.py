@@ -10,12 +10,12 @@ corrupt durable review artifacts fail closed.
 
 from __future__ import annotations
 
-from mote.runtime.fileops.mutation import ArtifactRepository
+from mote.runtime.fileops.mutation import FileMutationArtifactRepository
 
 __all__ = ["blob_text"]
 
 
-def blob_text(blobs: ArtifactRepository, digest: str) -> str:
+def blob_text(blobs: FileMutationArtifactRepository, digest: str) -> str:
     """Resolve and UTF-8 decode one live review artifact.
 
     An empty *digest* represents a pure insertion and yields ``""``.

@@ -1,8 +1,8 @@
 """Product composition adapter for the Code Map runtime."""
 
 from pathlib import Path
-from typing import Any
 
+from mote.contracts.ports.code_intelligence.code_map import CodeMapTurnSourceRequest
 from mote.product.code_map.paths import codemap_db_path
 from mote.product.code_map.turn_context import CodeMapContextSource
 from mote.runtime.code_map.indexer import RepoIndexer
@@ -52,8 +52,15 @@ class ProductCodeMapIndexerFactory:
             excluded_directories=set(DEFAULT_EXCLUDED_DIRECTORIES),
         )
 
-    def build_turn_source(self, **kwargs: Any) -> CodeMapContextSource:
-        return CodeMapContextSource(**kwargs)
+    def build_turn_source(self, request: CodeMapTurnSourceRequest) -> CodeMapContextSource:
+        return CodeMapContextSource(
+            get_touched_files=request.get_touched_files,
+            lsp_query=request.lsp_query,
+            repo_index=request.repo_index,
+            get_read_state=request.get_read_state,
+            get_glimpsed_files=request.get_glimpsed_files,
+            surface_callers=request.surface_callers,
+        )
 
 
 __all__ = ["DEFAULT_EXCLUDED_DIRECTORIES", "ProductCodeMapIndexerFactory"]

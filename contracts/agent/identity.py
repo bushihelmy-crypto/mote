@@ -40,6 +40,9 @@ class BaseAgent:
     aliases: ClassVar[list[str]] = []  # Alternative names (LLM can use any)
     description: ClassVar[str] = ""  # Override; if empty, taken from docstring
     definition_version: ClassVar[str] = "1"  # Catalog/recovery identity override.
+    definition_id: ClassVar[str] = ""
+    definition_source_path: ClassVar[str] = ""
+    definition_source_digest: ClassVar[str] = ""
 
     @classmethod
     def get_schema(cls) -> dict:

@@ -12,9 +12,15 @@ content-versioned Application catalog.
 Discovery is redirected at a tmp tree by monkeypatching the discovery helpers the
 loader funnels through, so nothing touches the real ``.mote/agents`` on disk.
 """
+
+import pytest
+import yaml
+
 import mote.product.agents.markdown_loader as loader
 from mote.product.agents.catalog import AgentCatalog
+from mote.product.agents.factory import CodingAgentFactory
 from mote.product.agents.markdown_loader import _normalize_tools, discover_md_agents
+from mote.product.extensions.sources import ExtensionSourcePolicy
 
 
 def _write_agent(dir_path, stem, body):
@@ -26,6 +32,7 @@ def _point_discovery_at(monkeypatch, agents_dir):
     """Make ``discover_md_agents`` scan only *agents_dir* (user dir empty)."""
     monkeypatch.setattr(loader, "user_mote_dir", lambda subdir: agents_dir.parent / "nonexistent")
     monkeypatch.setattr(loader, "mote_project_dirs", lambda subdir, cwd=None: [agents_dir])
+    return ExtensionSourcePolicy(user_root=agents_dir.parents[1], builtin_roots=())
 
 
 class TestNormalizeTools:
@@ -60,9 +67,9 @@ class TestDiscover:
             "---\n"
             "You are a careful code reviewer.\n",
         )
-        _point_discovery_at(monkeypatch, agents)
+        policy = _point_discovery_at(monkeypatch, agents)
 
-        found = discover_md_agents(tmp_path)
+        found = discover_md_agents(tmp_path, source_policy=policy)
         assert list(found) == ["reviewer"]
         cls = found["reviewer"]
         assert cls.agent_name == "reviewer"
@@ -74,21 +81,29 @@ class TestDiscover:
     def test_missing_description_skipped(self, tmp_path, monkeypatch):
         agents = tmp_path / ".mote" / "agents"
         _write_agent(agents, "bad", "---\nname: bad\n---\nno description here\n")
-        _point_discovery_at(monkeypatch, agents)
-        assert discover_md_agents(tmp_path) == {}
+        policy = _point_discovery_at(monkeypatch, agents)
+        assert discover_md_agents(tmp_path, source_policy=policy) == {}
+
+    def test_malformed_approved_frontmatter_fails_closed(self, tmp_path, monkeypatch):
+        agents = tmp_path / ".mote" / "agents"
+        _write_agent(agents, "bad", "---\nname: [unterminated\n---\nbody\n")
+        policy = _point_discovery_at(monkeypatch, agents)
+
+        with pytest.raises(yaml.YAMLError):
+            discover_md_agents(tmp_path, source_policy=policy)
 
     def test_name_defaults_to_filename_stem(self, tmp_path, monkeypatch):
         agents = tmp_path / ".mote" / "agents"
         _write_agent(agents, "helper", "---\ndescription: A helper.\n---\nbody\n")
-        _point_discovery_at(monkeypatch, agents)
-        found = discover_md_agents(tmp_path)
+        policy = _point_discovery_at(monkeypatch, agents)
+        found = discover_md_agents(tmp_path, source_policy=policy)
         assert list(found) == ["helper"]
 
     def test_absent_tools_means_all(self, tmp_path, monkeypatch):
         agents = tmp_path / ".mote" / "agents"
         _write_agent(agents, "a", "---\nname: a\ndescription: d\n---\nbody\n")
-        _point_discovery_at(monkeypatch, agents)
-        cls = discover_md_agents(tmp_path)["a"]
+        policy = _point_discovery_at(monkeypatch, agents)
+        cls = discover_md_agents(tmp_path, source_policy=policy)["a"]
         # No allowlist declared → class exposes an empty tools list (inherits all
         # via the schema path, but the *listing* attr is empty).
         assert cls.tools == []
@@ -102,9 +117,11 @@ class TestCatalog:
             "reviewer",
             "---\nname: reviewer\ndescription: d\naliases: [rev]\n---\nbody\n",
         )
-        _point_discovery_at(monkeypatch, agents)
+        policy = _point_discovery_at(monkeypatch, agents)
 
-        catalog = AgentCatalog.from_types(discover_md_agents(tmp_path).values())
+        catalog = AgentCatalog.from_types(
+            discover_md_agents(tmp_path, source_policy=policy).values(), CodingAgentFactory()
+        )
         cls = catalog.get("reviewer")
         assert cls is not None
         assert catalog.get("rev") is cls
@@ -116,15 +133,19 @@ class TestCatalog:
             "reviewer",
             "---\nname: reviewer\ndescription: d\naliases: [rev]\n---\nbody\n",
         )
-        _point_discovery_at(monkeypatch, agents)
+        policy = _point_discovery_at(monkeypatch, agents)
 
-        first = AgentCatalog.from_types(discover_md_agents(tmp_path).values())
+        first = AgentCatalog.from_types(
+            discover_md_agents(tmp_path, source_policy=policy).values(), CodingAgentFactory()
+        )
         _write_agent(
             agents,
             "reviewer",
             "---\nname: reviewer\ndescription: changed\naliases: [review]\n---\nnew body\n",
         )
-        second = AgentCatalog.from_types(discover_md_agents(tmp_path).values())
+        second = AgentCatalog.from_types(
+            discover_md_agents(tmp_path, source_policy=policy).values(), CodingAgentFactory()
+        )
         assert first.version != second.version
         assert first.get("rev") is not None
         assert first.get("review") is None

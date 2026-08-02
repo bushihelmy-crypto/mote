@@ -26,19 +26,29 @@ same fallback if a wired frontend never answers.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
+from collections.abc import Mapping
+from typing import Awaitable, Callable, Optional
 
-from mote.contracts.interaction import AskUserQuestionAnswer, AskUserQuestionAnswers, AskUserQuestionInput
+from mote.contracts.events.envelope import JsonValue, freeze_json, thaw_json
+from mote.contracts.interaction import (
+    ApprovalRequest,
+    AskUserQuestionAnswer,
+    AskUserQuestionAnswers,
+    AskUserQuestionInput,
+)
+from mote.contracts.interaction.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus, HumanHandoffOutcome
+from mote.contracts.surface import LiveSurfaceSession
+from mote.product.interaction.ports import DriverControlBinding
 from mote.product.interfaces.agui import wire as agui
 from mote.product.presentation.events.events import ApprovalDecision
 from mote.product.presentation.projection.approval import approval_action, approval_preview, approval_risk
+from mote.product.presentation.wire_types import WireMapping, to_wire_json
+from mote.product.session_hosting.prompt_broker import PromptBroker, PromptHandle, PromptKind, PromptScope
 from mote.runtime.telemetry.logging import logger
 
-if TYPE_CHECKING:
-    from mote.product.session_hosting.prompt_broker import PromptBroker
-
 #: Async wire sink (same contract as ``AguiConsumer.Sink``): one dict → the wire.
-Sink = Callable[[Dict[str, Any]], Awaitable[None]]
+WireObject = WireMapping
+Sink = Callable[[WireObject], Awaitable[None]]
 
 #: Seconds to wait for a human reply before falling back to the safe default.
 #: Bounds a turn so a frontend that opened a stream then vanished can't wedge the
@@ -65,6 +75,8 @@ class AguiPort:
         broker: Optional["PromptBroker"] = None,
         thread_id: str = "",
         run_id: str = "",
+        principal: str = "",
+        agent_id: str = "",
         timeout_s: float = DEFAULT_PROMPT_TIMEOUT_S,
     ) -> None:
         self._text: Optional[str] = text
@@ -72,8 +84,33 @@ class AguiPort:
         self._broker = broker
         self._thread_id = thread_id
         self._run_id = run_id
+        self._principal = principal
+        self._agent_id = agent_id
         self._timeout_s = timeout_s
         self._closed = False
+
+    def bind_driver_control(self, binding: DriverControlBinding) -> None:
+        return None
+
+    async def start(self) -> None:
+        return None
+
+    def take_turn_images(self) -> list[Mapping[str, JsonValue]]:
+        return []
+
+    def request_exit(self) -> None:
+        self._closed = True
+
+    async def open_handoff(
+        self,
+        request: HandoffRequest,
+        handle: DriverHandoffHandle,
+        surface: LiveSurfaceSession | None = None,
+    ) -> HumanHandoffOutcome:
+        return HumanHandoffOutcome(status=HandoffStatus.UNAVAILABLE)
+
+    def stage_restore(self, text: str) -> None:
+        return None
 
     # ------------------------------------------------------------------
     # Turn boundary
@@ -95,7 +132,7 @@ class AguiPort:
         """True when both a live SSE sink and the shared broker are wired."""
         return self._sink is not None and self._broker is not None and not self._closed
 
-    async def _emit(self, frame: Dict[str, Any]) -> None:
+    async def _emit(self, frame: WireObject) -> None:
         if self._sink is None:
             return
         try:
@@ -103,7 +140,20 @@ class AguiPort:
         except Exception as exc:  # noqa: BLE001 — a dead socket must not crash the turn
             logger.warning(f"AguiPort: prompt frame write failed: {exc}")
 
-    async def _await_reply(self, prompt_id: str) -> Optional[Any]:
+    def _open_prompt(self, kind: PromptKind) -> tuple[PromptHandle, asyncio.Future[JsonValue]]:
+        assert self._broker is not None
+        return self._broker.open(
+            PromptScope(
+                principal=self._principal,
+                agent_id=self._agent_id,
+                thread_id=self._thread_id,
+                run_id=self._run_id,
+                kind=kind,
+            ),
+            ttl_seconds=self._timeout_s,
+        )
+
+    async def _await_reply(self, handle: PromptHandle, future: asyncio.Future[JsonValue]) -> JsonValue:
         """Await the broker future for *prompt_id*, bounded by the timeout.
 
         Returns the posted payload, or ``None`` on timeout / cancellation
@@ -111,20 +161,19 @@ class AguiPort:
         """
         if self._broker is None:
             return None
-        fut = self._broker.open(prompt_id)
         try:
-            return await asyncio.wait_for(fut, timeout=self._timeout_s)
+            return await asyncio.wait_for(future, timeout=self._timeout_s)
         except asyncio.TimeoutError:
-            logger.info(f"AguiPort: prompt {prompt_id} timed out; using safe default")
-            self._broker.discard(prompt_id)
+            logger.info(f"AguiPort: prompt {handle.prompt_id} timed out; using safe default")
+            self._broker.discard(handle.prompt_id)
             return None
         except asyncio.CancelledError:
             # cancel_all() on shutdown / teardown — fall back, don't propagate a
             # cancellation into the turn (the run is unwinding anyway).
-            self._broker.discard(prompt_id)
+            self._broker.discard(handle.prompt_id)
             return None
 
-    async def ask(self, ctx: Any, question: str, options: Optional[List[str]] = None, multi: bool = False) -> str:
+    async def ask(self, ctx: object, question: str) -> str:
         """Free-text question: stream a ``question`` frame, await the reply text.
 
         ``options``/``multi`` are accepted only for the ``PortHumanChannel``
@@ -135,12 +184,14 @@ class AguiPort:
         if not self._can_prompt():
             logger.debug("AguiPort.ask: no HITL back-channel; returning empty answer")
             return ""
-        prompt_id = self._broker.new_id("q")  # type: ignore[union-attr]  — guarded by _can_prompt
-        await self._emit(agui.question_prompt(question_id=prompt_id, question=question, options=options))
-        payload = await self._await_reply(prompt_id)
+        handle, future = self._open_prompt(PromptKind.QUESTION)
+        await self._emit(
+            _wire_object(agui.question_prompt(question_id=handle.prompt_id, question=question, binding=handle))
+        )
+        payload = await self._await_reply(handle, future)
         return self._answer_text(payload)
 
-    async def ask_questions(self, ctx: Any, questions: "AskUserQuestionInput") -> "AskUserQuestionAnswers":
+    async def ask_questions(self, ctx: object, questions: AskUserQuestionInput) -> AskUserQuestionAnswers:
         """Structured multiple-choice: stream one ``question`` frame, await answers.
 
         Emits the full question payload so a rich frontend can render selects; the
@@ -150,18 +201,21 @@ class AguiPort:
         """
         if not self._can_prompt():
             return AskUserQuestionAnswers(answers=[])
-        prompt_id = self._broker.new_id("q")  # type: ignore[union-attr]
+        handle, future = self._open_prompt(PromptKind.QUESTION)
         await self._emit(
-            agui.question_prompt(
-                question_id=prompt_id,
-                question=self._first_question_text(questions),
-                structured=self._serialize_questions(questions),
+            _wire_object(
+                agui.question_prompt(
+                    question_id=handle.prompt_id,
+                    question=self._first_question_text(questions),
+                    structured=to_wire_json(self._serialize_questions(questions)),
+                    binding=handle,
+                )
             )
         )
-        payload = await self._await_reply(prompt_id)
+        payload = await self._await_reply(handle, future)
         return self._parse_answers(payload, questions)
 
-    async def decide_approval(self, ctx: Any, request: Any) -> "ApprovalDecision":
+    async def decide_approval(self, ctx: object, request: ApprovalRequest) -> ApprovalDecision:
         """Gated action: stream an ``approval`` frame, await accept/reject/edit.
 
         The engine hands a language-neutral ``ApprovalRequest``; we localize the
@@ -173,97 +227,96 @@ class AguiPort:
         if not self._can_prompt():
             logger.debug("AguiPort.decide_approval: no HITL back-channel; rejecting (fail-safe)")
             return ApprovalDecision(approval_id="", outcome="reject")
-        prompt_id = self._broker.new_id("approval")  # type: ignore[union-attr]
+        handle, future = self._open_prompt(PromptKind.APPROVAL)
         await self._emit(
-            agui.approval_prompt(
-                approval_id=prompt_id,
-                tool_name=getattr(request, "tool_name", "") or "",
-                action=approval_action(request),
-                args_preview=approval_preview(request),
-                risk=approval_risk(request),
+            _wire_object(
+                agui.approval_prompt(
+                    approval_id=handle.prompt_id,
+                    tool_name=request.tool_name,
+                    action=approval_action(request),
+                    args_preview=approval_preview(request),
+                    risk=approval_risk(request),
+                    binding=handle,
+                )
             )
         )
-        payload = await self._await_reply(prompt_id)
-        return self._parse_decision(payload, prompt_id)
+        payload = await self._await_reply(handle, future)
+        return self._parse_decision(payload, handle.prompt_id)
 
     # ------------------------------------------------------------------
     # Payload parsing (opaque reply dict → typed result); tolerant of shape
     # ------------------------------------------------------------------
     @staticmethod
-    def _answer_text(payload: Any) -> str:
+    def _answer_text(payload: JsonValue) -> str:
         """A free-text ``ask`` reply — accept ``{answer}`` or a bare string."""
         if isinstance(payload, str):
             return payload
-        if isinstance(payload, dict):
+        if isinstance(payload, Mapping):
             val = payload.get("answer")
             if isinstance(val, str):
                 return val
         return ""
 
     @staticmethod
-    def _first_question_text(questions: Any) -> str:
-        try:
-            items = getattr(questions, "questions", None) or list(questions)
-            return getattr(items[0], "question", "") if items else ""
-        except Exception:  # noqa: BLE001
-            return ""
+    def _first_question_text(questions: AskUserQuestionInput) -> str:
+        return questions.questions[0].question
 
     @staticmethod
-    def _serialize_questions(questions: Any) -> Any:
-        """Best-effort JSON-able dump of the question payload for the frontend."""
-        dump = getattr(questions, "model_dump", None)
-        if callable(dump):
-            try:
-                return dump(mode="json")
-            except Exception:  # noqa: BLE001
-                pass
-        return None
+    def _serialize_questions(questions: AskUserQuestionInput) -> JsonValue:
+        return freeze_json(questions.model_dump(mode="json"), path="agui.questions")
 
-    def _parse_answers(self, payload: Any, questions: Any) -> "AskUserQuestionAnswers":
+    def _parse_answers(self, payload: JsonValue, questions: AskUserQuestionInput) -> AskUserQuestionAnswers:
         """Map a ``{answers:[...]}`` reply into structured answers, else empty."""
-        if not isinstance(payload, dict):
+        if not isinstance(payload, Mapping):
             return AskUserQuestionAnswers(answers=[])
         raw = payload.get("answers")
-        out: List[Any] = []
-        if isinstance(raw, list):
+        out: list[AskUserQuestionAnswer] = []
+        if isinstance(raw, tuple):
             for a in raw:
-                if not isinstance(a, dict):
+                if not isinstance(a, Mapping):
                     continue
                 sel = a.get("selected")
+                selected = [item for item in sel if isinstance(item, str)] if isinstance(sel, tuple) else []
+                header = a.get("header")
+                question = a.get("question")
+                free_text = a.get("free_text") or a.get("freeText")
                 out.append(
                     AskUserQuestionAnswer(
-                        header=str(a.get("header", "")),
-                        question=str(a.get("question", "")),
-                        selected=[str(s) for s in sel] if isinstance(sel, list) else [],
-                        free_text=str(a.get("free_text", "") or a.get("freeText", "")),
+                        header=header if isinstance(header, str) else "",
+                        question=question if isinstance(question, str) else "",
+                        selected=selected,
+                        free_text=free_text if isinstance(free_text, str) else "",
                     )
                 )
         return AskUserQuestionAnswers(answers=out)
 
-    def _parse_decision(self, payload: Any, prompt_id: str) -> "ApprovalDecision":
+    def _parse_decision(self, payload: JsonValue, prompt_id: str) -> ApprovalDecision:
         """Map a ``{outcome, editedArgs?}`` reply to an ``ApprovalDecision``.
 
         A missing/garbled/absent reply rejects (fail-safe). ``outcome`` is
         validated against the four known values; anything else → reject.
         """
-        if not isinstance(payload, dict):
+        if not isinstance(payload, Mapping):
             return ApprovalDecision(approval_id=prompt_id, outcome="reject")
         outcome = payload.get("outcome")
         if outcome not in ("accept", "reject", "always_allow", "always_deny"):
             outcome = "reject"
         edited = payload.get("editedArgs")
-        if edited is not None and not isinstance(edited, dict):
+        if edited is not None and not isinstance(edited, Mapping):
             edited = None
-        return ApprovalDecision(approval_id=prompt_id, outcome=outcome, edited_args=edited)
+        thawed = thaw_json(edited) if edited is not None else None
+        if thawed is not None and not isinstance(thawed, dict):
+            raise TypeError("edited AG-UI approval arguments must decode to an object")
+        return ApprovalDecision(approval_id=prompt_id, outcome=outcome, edited_args=thawed)
 
     # ------------------------------------------------------------------
     # Control affordances (server owns the run task; these stay inert)
     # ------------------------------------------------------------------
-    def signal_interrupt(self, ctx: Any) -> None:
+    def signal_interrupt(self, ctx: object = None) -> None:
         """Cancel the in-flight turn. Phase 2/3: no-op (server owns the run task)."""
         return None
 
-    def submit_steer(self, ctx: Any, text: str) -> None:
+    def submit_steer(self, ctx: object, text: str) -> None:
         """Turn-level steering. No-op (no mid-stream steer control yet)."""
         return None
 
@@ -275,6 +328,24 @@ class AguiPort:
         broker, only its own emit gate.
         """
         self._closed = True
+        if self._broker is not None:
+            for kind in PromptKind:
+                self._broker.cancel_scope(
+                    PromptScope(
+                        principal=self._principal,
+                        agent_id=self._agent_id,
+                        thread_id=self._thread_id,
+                        run_id=self._run_id,
+                        kind=kind,
+                    )
+                )
+
+
+def _wire_object(value: object) -> WireObject:
+    wire_value = to_wire_json(value)
+    if not isinstance(wire_value, dict):
+        raise TypeError("AG-UI frame must be a JSON object")
+    return wire_value
 
 
 __all__ = ["AguiPort", "Sink", "DEFAULT_PROMPT_TIMEOUT_S"]

@@ -6,6 +6,7 @@ The bus is a stateless aggregator: it renders each EphemeralContextSource
 concurrently, drops empty/failed blocks, and merges the survivors into one
 <system-reminder>. Sources are ordered by ``priority`` (ascending).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -110,7 +111,7 @@ class TestBucketRouting:
         assert run(bus.collect()) == "<system-reminder>\nE\n</system-reminder>"
         assert run(bus.collect_to_context()) == "<system-reminder>\nP\n</system-reminder>"
 
-    def test_missing_flag_defaults_to_persisted(self):
+    def test_missing_lifecycle_declaration_is_rejected(self):
         class NoFlag:
             name = "x"
             priority = 10
@@ -118,9 +119,8 @@ class TestBucketRouting:
             async def render(self, *, cwd=None):
                 return "X"
 
-        bus = TurnContextBus([NoFlag()])
-        assert run(bus.collect()) == ""  # default True => persisted, not ephemeral
-        assert run(bus.collect_to_context()) == "<system-reminder>\nX\n</system-reminder>"
+        with pytest.raises(TypeError, match="canonical Protocol"):
+            TurnContextBus([NoFlag()])
 
     def test_collect_to_context_orders_by_priority(self):
         bus = TurnContextBus(

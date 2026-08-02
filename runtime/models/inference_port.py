@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import time
 from dataclasses import dataclass, field
 from uuid import uuid4
@@ -21,12 +19,14 @@ from mote.contracts.model.inference import (
     TargetInvalidated,
 )
 from mote.contracts.model.invocation import RequestRequirements, ResponseMode, TraceContext
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.routing import RoutingHints, RoutingInput, RoutingMessage, RoutingSignals
 from mote.contracts.model.topology_codec import encode_route_id
 from mote.contracts.ports.model.gateway import ModelRoute
 from mote.kernel.telemetry.context import current_trace_id
 from mote.runtime.events.context import observe_event_sync
-from mote.runtime.models.model_calls import generate
+from mote.runtime.models.failover.compatibility import endpoint_projection_fingerprint
+from mote.runtime.models.model_calls import generate_finalized
 
 
 class TargetCapacityError(RuntimeError):
@@ -142,10 +142,7 @@ class RuntimeModelInferencePort:
             )
             raise TargetCapacityError("inference target registry is full")
         profile = route.profile
-        capability_payload = profile.model_dump(mode="json")
-        capability_fingerprint = hashlib.sha256(
-            json.dumps(capability_payload, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        capability_fingerprint = endpoint_projection_fingerprint(profile, ModelOperation.GENERATE)
         lease_id = uuid4().hex
         expires_at = time.time() + self._TARGET_TTL_SECONDS
         self._targets[lease_id] = _PinnedTarget(route, runtime_lease, expires_at)
@@ -163,7 +160,7 @@ class RuntimeModelInferencePort:
             supports_native_tool_search=profile.capabilities.supports_native_tool_search,
             canonicalization_version=profile.lifecycle_revision,
         )
-        compatibility = hashlib.sha256(f"{profile.transport}:{capability_fingerprint}".encode()).hexdigest()
+        compatibility = capability_fingerprint
         return ResolvedInferenceTarget(
             route_id=route.route_id,
             command_protocol="native" if profile.capabilities.supports_tools else "xml",
@@ -223,8 +220,11 @@ class RuntimeModelInferencePort:
         self._inflight[attempt_key] = future
         try:
             route = pinned.route
-            payload = request.payload
-            output, _resolved = await generate(route, **payload)
+            output, _resolved = await generate_finalized(
+                route,
+                request.payload,
+                model_call_id=request.model_call_id,
+            )
             if self._attempts.get(attempt.model_call_id) != (
                 attempt.fencing_token,
                 attempt.attempt_id,
@@ -236,18 +236,9 @@ class RuntimeModelInferencePort:
                 result = InferenceResult(
                     content=output.content or "",
                     tool_calls=(
-                        [
-                            {
-                                "id": call.id,
-                                "command_name": call.name,
-                                "args": call.arguments,
-                            }
-                            for call in output.tool_calls
-                        ]
-                        if payload.get("tools") is not None
-                        else None
+                        output.tool_calls if request.payload.response_mode is ResponseMode.NATIVE_TOOLS else None
                     ),
-                    structured_value=getattr(output, "structured", None),
+                    structured_value=output.structured,
                 )
                 self._results[attempt_key] = result
             future.set_result(result)

@@ -3,13 +3,13 @@ from __future__ import annotations
 import pytest
 
 from mote.contracts.model.failover import (
-    EndpointCapabilities,
     EndpointDescriptor,
     FailureDisposition,
     FailureDomain,
     FailureReason,
     HealthVerdict,
     RequestTransform,
+    ResolvedEndpointCapabilities,
     Retryability,
 )
 from mote.contracts.model.invocation import (
@@ -30,7 +30,7 @@ def _endpoint() -> EndpointDescriptor:
         provider="openai",
         model="model",
         base_url_identity="https://example.test",
-        capabilities=EndpointCapabilities(context_tokens=100_000),
+        capabilities=ResolvedEndpointCapabilities(context_tokens=100_000),
         credential_pool_id="pool",
         lifecycle_revision="revision",
     )

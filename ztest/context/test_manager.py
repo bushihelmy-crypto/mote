@@ -15,6 +15,7 @@ Two responsibilities:
 Compaction-triggering tests reuse ``force_autocompact_threshold`` and small
 configs so the real gates fire on tiny inputs.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -236,7 +237,7 @@ async def test_delete_present_and_absent():
 
 @pytest.mark.asyncio
 async def test_clear():
-    from mote.runtime.events import HistoryEditedEvent
+    from mote.contracts.events.conversation import HistoryEditedEvent
 
     telemetry = _RecordingTelemetry()
     cm = ContextManager(model="gpt-4", telemetry=telemetry)
@@ -668,7 +669,7 @@ def test_drop_indices_delete_all():
 @pytest.mark.asyncio
 async def test_delete_react_units_prunes_and_emits_one_event():
     """A delete rebuilds history once and emits exactly one HistoryEditedEvent."""
-    from mote.runtime.events import HistoryEditedEvent
+    from mote.contracts.events.conversation import HistoryEditedEvent
 
     ctx = LLMCallContext()
     telemetry = _RecordingTelemetry()
@@ -718,7 +719,7 @@ async def test_delete_react_units_commit_failure_does_not_change_history():
 @pytest.mark.asyncio
 async def test_delete_react_units_noop_emits_nothing():
     """An empty/unknown selection removes nothing and emits no event."""
-    from mote.runtime.events import HistoryEditedEvent
+    from mote.contracts.events.conversation import HistoryEditedEvent
 
     ctx = LLMCallContext()
     telemetry = _RecordingTelemetry()

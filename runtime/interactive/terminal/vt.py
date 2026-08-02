@@ -1,4 +1,5 @@
 """Canonical terminal VT state and recoverable incremental surface frames."""
+
 from __future__ import annotations
 
 import codecs
@@ -6,7 +7,10 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
-import pyte
+try:
+    import pyte  # type: ignore[reportMissingImports] - optional terminal backend
+except ImportError:  # Optional terminal backend; checked when a terminal is opened.
+    pyte = None  # type: ignore[assignment]
 
 from mote.contracts.surface import (
     TERMINAL_FRAME_BASE_SEQUENCE,
@@ -64,6 +68,8 @@ class TerminalVTState:
         scrollback_lines: int = DEFAULT_SCROLLBACK_LINES,
         delta_bytes: int = DEFAULT_DELTA_BYTES,
     ) -> None:
+        if pyte is None:
+            raise RuntimeError("terminal emulation requires the optional 'pyte' dependency")
         if cols < 1 or rows < 1:
             raise ValueError("terminal VT dimensions must be positive")
         if scrollback_lines < 0 or delta_bytes < 0:

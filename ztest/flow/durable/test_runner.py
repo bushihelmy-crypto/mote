@@ -9,11 +9,14 @@ module functions are the single matching authority shared by the flow
 (:func:`reinstate` decision) and the resume guard (:func:`reconcile_think_journal`
 reap decision), so they can never drift.
 """
+
 from __future__ import annotations
 
 from mote.contracts.conversation import AIMessage, UserMessage
 from mote.contracts.conversation.fields import TOOL_CALLS
+from mote.contracts.events.telemetry import JournalEvent
 from mote.contracts.model.inference import InferenceResult
+from mote.contracts.model.invocation import CanonicalToolCall
 from mote.runtime.durable import (
     InferenceJournal,
     assistant_message_present,
@@ -23,7 +26,7 @@ from mote.runtime.durable import (
     resume_timer,
 )
 from mote.runtime.durable.backend import JsonlBackend
-from mote.runtime.events import JournalEvent, bind_telemetry
+from mote.runtime.events import bind_telemetry
 from mote.runtime.ledger import COMPLETED, KIND_THINK, KIND_TIMER, STARTED, RunJournal
 from mote.runtime.session.workspace import SessionWorkspace
 from mote.ztest.telemetry import InlineTelemetry
@@ -43,13 +46,19 @@ def _runner(tmp_path, session_id="sess") -> InferenceJournal:
 
 
 def test_native_result_matched_by_tool_call_id():
-    result = InferenceResult(content="", tool_calls=[{"id": "c1", "command_name": "Read", "args": {}}])
+    result = InferenceResult(
+        content="",
+        tool_calls=(CanonicalToolCall(id="c1", name="Read", arguments={}),),
+    )
     msgs = [AIMessage(content="", tool_calls=[{"id": "c1", "name": "Read", "args": {}}])]
     assert assistant_message_present(msgs, result) is True
 
 
 def test_native_result_absent_when_id_missing():
-    result = InferenceResult(content="", tool_calls=[{"id": "c1", "command_name": "Read", "args": {}}])
+    result = InferenceResult(
+        content="",
+        tool_calls=(CanonicalToolCall(id="c1", name="Read", arguments={}),),
+    )
     msgs = [AIMessage(content="", tool_calls=[{"id": "other", "name": "Read", "args": {}}])]
     assert assistant_message_present(msgs, result) is False
 
@@ -58,10 +67,10 @@ def test_native_result_requires_all_ids_present():
     # A turn with two calls is only "present" when BOTH ids are durable.
     result = InferenceResult(
         content="",
-        tool_calls=[
-            {"id": "c1", "command_name": "Read", "args": {}},
-            {"id": "c2", "command_name": "Bash", "args": {}},
-        ],
+        tool_calls=(
+            CanonicalToolCall(id="c1", name="Read", arguments={}),
+            CanonicalToolCall(id="c2", name="Bash", arguments={}),
+        ),
     )
     partial = [AIMessage(content="", tool_calls=[{"id": "c1", "name": "Read", "args": {}}])]
     assert assistant_message_present(partial, result) is False

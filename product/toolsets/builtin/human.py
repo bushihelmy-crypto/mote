@@ -6,7 +6,8 @@ from typing import ClassVar
 
 from mote.contracts.authorization import PermissionDecision
 from mote.contracts.interaction import AskUserQuestionAnswers, AskUserQuestionInput, AskUserQuestionItem
-from mote.runtime.errors import ToolError
+from mote.contracts.tool.errors import ToolError
+from mote.contracts.tool.result import json_tool_payload
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import AskUser as AskUserCap
 from mote.runtime.tools.capability_types import AskUserQuestion as AskUserQuestionCap
@@ -150,7 +151,10 @@ class AskUserQuestion(BaseTool):
         """
         items = self._coerce(questions)  # keep the pydantic validation gate
         answers = await self.ask_user_question(items)  # structured round-trip
-        return ToolResult(output=self._format_result(answers), data=answers)
+        return ToolResult(
+            output=self._format_result(answers),
+            payload=json_tool_payload(answers.model_dump(mode="json")),
+        )
 
     # --- Validation (pydantic models enforce min/max + uniqueness) -----------
 

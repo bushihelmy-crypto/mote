@@ -10,13 +10,14 @@ task with a benign tail pushes nothing; and a task that reaches a terminal
 status makes the watcher exit on its own. Tiny intervals/thresholds keep the
 test fast and deterministic; lightweight fakes drive the pool/store.
 """
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
 
-from mote.orchestration.background_tasks import BgStatus, StallDetector, TaskMeta
+from mote.orchestration.background_tasks import BackgroundTaskStatus, StallDetector, TaskMeta
 from mote.orchestration.background_tasks.monitoring.stall import _matches_interactive_prompt
 
 
@@ -94,7 +95,7 @@ class TestPromptRegex:
 class TestWatcherBookkeeping:
     @pytest.mark.asyncio
     async def test_start_is_idempotent(self):
-        meta = TaskMeta(task_id="bg_1", command_name="cmd", status=BgStatus.RUNNING)
+        meta = TaskMeta(task_id="bg_1", command_name="cmd", status=BackgroundTaskStatus.RUNNING)
         detector = make_detector(FakePool(meta), FakeStore(0, b""))
         detector.start_watching("bg_1")
         first = detector._watchers["bg_1"]
@@ -104,7 +105,7 @@ class TestWatcherBookkeeping:
 
     @pytest.mark.asyncio
     async def test_stop_watching_and_stop_all(self):
-        meta = TaskMeta(task_id="bg_1", command_name="cmd", status=BgStatus.RUNNING)
+        meta = TaskMeta(task_id="bg_1", command_name="cmd", status=BackgroundTaskStatus.RUNNING)
         detector = make_detector(FakePool(meta), FakeStore(0, b""))
         detector.start_watching("bg_1")
         detector.start_watching("bg_2")
@@ -119,7 +120,7 @@ class TestWatcherBookkeeping:
 class TestMonitor:
     @pytest.mark.asyncio
     async def test_interactive_prompt_pushes_warning(self):
-        meta = TaskMeta(task_id="bg_1", command_name="installer", status=BgStatus.RUNNING)
+        meta = TaskMeta(task_id="bg_1", command_name="installer", status=BackgroundTaskStatus.RUNNING)
         pool = FakePool(meta)
         detector = make_detector(pool, FakeStore(50, b"Overwrite? (y/n)"))
         detector.start_watching("bg_1")
@@ -132,7 +133,7 @@ class TestMonitor:
 
     @pytest.mark.asyncio
     async def test_benign_tail_no_warning(self):
-        meta = TaskMeta(task_id="bg_1", command_name="build", status=BgStatus.RUNNING)
+        meta = TaskMeta(task_id="bg_1", command_name="build", status=BackgroundTaskStatus.RUNNING)
         pool = FakePool(meta)
         detector = make_detector(pool, FakeStore(50, b"compiling..."))
         detector.start_watching("bg_1")
@@ -143,7 +144,7 @@ class TestMonitor:
 
     @pytest.mark.asyncio
     async def test_terminal_status_exits_watcher(self):
-        meta = TaskMeta(task_id="bg_1", command_name="done-job", status=BgStatus.SUCCESS)
+        meta = TaskMeta(task_id="bg_1", command_name="done-job", status=BackgroundTaskStatus.SUCCESS)
         pool = FakePool(meta)
         detector = make_detector(pool, FakeStore(50, b"Overwrite?"))
         detector.start_watching("bg_1")

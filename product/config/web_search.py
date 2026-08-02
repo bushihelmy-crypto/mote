@@ -11,15 +11,14 @@ are the entry points for a FUTURE direct-API vendor (Google/Tavily/Brave/SearXNG
 registered in the Product catalog plus ``backend: "google"`` — unused by
 ``"provider"``.
 """
+
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from mote.contracts.config.base import ConfigModel
 
 
-class WebSearchConfig(BaseModel):
+class WebSearchConfig(ConfigModel):
     """Settings for the WebSearch tool's pluggable search backend."""
-
-    model_config = ConfigDict(extra="forbid")
 
     # Which registered SearchBackend drives web search. ``"provider"`` (default)
     # uses the routed model's server-side search; point this at another registered

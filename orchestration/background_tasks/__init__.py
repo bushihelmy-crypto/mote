@@ -11,7 +11,7 @@ from __future__ import annotations
 from mote.orchestration.background_tasks.decorators import bg_tool, is_bg_tool, require_bg_complete
 from mote.orchestration.background_tasks.model import (
     BackgroundTaskNotification,
-    BgStatus,
+    BackgroundTaskStatus,
     BgTaskMode,
     BgTaskResult,
     PollFactory,
@@ -27,10 +27,8 @@ from mote.orchestration.background_tasks.operation import (
     OperationCancelled,
     OperationFailed,
     OperationOutcome,
-    OperationPaused,
     OperationSucceeded,
     OperationTimedOut,
-    ResumeRef,
     StopDisposition,
     StopReason,
 )
@@ -58,7 +56,7 @@ __all__ = [
     "TaskType",
     "BackgroundTaskNotification",
     "is_bg_notification",
-    "BgStatus",
+    "BackgroundTaskStatus",
     "BackgroundTaskPool",
     "auto_background",
     "bg_tool",
@@ -80,10 +78,8 @@ __all__ = [
     "OperationCancelled",
     "OperationFailed",
     "OperationOutcome",
-    "OperationPaused",
     "OperationSucceeded",
     "OperationTimedOut",
-    "ResumeRef",
     "StopDisposition",
     "StopReason",
 ]

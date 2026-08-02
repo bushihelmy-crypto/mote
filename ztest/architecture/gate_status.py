@@ -4,27 +4,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import shlex
 import subprocess
-import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-_CONTRACT_SPEC = importlib.util.spec_from_file_location("mote_gate_contracts", ROOT / "contracts/composition/gates.py")
-if _CONTRACT_SPEC is None or _CONTRACT_SPEC.loader is None:
-    raise RuntimeError("gate contract loader is unavailable")
-_CONTRACTS = importlib.util.module_from_spec(_CONTRACT_SPEC)
-sys.modules[_CONTRACT_SPEC.name] = _CONTRACTS
-_CONTRACT_SPEC.loader.exec_module(_CONTRACTS)
-CheckerStatus = _CONTRACTS.CheckerStatus
-GateDeclaration = _CONTRACTS.GateDeclaration
-GateEnforcement = _CONTRACTS.GateEnforcement
-GateResult = _CONTRACTS.GateResult
-GateStatusArtifact = _CONTRACTS.GateStatusArtifact
+from mote.contracts.composition.gates import (
+    CheckerStatus,
+    GateDeclaration,
+    GateEnforcement,
+    GateResult,
+    GateStatusArtifact,
+)
 
 CHECKER_VERSION = "gate-status-runner-v1"
 EVIDENCE_DIRECTORY = ROOT / "zdocs" / "architecture" / "gate-evidence"
@@ -107,13 +101,17 @@ def execute_gate(
         + completed.stderr,
         encoding="utf-8",
     )
+    try:
+        evidence_path = evidence.relative_to(ROOT).as_posix()
+    except ValueError:
+        evidence_path = evidence.resolve().as_posix()
     violations = () if completed.returncode == 0 else (f"command exited with status {completed.returncode}",)
     return _build_status(
         declaration,
         source_paths=source_paths,
         result=GateResult.PASS if completed.returncode == 0 else GateResult.FAIL,
         violations=violations,
-        evidence_path=evidence.relative_to(ROOT).as_posix(),
+        evidence_path=evidence_path,
         enforcement=enforcement,
         executed_at=datetime.now(timezone.utc),
     )

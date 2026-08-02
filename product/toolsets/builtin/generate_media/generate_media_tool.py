@@ -11,16 +11,35 @@ itself decides what to generate. All four list params are native-channel only
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+import hashlib
 from typing import Any, ClassVar, Optional
 
 import aiohttp
 
-from mote.contracts.service import ServiceExecutionSemantics
+from mote.contracts.authorization import PermissionFacts
+from mote.contracts.file import RecoveryInDoubtError, TransactionStatus
+from mote.contracts.ports.file.operations import GeneratedTargetReservationPort
+from mote.contracts.service import (
+    MediaGenerationPayload,
+    MediaGenerationResult,
+    MediaGenerationSpec,
+    MediaKind,
+    ServiceExecutionSemantics,
+)
 from mote.contracts.tool.effects import ToolEffect
-from mote.runtime.errors import ToolNotConfiguredError
+from mote.contracts.tool.errors import ToolNotConfiguredError
+from mote.contracts.tool.identity import ToolInvocationIdentity, tool_arguments_digest
+from mote.contracts.tool.result import json_tool_payload
+from mote.product.toolsets.builtin.generate_media.target_plan import (
+    MediaPublicationDisposition,
+    MediaPublicationSettlement,
+    MediaTargetPlan,
+    plan_media_targets,
+)
 from mote.runtime.tools.base_tool import BaseTool
-from mote.runtime.tools.capability_types import InvokeService
+from mote.runtime.tools.capability_types import CommitGeneratedFiles, GetCwd, InvokeService, TryReserveGeneratedTargets
+from mote.runtime.tools.execution_context import current_authorized_invocation
+from mote.runtime.tools.tool_result import ToolResult
 
 # Requested-kind -> (multimodal sub-config attribute, human label, model-field
 # names). The tool refuses a kind up-front when its service endpoint/key is
@@ -70,9 +89,17 @@ class GenerateMedia(BaseTool):
 
     name = "GenerateMedia"
     aliases: list[str] = ["generate_media"]
-    requires: ClassVar[tuple[str, ...]] = ("invoke_service",)
+    requires: ClassVar[tuple[str, ...]] = (
+        "invoke_service",
+        "get_cwd",
+        "commit_generated_files",
+        "try_reserve_generated_targets",
+    )
     effect = ToolEffect.EXTERNAL
     invoke_service: InvokeService
+    get_cwd: GetCwd
+    commit_generated_files: CommitGeneratedFiles
+    try_reserve_generated_targets: TryReserveGeneratedTargets
     # Recall synonyms for tool-search: common ways a model asks for media work
     # that the summary line does not spell out.
     keywords: ClassVar[list[str]] = [
@@ -111,10 +138,85 @@ class GenerateMedia(BaseTool):
     ) -> None:
         super().__init__()
         self._multimodal_config = multimodal_config
+        self._target_reservations: dict[
+            str,
+            tuple[str, tuple[MediaTargetPlan, ...], GeneratedTargetReservationPort],
+        ] = {}
 
     def can_resume_started_call(self, call_id: str) -> bool:
         """Re-enter the gateway, which resumes receipts instead of resubmitting."""
         return True
+
+    def mutates_filesystem_for(self, args: dict) -> bool:
+        return bool(args.get("output_dir"))
+
+    def permission_targets(self, args: dict) -> list[str]:
+        return [plan.resolved_target for plan in self._target_plan(args)]
+
+    def permission_facts(
+        self,
+        arguments: dict[str, Any],
+        identity: ToolInvocationIdentity,
+    ) -> PermissionFacts:
+        key = str(identity.invocation_id)
+        digest = tool_arguments_digest(arguments)
+        prior = self._target_reservations.get(key)
+        if prior is not None and prior[0] == digest:
+            return self._facts(arguments, prior[1])
+        if prior is not None:
+            prior[2].release()
+            del self._target_reservations[key]
+        output_dir = arguments.get("output_dir")
+        if not isinstance(output_dir, str) or not output_dir:
+            return self._facts(arguments, ())
+        for collision_round in range(1, 1_001):
+            plans = self._target_plan(arguments, collision_round=collision_round)
+            reservation = self.try_reserve_generated_targets(tuple(plan.resolved_target for plan in plans))
+            if reservation is not None:
+                self._target_reservations[key] = (digest, plans, reservation)
+                return self._facts(arguments, plans)
+        raise RuntimeError("generated media target reservation space is exhausted")
+
+    def release_permission_facts(self, identity: ToolInvocationIdentity) -> None:
+        prepared = self._target_reservations.pop(str(identity.invocation_id), None)
+        if prepared is not None:
+            prepared[2].release()
+
+    def _facts(
+        self,
+        arguments: dict[str, Any],
+        plans: tuple[MediaTargetPlan, ...],
+    ) -> PermissionFacts:
+        return PermissionFacts(
+            targets=[plan.resolved_target for plan in plans],
+            mutates_fs=bool(plans),
+            tool_check=self.check_permissions(arguments),
+            segments=self.permission_segments(arguments),
+        )
+
+    def _target_plan(
+        self,
+        args: dict,
+        *,
+        collision_round: int = 1,
+    ) -> tuple[MediaTargetPlan, ...]:
+        output_dir = args.get("output_dir")
+        if not isinstance(output_dir, str) or not output_dir:
+            return ()
+        return plan_media_targets(
+            cwd=self.get_cwd(),
+            output_dir=output_dir,
+            items_by_kind=tuple(
+                (kind, items)
+                for kind, items in (
+                    ("image", args.get("images") or ()),
+                    ("audio", args.get("audios") or ()),
+                    ("music", args.get("music") or ()),
+                    ("video", args.get("videos") or ()),
+                )
+            ),
+            collision_round=collision_round,
+        )
 
     async def call(
         self,
@@ -124,7 +226,7 @@ class GenerateMedia(BaseTool):
         music: Optional[list[dict]] = None,
         videos: Optional[list[dict]] = None,
         output_dir: Optional[str] = None,
-    ) -> dict:
+    ) -> dict | ToolResult:
         """Generate images, speech, music, and/or video assets and wait for the URLs.
 
         Runs every requested kind concurrently, blocks until all assets finish,
@@ -158,6 +260,18 @@ class GenerateMedia(BaseTool):
 
         _check_configured(self._multimodal_config, requested)
 
+        invocation = current_authorized_invocation()
+        if output_dir and invocation is None:
+            raise RuntimeError("GenerateMedia requires an authorized ToolExecutor invocation")
+        invocation_id = "" if invocation is None else str(invocation.identity.invocation_id)
+        prepared = self._target_reservations.get(invocation_id)
+        if output_dir and prepared is None:
+            raise RuntimeError("GenerateMedia target plan was not reserved during authorization")
+        plans = () if prepared is None else prepared[1]
+        plans_by_kind = {
+            kind: {plan.index: plan for plan in plans if plan.kind == kind}
+            for kind in ("image", "audio", "music", "video")
+        }
         jobs: list[tuple[str, Any]] = []
         for plural, singular, items in (
             ("images", "image", images),
@@ -173,7 +287,8 @@ class GenerateMedia(BaseTool):
                             singular,
                             plural,
                             items,
-                            output_dir=output_dir,
+                            target_plans=plans_by_kind[singular],
+                            invocation_id=invocation_id,
                         ),
                     )
                 )
@@ -191,7 +306,24 @@ class GenerateMedia(BaseTool):
         if ok == 0:
             detail = "; ".join(f"{k}: {v.get('error', 'unknown error')}" for k, v in out.items())
             raise RuntimeError(f"All media generation failed: {detail}")
-        return out
+        if not plans:
+            return out
+        settlements = tuple(
+            item["publication"]
+            for value in out.values()
+            if isinstance(value, dict)
+            for item in value.get("assets", ())
+            if "publication" in item
+        )
+        renamed = [item for item in settlements if item["target_disposition"] == "renamed"]
+        notice = "Media generation completed."
+        if renamed:
+            notice += (
+                " Renamed targets: "
+                + ", ".join(f"{item['requested_target']} -> {item['resolved_target']}" for item in renamed)
+                + "."
+            )
+        return ToolResult(output=notice, payload=json_tool_payload(out))
 
     async def _generate_kind(
         self,
@@ -199,26 +331,60 @@ class GenerateMedia(BaseTool):
         plural: str,
         items: list[dict],
         *,
-        output_dir: str | None,
+        target_plans: dict[int, MediaTargetPlan],
+        invocation_id: str,
     ) -> dict[str, Any]:
         async def generate_one(index: int, item: dict) -> dict[str, Any]:
             filename = str(item.get("filename") or _default_filename(kind))
+            plan = target_plans.get(index)
             try:
                 value = await self.invoke_service(
-                    route_id=f"media.{kind}",
-                    capability=f"media.generate.{kind}",
-                    operation_key=f"{kind}:{index}",
-                    payload={"item": item},
-                    semantics=ServiceExecutionSemantics.IDEMPOTENT,
+                    MediaGenerationPayload(
+                        media_kind=MediaKind(kind),
+                        item=MediaGenerationSpec.model_validate(item),
+                    ),
+                    _generation_operation_key(kind, index, plan),
+                    ServiceExecutionSemantics.IDEMPOTENT,
                 )
-                if not isinstance(value, dict):
-                    raise TypeError("media service returned a non-object response")
-                result = dict(value)
-                if output_dir:
+                if not isinstance(value, MediaGenerationResult):
+                    raise TypeError("media service returned a non-media response")
+                result = value.model_dump(mode="json", exclude={"kind"})
+                if plan is not None:
                     try:
-                        await _materialize(result, output_dir, filename)
-                    except Exception as exc:  # generation is already durable remotely
-                        result["materialization_error"] = str(exc)
+                        content = await _download(result)
+                    except Exception as exc:  # noqa: BLE001 - preserve accepted provider outcome
+                        settlement = MediaPublicationSettlement(
+                            plan,
+                            MediaPublicationDisposition.FAILED,
+                            str(exc),
+                        )
+                        result["publication"] = settlement.to_payload()
+                        result["status"] = MediaPublicationDisposition.FAILED.value
+                        result["materialization_error"] = settlement.detail
+                        return result
+                    try:
+                        materialized = await self.commit_generated_files(
+                            {plan.resolved_target: content},
+                            source=f"GenerateMedia:{plan.item_id}",
+                            transaction_id=_publication_transaction_id(invocation_id, plan.item_id),
+                        )
+                        disposition = {
+                            TransactionStatus.COMMITTED: MediaPublicationDisposition.COMMITTED,
+                            TransactionStatus.ABORTED: MediaPublicationDisposition.FAILED,
+                            TransactionStatus.PREPARED: MediaPublicationDisposition.IN_DOUBT,
+                            TransactionStatus.IN_DOUBT: MediaPublicationDisposition.IN_DOUBT,
+                        }[materialized.status]
+                        detail = materialized.detail
+                    except RecoveryInDoubtError as exc:
+                        disposition = MediaPublicationDisposition.IN_DOUBT
+                        detail = str(exc)
+                    settlement = MediaPublicationSettlement(plan, disposition, detail)
+                    result["publication"] = settlement.to_payload()
+                    if disposition is MediaPublicationDisposition.COMMITTED:
+                        result["local_path"] = plan.resolved_target
+                    else:
+                        result["status"] = disposition.value
+                        result["materialization_error"] = detail
                 return result
             except Exception as exc:  # noqa: BLE001 - keep sibling assets
                 return {
@@ -236,7 +402,13 @@ class GenerateMedia(BaseTool):
         return {
             "summary": f"{len(successes)}/{len(results)} {plural} generated.",
             "results": results,
-            "failed": [{"filename": item.get("filename"), "error": item.get("error")} for item in failed],
+            "failed": [
+                {
+                    "filename": item.get("filename"),
+                    "error": item.get("error") or item.get("materialization_error"),
+                }
+                for item in failed
+            ],
         }
 
 
@@ -259,6 +431,8 @@ def _compact(result: dict) -> dict:
             entry["local_path"] = r["local_path"]
         if r.get("materialization_error"):
             entry["materialization_error"] = r["materialization_error"]
+        if r.get("publication"):
+            entry["publication"] = r["publication"]
         assets.append(entry)
     compact: dict[str, Any] = {"summary": result.get("summary", ""), "assets": assets}
     failed = result.get("failed") or []
@@ -267,20 +441,16 @@ def _compact(result: dict) -> dict:
     return compact
 
 
-async def _materialize(result: dict[str, Any], output_dir: str, filename: str) -> None:
+async def _download(result: dict[str, Any]) -> bytes:
     url = result.get("url") or next(iter(result.get("urls") or []), "")
     if not url:
-        return
-    destination = Path(output_dir).expanduser() / Path(filename).name
-    destination.parent.mkdir(parents=True, exist_ok=True)
+        raise ValueError("media result has no downloadable URL")
     timeout = aiohttp.ClientTimeout(total=300)
     async with aiohttp.ClientSession() as session:
         async with session.get(str(url), timeout=timeout) as response:
             response.raise_for_status()
-            with destination.open("wb") as stream:
-                async for chunk in response.content.iter_chunked(65536):
-                    stream.write(chunk)
-    result["local_path"] = str(destination)
+            chunks = [chunk async for chunk in response.content.iter_chunked(65536)]
+    return b"".join(chunks)
 
 
 def _default_filename(kind: str) -> str:
@@ -290,3 +460,30 @@ def _default_filename(kind: str) -> str:
         "music": "music.wav",
         "video": "video.mp4",
     }[kind]
+
+
+def _publication_transaction_id(invocation_id: str, item_id: str) -> str:
+    digest = hashlib.sha256(
+        f"mote.generate-media-publication/v1\0{invocation_id}\0{item_id}".encode("utf-8")
+    ).hexdigest()
+    return f"generate-media-{digest}"
+
+
+def _generation_operation_key(
+    kind: str,
+    index: int,
+    plan: MediaTargetPlan | None,
+) -> str:
+    if plan is None:
+        return f"{kind}:{index}"
+    digest = hashlib.sha256(
+        (
+            "mote.generate-media-target/v1\0"
+            + plan.item_id
+            + "\0"
+            + plan.requested_target
+            + "\0"
+            + plan.resolved_target
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"{kind}:{index}:{digest}"

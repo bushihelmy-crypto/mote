@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.contracts.events.conversation import PostCompactEvent
+from mote.contracts.events.conversation import ModelContextRebuiltEvent, PostCompactEvent
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 
 
@@ -40,7 +40,7 @@ class CompactionNoticeContextSource:
     def __init__(self) -> None:
         self._pending = False
 
-    async def on_model_context_rebuilt(self, event: object) -> None:
+    async def on_model_context_rebuilt(self, event: ModelContextRebuiltEvent) -> None:
         """Arm the notice after a summary rebuild; ignore cheaper folds."""
         if isinstance(event, PostCompactEvent) and event.summary:
             self._pending = True

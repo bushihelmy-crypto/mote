@@ -30,11 +30,14 @@ def test_runtime_has_no_product_model_syntax_or_second_generation_owner() -> Non
 
 
 def test_production_roots_install_atomic_application_composition() -> None:
-    roots = (PACKAGE_ROOT / "engine.py", PACKAGE_ROOT / "product/entrypoints/cli/bootstrap.py")
-    for path in roots:
-        source = path.read_text(encoding="utf-8")
-        assert "install_initial_application_composition" in source
-        assert "builtin_model_gateway" not in source
+    engine = (PACKAGE_ROOT / "engine.py").read_text(encoding="utf-8")
+    cli = (PACKAGE_ROOT / "product/entrypoints/cli/bootstrap.py").read_text(encoding="utf-8")
+    composition = (PACKAGE_ROOT / "product/composition/bootstrap.py").read_text(encoding="utf-8")
+    assert "install_initial_application_composition" in engine
+    assert "activate_application(" in cli
+    assert "install_initial_application_composition" in composition
+    assert "builtin_model_gateway" not in engine
+    assert "builtin_model_gateway" not in cli
 
 
 def test_product_model_runtime_only_accepts_compiled_bindings() -> None:

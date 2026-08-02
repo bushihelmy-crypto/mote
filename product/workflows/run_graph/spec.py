@@ -54,6 +54,7 @@ that points back to the loop head while its condition holds, plus an ``__end__``
 
 from __future__ import annotations
 
+import math
 import string
 from typing import Any, Literal, Optional
 
@@ -189,7 +190,9 @@ def _validate_binding(value: Any, *, where: str) -> None:
     elif isinstance(value, list):
         for idx, item in enumerate(value):
             _validate_binding(item, where=f"{where}[{idx}]")
-    # scalars (str/int/float/bool/None) are literals — always valid.
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{where}: non-finite numeric literals are forbidden")
+    # Remaining scalars (str/int/finite float/bool/None) are literals.
 
 
 def _is_identifier(name: Any) -> bool:
@@ -572,9 +575,10 @@ class GraphSpec(BaseModel):
 
         # A channel name must be a valid identifier (it becomes a state field and
         # a ``$ref`` head).
-        for cname in self.channels:
+        for cname, channel in self.channels.items():
             if not _is_identifier(cname):
                 raise ValueError(f"channel name {cname!r} must be a valid identifier")
+            _validate_binding(channel.initial, where=f"channel[{cname}].initial")
 
         # Every ``writes`` must target a declared channel.
         for node in self.nodes:

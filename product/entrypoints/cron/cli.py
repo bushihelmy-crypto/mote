@@ -18,14 +18,14 @@ routes a leading ``cron`` token here and this module owns its own subparser.
 from __future__ import annotations
 
 import argparse
-import time
 from typing import List, Optional, Sequence
 
 from mote.orchestration.automation.cron.expression import cron_to_human
-from mote.orchestration.automation.cron.service import validate_new_task
+from mote.orchestration.automation.cron.service import CronTaskCommands
 from mote.orchestration.automation.cron.store import CronTaskStore
-from mote.orchestration.automation.cron.task import CronTask
+from mote.product.automation.timezone import system_timezone_name
 from mote.product.paths import default_runtime_paths
+from mote.runtime.clock import SystemClock
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -57,28 +57,25 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cmd_add(store: CronTaskStore, args: argparse.Namespace) -> int:
+def _cmd_add(commands: CronTaskCommands, args: argparse.Namespace) -> int:
     try:
-        validate_new_task(args.cron, len(store.list()))
+        task = commands.create(
+            args.cron,
+            args.prompt,
+            args.session,
+            recurring=args.recurring,
+            durable=True,
+        )
     except ValueError as exc:
         print(f"error: {exc}")
         return 1
-    task = CronTask.new(
-        args.cron,
-        args.prompt,
-        int(time.time() * 1000),
-        recurring=args.recurring,
-        durable=True,
-        target_session_id=args.session,
-    )
-    store.add(task)
     kind = "recurring" if task.recurring else "one-shot"
     print(f"added {task.id}  [{kind}]  {task.cron}  ({cron_to_human(task.cron)})")
     return 0
 
 
-def _cmd_list(store: CronTaskStore) -> int:
-    tasks = store.list()
+def _cmd_list(commands: CronTaskCommands) -> int:
+    tasks = commands.list()
     if not tasks:
         print("no scheduled tasks")
         return 0
@@ -90,8 +87,8 @@ def _cmd_list(store: CronTaskStore) -> int:
     return 0
 
 
-def _cmd_rm(store: CronTaskStore, ids: List[str]) -> int:
-    removed = store.remove(ids)
+def _cmd_rm(commands: CronTaskCommands, ids: List[str]) -> int:
+    removed = commands.remove(ids)
     print(f"removed {removed} task(s)")
     return 0
 
@@ -100,12 +97,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """Dispatch a ``cron`` subcommand; returns a process exit code."""
     args = _build_parser().parse_args(argv)
     store = CronTaskStore(base_dir=str(default_runtime_paths().workspace_root / ".agent_schedules"))
+    commands = CronTaskCommands(
+        store,
+        default_timezone_name=system_timezone_name(),
+        clock_source=SystemClock(),
+    )
     if args.action == "add":
-        return _cmd_add(store, args)
+        return _cmd_add(commands, args)
     if args.action == "list":
-        return _cmd_list(store)
+        return _cmd_list(commands)
     if args.action == "rm":
-        return _cmd_rm(store, args.ids)
+        return _cmd_rm(commands, args.ids)
     return 2  # unreachable: argparse enforces a valid action
 
 

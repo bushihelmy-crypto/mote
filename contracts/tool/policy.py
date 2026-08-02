@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Optional
 
+from mote.contracts.tool.identity import ToolInvocationIdentity
+
 ToolPolicyDisposition = Literal[
     "allow",
     "deny",
@@ -58,9 +60,9 @@ class ToolCallInspection:
 class ToolCallIntent:
     """A tool call awaiting policy evaluation."""
 
+    identity: ToolInvocationIdentity
     tool_name: str
     arguments: Mapping[str, Any] = field(default_factory=dict)
-    tool_call_id: Optional[str] = None
     scope: tuple = ()
 
 
@@ -68,6 +70,7 @@ class ToolCallIntent:
 class ToolCallDecision:
     """Final authorization result consumed by the tool invocation boundary."""
 
+    identity: ToolInvocationIdentity
     allowed: bool
     arguments: Mapping[str, Any] = field(default_factory=dict)
     reason: str = ""
@@ -77,15 +80,17 @@ class ToolCallDecision:
     @classmethod
     def allow(
         cls,
+        identity: ToolInvocationIdentity,
         arguments: Mapping[str, Any],
         *,
         trace: tuple[ToolPolicyTraceEntry, ...] = (),
     ) -> "ToolCallDecision":
-        return cls(allowed=True, arguments=dict(arguments), trace=trace)
+        return cls(identity=identity, allowed=True, arguments=dict(arguments), trace=trace)
 
     @classmethod
     def deny(
         cls,
+        identity: ToolInvocationIdentity,
         arguments: Mapping[str, Any],
         reason: str,
         *,
@@ -93,6 +98,7 @@ class ToolCallDecision:
         trace: tuple[ToolPolicyTraceEntry, ...] = (),
     ) -> "ToolCallDecision":
         return cls(
+            identity=identity,
             allowed=False,
             arguments=dict(arguments),
             reason=reason,
@@ -105,13 +111,13 @@ class ToolCallDecision:
 class ToolResultIntent:
     """Trusted raw execution result entering settlement presentation policy."""
 
+    identity: ToolInvocationIdentity
     tool_name: str
     arguments: Mapping[str, Any] = field(default_factory=dict)
     output: str = ""
     execution_success: bool = True
     executed: bool = True
     error: Optional[Mapping[str, Any]] = None
-    tool_call_id: Optional[str] = None
     is_readonly: bool = False
     scope: tuple = ()
 

@@ -8,29 +8,49 @@ import json
 import os
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from contextvars import ContextVar, Token
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, Generic, Optional, Set, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Optional, Protocol, Set, TypeVar, cast, runtime_checkable
 from uuid import uuid4
 
-from mote.contracts.agent import ContextPolicy, SpawnContext
-from mote.contracts.conversation import AIMessage, CauseBy, Message
+from pydantic import BaseModel
+
+from mote.contracts.agent import ContextPolicy, RunnableAgent, SpawnContext
+from mote.contracts.browser import BrowserProfileNotFoundError, BrowserProfileSnapshot
+from mote.contracts.content import ContentDigest
+from mote.contracts.conversation import AIMessage, CauseBy, Message, MessageQueue
 from mote.contracts.conversation.fields import MESSAGE_ROUTE_TO_SELF
 from mote.contracts.conversation.prompt_policy import PromptIntent
 from mote.contracts.events.conversation import PromptRejectedEvent, UserPromptSubmitEvent
+from mote.contracts.events.envelope import JsonValue, thaw_json
 from mote.contracts.events.output import OutputPublicationQueuedEvent, OutputPublishedEvent
 from mote.contracts.events.session import SessionStartEvent, TurnEndEvent
 from mote.contracts.output import RunOutcome, RunRejected, RunRejectionKind, RunResult, TranscriptRef
 from mote.contracts.output.policy import RunCompletionDecision, RunCompletionIntent
+from mote.contracts.ports.agent.routing import AgentRoutingPort
+from mote.contracts.ports.interaction.role import RoleHumanInteractionPort
 from mote.contracts.ports.skill.registry import SkillCatalog, SkillService
 from mote.contracts.ports.task.operations import BackgroundTaskService
-from mote.contracts.service import ServiceExecutionSemantics, ServiceInvocation
+from mote.contracts.service import (
+    HostedServicePayload,
+    HostedServiceResult,
+    ServiceExecutionSemantics,
+    ServiceInvocation,
+    capability_for_payload,
+    route_for_payload,
+)
+from mote.contracts.task.lifecycle import BackgroundTaskPinSnapshot
+from mote.contracts.tool.errors import ToolNotConfiguredError
 from mote.kernel.commands import CommandChannel
 from mote.kernel.execution.run_context import RunContext
 from mote.kernel.telemetry.events import span
 from mote.runtime.agent.base import BaseRole
+from mote.runtime.agent.component_projection import AgentComponentProjection
 from mote.runtime.agent.components.context_provider import ContextProvider
+from mote.runtime.agent.errors import RoleContextNotSetError
 from mote.runtime.agent.execution import any_to_str, role_raise_decorator
 from mote.runtime.agent.incarnation import AgentIncarnationBlueprint
+from mote.runtime.agent.residency_state import freeze_state, residency_config_digest
 from mote.runtime.agent.role_components import RoleComponents
 from mote.runtime.agent.role_schema import RoleSchema
 from mote.runtime.agent.role_state import RoleState
@@ -38,7 +58,6 @@ from mote.runtime.agent.session_manager import RoleSessionManager
 from mote.runtime.agent.wiring import AgentWiring
 from mote.runtime.context import ContextManager
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleStack
-from mote.runtime.errors import RoleContextNotSetError, ToolNotConfiguredError
 from mote.runtime.events.context import bind_telemetry
 from mote.runtime.models.clients.context import Context
 from mote.runtime.models.gateway import LLMRouter
@@ -51,8 +70,15 @@ from mote.runtime.tools.execution_context import current_tool_call_id
 from mote.runtime.tools.provider import toolset_manifest, validate_toolset_protocols
 from mote.runtime.tools.tool_executor import ToolExecutor
 
+
+@runtime_checkable
+class _SpawnServiceRecipient(Protocol):
+    def bind_services(self, services: EngineServices, *, owned: bool = False) -> None: ...
+
+
 DepsT = TypeVar("DepsT")
 OutputT = TypeVar("OutputT")
+ChildOutputT = TypeVar("ChildOutputT")
 
 if TYPE_CHECKING:
     from mote.contracts.artifact import ArtifactRef
@@ -63,7 +89,7 @@ if TYPE_CHECKING:
     from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolResultPolicy
     from mote.runtime.config.device import DeviceConfig
     from mote.runtime.interactive.browser.profile import BrowserProfileStore
-    from mote.runtime.sandbox import SandboxRuntime
+    from mote.runtime.sandbox.runtime import SandboxRuntime
     from mote.runtime.session import SessionLog
     from mote.runtime.session.attribution import HunkAttribution
     from mote.runtime.session.hunk_ops import HunkOps
@@ -85,7 +111,6 @@ if TYPE_CHECKING:
         "tool_capabilities",
         "deactivate",
         "get_memories",
-        "set_env",
         "set_addresses",
     },
 )
@@ -122,7 +147,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             self.role_schema = RoleSchema()
 
         if name is not None:
-            self.role_schema.name = name
+            self.role_schema = self.role_schema.model_copy(update={"name": name})
 
         # Runtime state
         self.state = state if state is not None else RoleState()
@@ -133,7 +158,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         )
         validate_toolset_protocols(
             self.role_schema.command_protocol,
-            self.wiring.dependencies.toolsets,
+            self._component_projection().action().toolsets,
         )
         self._config = config
 
@@ -148,43 +173,63 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         self._cleanup_complete = False
         self._cleanup_lifecycle = LifecycleStack()
         self._cleanup_lifecycle_prepared = False
-        self.agent_control = None
+        self._incarnation_id = uuid4().hex
+        self._routing_port: AgentRoutingPort | None = None
+        self._human_interaction: ContextVar[RoleHumanInteractionPort | None] = ContextVar(
+            f"human_interaction_{self.state.session_id}", default=None
+        )
         # Guards firing SessionStart exactly once across this Role's run() calls.
         self._session_started = False
 
         # Post-init
         self._init_addresses()
 
-    def bind_agent_control(self, control: object) -> None:
-        """Attach this Agent to its session-scoped orchestration plane."""
-        self.agent_control = control
+    @property
+    def incarnation_id(self) -> str:
+        """Opaque identity of this process-local Role incarnation."""
+        return self._incarnation_id
 
     def __hash__(self):
         return id(self)
 
-    # =========================================================================
-    # Serialization — delegates to RoleState (Pydantic) + class registry
-    # =========================================================================
+    @property
+    def residency_definition_id(self) -> str:
+        if type(self.role_type_id) is not str or not self.role_type_id:
+            raise ValueError("Role has no stable Residency definition identity")
+        return self.role_type_id
 
-    def dump(self) -> dict[str, Any]:
-        """Serialize role for checkpoint/recovery."""
-        return {
-            "type_id": self.role_type_id,
-            "state": self.state.model_dump(mode="json"),
-            "role_schema": self.role_schema.model_dump(mode="json"),
-        }
+    @property
+    def residency_config_digest(self) -> ContentDigest:
+        runtime_config = self._config
+        if runtime_config is not None and not isinstance(runtime_config, BaseModel):
+            raise TypeError("Role Runtime config must be a typed model for Residency")
+        return residency_config_digest(
+            definition_id=self.residency_definition_id,
+            role_schema=self.role_schema,
+            runtime_config=runtime_config,
+        )
 
-    @classmethod
-    def _from_dict(cls, data: dict[str, Any]) -> "Role":
-        """Reconstruct a Role from serialized data."""
-        expected_fields = {"type_id", "role_schema", "state"}
-        if set(data) != expected_fields:
-            raise ValueError("serialized Role must contain exactly type_id, role_schema, and state")
-        schema_data = data["role_schema"]
-        state_data = data["state"]
-        role_schema = RoleSchema.model_validate(schema_data)
-        state = RoleState.model_validate(state_data)
-        return cls(role_schema=role_schema, state=state)
+    def export_residency_state(self, *, session_history_is_durable: bool) -> Mapping[str, JsonValue]:
+        state = self.state.model_dump(mode="json")
+        if session_history_is_durable:
+            context = state.get("context")
+            if not isinstance(context, dict):
+                raise ValueError("Role state context is invalid for Residency")
+            context["messages"] = []
+        return freeze_state(state)
+
+    def restore_residency_message_buffer(self, snapshot: JsonValue) -> None:
+        encoded = json.dumps(thaw_json(snapshot), ensure_ascii=False, separators=(",", ":"))
+        self.state.msg_buffer = MessageQueue.load(encoded)
+
+    def restore_residency_history(
+        self,
+        messages: tuple[Message, ...],
+        session_meta: Mapping[str, object],
+    ) -> None:
+        self.validate_resume_identity(session_meta)
+        if messages:
+            self.state.context.messages[:] = messages
 
     # =========================================================================
     # Properties — context / config / llm delegation
@@ -195,8 +240,8 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         return self.role_schema.name
 
     @name.setter
-    def name(self, value: str):
-        self.role_schema.name = value
+    def name(self, value: str) -> None:
+        self.role_schema = self.role_schema.model_copy(update={"name": value})
 
     @property
     def components(self) -> RoleComponents:
@@ -237,9 +282,9 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
 
     @property
     def config(self):
-        if self._config:
-            return self._config
-        return self.context.config
+        if self._config is None:
+            raise RuntimeError("Role requires an explicit typed runtime configuration")
+        return self._config
 
     @config.setter
     def config(self, config):
@@ -266,20 +311,20 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         self,
         *,
         parent_id: str | None,
-        agent_path: object,
+        agent_path: str,
     ) -> SpawnContext:
         """Project the stable values needed by a child factory."""
         return SpawnContext(
             parent_id=parent_id,
             agent_path=agent_path,
             cwd=self.get_cwd(),
-            config=self.config,
-            parent_cost_tracker=self.context.cost_manager,
             parent_session_id=parent_id or "",
         )
 
-    def provision_spawned_child(self, child: Any, policy: ContextPolicy) -> None:
+    def provision_spawned_child(self, child: RunnableAgent[ChildOutputT], policy: ContextPolicy) -> None:
         """Provision a child without exposing Runtime wiring to Orchestration."""
+        if not isinstance(child, _SpawnServiceRecipient):
+            raise TypeError("spawned child must use the canonical Runtime Role")
         services = self.wiring.services
         if services is None:
             raise RuntimeError("spawn parent has no provisioned EngineServices")
@@ -290,11 +335,12 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         child.bind_services(
             EngineServices(
                 context=Context(
-                    config=self.config,
+                    activation=parent_context.activation,
                     service_gateway=parent_context.service_gateway,
                 ),
                 run_lease_coordinator=services.run_lease_coordinator,
                 application_composition=services.application_composition,
+                workflow_governance=services.workflow_governance,
             ),
             owned=True,
         )
@@ -302,11 +348,11 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     def provision_unparented_spawn(self, spawn_context: SpawnContext) -> None:
         """Provision a child created without a resident parent."""
         self.bind_services(
-            EngineServices(context=Context(config=spawn_context.config)),
+            EngineServices(context=Context()),
             owned=True,
         )
 
-    def spawn_cost_tracker(self):
+    def spawn_cost_attribution(self):
         """Return the cost attribution bucket through a public narrow seam."""
         return self.context.cost_manager
 
@@ -494,19 +540,24 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         return self.state.session_id
 
     @property
-    def env(self):
-        return self.state.env
+    def human_interaction(self) -> RoleHumanInteractionPort | None:
+        return self._human_interaction.get()
+
+    def bind_human_interaction(self, interaction: RoleHumanInteractionPort) -> Token[RoleHumanInteractionPort | None]:
+        return self._human_interaction.set(interaction)
+
+    def reset_human_interaction(self, token: Token[RoleHumanInteractionPort | None]) -> None:
+        self._human_interaction.reset(token)
 
     @property
     def is_idle(self) -> bool:
         """A role is idle when its message buffer is empty."""
         return self._state_ctl.is_idle
 
-    def set_env(self, env):
-        """Set the environment this role belongs to and register addresses."""
-        self.state.env = env
-        if env:
-            env.set_addresses(self, self.state.addresses)
+    def bind_routing(self, routing: AgentRoutingPort) -> None:
+        """Bind the orchestration-owned routing capability."""
+        self._routing_port = routing
+        routing.set_addresses(self.session_id, self.state.addresses)
 
     # =========================================================================
     # Initialization helpers
@@ -528,8 +579,8 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     def set_addresses(self, addresses: Set[str]):
         """Used to receive Messages with certain tags from the environment."""
         self.state.addresses = addresses
-        if self.state.env:
-            self.state.env.set_addresses(self, self.state.addresses)
+        if self._routing_port is not None:
+            self._routing_port.set_addresses(self.session_id, self.state.addresses)
 
     def get_cwd(self) -> str:
         """Current working directory.
@@ -661,6 +712,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             "plan_file_edit": self._capabilities.plan_file_edit,
             "commit_edit_plan": self._capabilities.commit_edit_plan,
             "commit_generated_files": self._capabilities.commit_generated_files,
+            "try_reserve_generated_targets": self._capabilities.try_reserve_generated_targets,
             "record_file_glimpsed": self.record_file_glimpsed,
             "is_resource_visible": self.is_resource_visible,
             "get_browser_stealth": self.get_browser_stealth,
@@ -670,6 +722,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             "get_browser_profile": self.get_browser_profile,
             "load_browser_profile": self.load_browser_profile,
             "save_browser_profile": self.save_browser_profile,
+            "get_browser_profile_target": self.get_browser_profile_target,
             "get_browser_client_certs": self.get_browser_client_certs,
             "get_secret": self.get_secret,
             "get_runtime_host": self.get_runtime_host,
@@ -701,15 +754,14 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
 
     async def invoke_service(
         self,
-        *,
-        route_id: str,
-        capability: str,
+        payload: HostedServicePayload,
         operation_key: str,
-        payload: dict[str, Any],
         semantics: ServiceExecutionSemantics,
-    ) -> Any:
+    ) -> HostedServiceResult:
         """Invoke one hosted Tool capability under a stable per-call identity."""
 
+        route_id = route_for_payload(payload)
+        capability = capability_for_payload(payload)
         gateway = self.context.service_gateway
         if gateway is None or not gateway.supports_route(route_id, capability):
             raise ToolNotConfiguredError(f"Hosted Tool service route {route_id!r} is not configured.")
@@ -717,7 +769,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         identity = f"{self.session_id}\0{tool_call_id}\0{route_id}\0" f"{capability}\0{operation_key}"
         service_call_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         canonical_payload = json.dumps(
-            payload,
+            payload.model_dump(mode="json"),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -848,21 +900,27 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         """
         return self.role_schema.browser_profile
 
-    def load_browser_profile(self, name: str) -> Optional[dict]:
+    def load_browser_profile(self, name: str) -> BrowserProfileSnapshot | None:
         """Return the decrypted ``storage_state`` saved under *name* (or None).
 
         Capability surface for the WebBrowser tool; delegates to the encrypted
         :class:`BrowserProfileStore`. Best-effort (None on any miss/failure).
         """
-        return self.browser_profile_store.load(name)
+        try:
+            return self.browser_profile_store.load(name)
+        except BrowserProfileNotFoundError:
+            return None
 
-    def save_browser_profile(self, name: str, storage_state: Optional[dict]) -> None:
+    def save_browser_profile(self, name, storage_state, expected_revision):
         """Persist *storage_state* under *name* in the encrypted profile store.
 
         Capability surface for the WebBrowser tool; delegates to the encrypted
         :class:`BrowserProfileStore`. Best-effort (never raises).
         """
-        self.browser_profile_store.save(name, storage_state)
+        return self.browser_profile_store.save(name, storage_state, expected_revision=expected_revision)
+
+    def get_browser_profile_target(self, name: str) -> str:
+        return str(self.browser_profile_store.path_for(name))
 
     def get_browser_client_certs(self) -> list[dict]:
         """Return the role's client TLS certs as Playwright-shaped dicts.
@@ -919,7 +977,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     async def ask_user(self, question: str) -> str:
         """Ask the user a question and return their response.
 
-        Only valid inside a MoteEnv. A trailing 'stop' deactivates the role.
+        Requires a bound interaction Port. A trailing 'stop' deactivates the role.
         Capability surface; delegates to :class:`RoleCapabilities`.
         """
         return await self._capabilities.ask_user(question)
@@ -947,7 +1005,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     async def reply_to_user(self, content: str) -> str:
         """Reply to the user with the provided content.
 
-        Only valid inside a MoteEnv. Capability surface; delegates to
+        Requires a bound interaction Port. Capability surface; delegates to
         :class:`RoleCapabilities`.
         """
         return await self._capabilities.reply_to_user(content)
@@ -1113,11 +1171,11 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         if all(to in {any_to_str(self), self.role_schema.name} for to in msg.send_to):
             self.put_message(msg)
             return
-        if not self.state.env:
+        if self._routing_port is None:
             return
         if isinstance(msg, AIMessage) and not msg.agent:
             msg.with_agent(self.role_schema.display_name)
-        self.state.env.publish_message(msg)
+        self._routing_port.publish_message(msg)
 
     def put_message(self, message):
         """Place the message into the Role object's private message buffer."""
@@ -1164,17 +1222,15 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                     original_working_dir=self.state.original_working_dir,
                     project_root=self.state.project_root,
                     model=self.default_model_name,
-                    role_class=self.role_type_id or type(self).__name__,
-                    toolset_manifest=toolset_manifest(self.wiring.dependencies.toolsets),
+                    role_class=self.residency_definition_id,
+                    toolset_manifest=toolset_manifest(self._component_projection().action().toolsets),
                 )
             )
 
         # Open this session's own log file (logs/{session_id}.txt), named to
         # match its workspace session folder. run() has bound session_id as the
         # trace_id, so the sink's filter routes this session's lines here.
-        config_root = self.wiring.dependencies.user_config_root
-        if config_root is None:
-            raise ValueError("Agent composition requires a user config root")
+        config_root = self._component_projection().user_config_root()
         bind_session_logfile(self.session_id, config_root / "logs")
 
         await self.telemetry.emit(
@@ -1372,23 +1428,24 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         """Capture construction values for a sequential Residency replacement."""
 
         role_cls = type(self)
-        role_type = f"{role_cls.__module__}.{role_cls.__qualname__}"
         config = self._config
         wiring = self.wiring
+        role_schema = self.role_schema.model_copy(deep=True)
+        definition_id = self.residency_definition_id
+        config_digest = self.residency_config_digest
 
-        def restore(snapshot: Mapping[str, Any]) -> BaseRole:
-            schema = RoleSchema.model_validate(snapshot.get("role_schema", {}))
-            state = RoleState.model_validate(snapshot.get("state", {}))
+        def restore(snapshot: Mapping[str, JsonValue]) -> BaseRole:
+            state = RoleState.model_validate(thaw_json(cast(JsonValue, snapshot)))
             return role_cls(
-                role_schema=schema,
+                role_schema=role_schema.model_copy(deep=True),
                 state=state,
                 config=config,
                 wiring=wiring,
             )
 
         return AgentIncarnationBlueprint(
-            role_type=role_type,
-            snapshot_type_id=self.role_type_id,
+            definition_id=definition_id,
+            config_digest=config_digest,
             restore=restore,
         )
 
@@ -1454,7 +1511,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             self._cleanup_task = task
         await asyncio.shield(task)
 
-    async def prepare_for_eviction(self) -> None:
+    async def prepare_for_eviction(self) -> BackgroundTaskPinSnapshot | None:
         """Close this incarnation while transferring its services lease.
 
         Residency replacement is sequential, not a fork: the blueprint hands
@@ -1464,8 +1521,15 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         """
 
         if self._cleanup_complete:
-            return
+            bg_pool = self._components.peek_bg_pool()
+            return bg_pool.pin_snapshot(owner=bg_pool.owner) if bg_pool is not None else None
+        bg_pool = self._components.peek_bg_pool()
+        if bg_pool is not None:
+            snapshot = bg_pool.close_admission(owner=bg_pool.owner)
+            if snapshot.pin_count:
+                return snapshot
         await self._cleanup(release_services=False)
+        return bg_pool.pin_snapshot(owner=bg_pool.owner) if bg_pool is not None else None
 
     async def _cleanup(self, *, release_services: bool) -> None:
         """Run one complete teardown attempt behind :meth:`cleanup`'s shared task."""
@@ -1557,7 +1621,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         if bg_pool is not None:
             lifecycle.register_close(
                 "background-tasks",
-                bg_pool.aclose,
+                lambda: self._drain_background_tasks(bg_pool),
                 phase=LifecyclePhase.CLOSE_RESOURCES,
             )
         file_watch_service = self._components.peek_file_watch_service()
@@ -1572,6 +1636,17 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                 "engine-services-lease",
                 self.wiring.services_lease.aclose,
                 phase=LifecyclePhase.RELEASE_CONTAINER,
+            )
+
+    @staticmethod
+    async def _drain_background_tasks(bg_pool: BackgroundTaskService) -> None:
+        receipt = await bg_pool.drain(
+            owner=bg_pool.owner,
+            timeout_seconds=5.0,
+        )
+        if not receipt.settled:
+            raise RuntimeError(
+                f"background-task cleanup {receipt.disposition.value}: " f"{receipt.failure or 'work remains pinned'}"
             )
 
     @staticmethod
@@ -1608,3 +1683,9 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
 
         self.skill_manager.ensure_ready()
         await self.executor.init_mcp(self.role_schema.mcps, enabled=self.config.mcp.enabled)
+
+    def _component_projection(self) -> AgentComponentProjection:
+        projection = self.wiring.dependencies.component_projection
+        if projection is None:
+            raise RuntimeError("Agent composition requires a Product component projection")
+        return projection

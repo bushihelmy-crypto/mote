@@ -17,9 +17,11 @@ import os
 import platform
 import re
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from string import Template
-from typing import Any
+from typing import Protocol
 
 from mote.contracts.conversation.prompt import PromptRegion, PromptSection, PromptSectionIdentity, ProtocolVocabulary
 from mote.kernel.inference.memory_prompts import MEMORY_CONTEXT, MEMORY_EMPTY_STATE, MEMORY_INSTRUCTIONS
@@ -30,6 +32,36 @@ from mote.kernel.inference.prompts import (
     SCRATCHPAD_SECTION,
     SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 )
+
+
+class _CompactionConfig(Protocol):
+    enabled: bool
+    protected_recent_messages: int
+
+
+class _ContextConfig(Protocol):
+    compaction: _CompactionConfig
+
+
+class _PromptConfig(Protocol):
+    context: _ContextConfig
+
+
+class _PromptToolCatalog(Protocol):
+    def static_toolset_instructions(self) -> tuple[str, ...]: ...
+    def xml_tool_schemas(self) -> dict[str, dict]: ...
+
+
+class _TurnContextReader(Protocol):
+    async def collect(self, *, cwd: str | None = None) -> str: ...
+
+
+class _PromptCommandChannel(Protocol):
+    def prompt_vars(self) -> dict[str, str]: ...
+    def wants_tool_catalog(self) -> bool: ...
+    def lower(self, text: str) -> str: ...
+    def vocabulary(self) -> dict[str, str]: ...
+
 
 PROMPT_VAR_KEYS = ("command_guide", "tool_usage_guide")
 
@@ -56,9 +88,8 @@ class InferenceInputs:
     # Startup cwd (never follows `cd`) — the stable dir the system prompt's
     # environment block cites, so a mid-session `cd` can't bust the prefix cache.
     original_working_dir: str = ""
-    project_root: Any = None
-    memory_dir: Any = None
-    scratchpad_dir: Any = None
+    memory_dir: str | Path | None = None
+    scratchpad_dir: str | Path | None = None
     # The role's charter (RoleSchema.role_info) — the task DOMAIN + its
     # conventions, rendered last in the dynamic region. "" emits nothing.
     role_info: str = ""
@@ -77,19 +108,18 @@ class InferenceSubsystems:
     line) — not a live LLM handle, so PromptBuilder never resolves an LLM.
     """
 
-    config: Any
+    config: _PromptConfig
     model_name: str
-    executor: Any
-    skill_manager: Any
+    executor: _PromptToolCatalog | None
     response_language: str = ""
     # The unified per-turn ephemeral-context bus (git/token/bg-tasks/LSP feeds).
     # None => no ephemeral context this cycle (the Role didn't wire a bus).
-    turn_context_bus: Any = None
+    turn_context_bus: _TurnContextReader | None = None
     # The active CommandChannel. PromptBuilder calls its ``lower(text)`` at the
     # end of assembly to substitute protocol symbols (``⟦...⟧``) with this
     # protocol's surface syntax — the single place protocol mechanics enter the
     # prompt. None => identity (no lowering), for callers/tests without a channel.
-    command_channel: Any = None
+    command_channel: _PromptCommandChannel | None = None
 
 
 @dataclass
@@ -122,7 +152,7 @@ class InferenceContext:
     # The single seam for protocol prompt sections (was three InferenceInputs fields
     # + three collect_context override blocks). Defaults to "" for every
     # PROMPT_VAR_KEYS entry when no channel is wired.
-    prompt_vars: dict = field(default_factory=lambda: {k: "" for k in PROMPT_VAR_KEYS})
+    prompt_vars: dict[str, str] = field(default_factory=lambda: {k: "" for k in PROMPT_VAR_KEYS})
 
     # XML built-in definitions are part of the system prompt, not the volatile
     # reminder catalog. Native leaves this empty because its definitions ride
@@ -151,7 +181,7 @@ class InferenceContext:
     # to the fully-assembled system+user prompt at the end of ``build`` so the
     # protocol's surface syntax for each ``⟦symbol⟧`` is the LAST thing inserted.
     # None => identity (no channel wired; used by callers/tests without one).
-    lower: Any = None
+    lower: Callable[[str], str] | None = None
     protocol_vocabulary: ProtocolVocabulary = field(default_factory=lambda: ProtocolVocabulary("none", "1", (), "none"))
 
 
@@ -410,7 +440,7 @@ class PromptBuilder:
         return ctx
 
     @staticmethod
-    def _make_memory(memory_dir) -> tuple[str, str]:
+    def _make_memory(memory_dir: str | Path | None) -> tuple[str, str]:
         """Build the # Memory system section and the MEMORY.md user-context block.
 
         Returns ("", "") when no memory_dir is configured. The instructions are
@@ -425,7 +455,7 @@ class PromptBuilder:
         return instructions, context
 
     @staticmethod
-    def _read_memory_index(memory_dir) -> str:
+    def _read_memory_index(memory_dir: str | Path) -> str:
         """Read MEMORY.md from memory_dir, or "" if absent/unreadable."""
         try:
             path = os.path.join(str(memory_dir), "MEMORY.md")
@@ -435,7 +465,7 @@ class PromptBuilder:
             return ""
 
     @staticmethod
-    async def _make_reminders(turn_context_bus, cwd: str = "") -> str:
+    async def _make_reminders(turn_context_bus: _TurnContextReader | None, cwd: str = "") -> str:
         """Gather per-turn ephemeral context from the turn_context bus.
 
         Returns the merged <system-reminder> block that _build_user_prompt
@@ -451,19 +481,19 @@ class PromptBuilder:
         return await turn_context_bus.collect(cwd=cwd or None)
 
     @staticmethod
-    def _make_language(language) -> str:
+    def _make_language(language: str) -> str:
         if not language:
             return ""
         return Template(LANGUAGE_SECTION).safe_substitute(language_name=str(language))
 
     @staticmethod
-    def _make_scratchpad(scratchpad_dir) -> str:
+    def _make_scratchpad(scratchpad_dir: str | Path | None) -> str:
         if not scratchpad_dir:
             return ""
         return Template(SCRATCHPAD_SECTION).safe_substitute(scratchpad_dir=str(scratchpad_dir))
 
     @staticmethod
-    def _make_compaction_section(config) -> str:
+    def _make_compaction_section(config: _PromptConfig) -> str:
         """Build the compaction-survival section (# Surviving compaction).
 
         Emitted only when adaptive (token-based) compaction is active, since
@@ -476,9 +506,9 @@ class PromptBuilder:
         compaction is off.
         """
         compaction = config.context.compaction
-        if not getattr(compaction, "enabled", False):
+        if not compaction.enabled:
             return ""
-        keep_recent = getattr(compaction, "protected_recent_messages", 8)
+        keep_recent = compaction.protected_recent_messages
         return Template(COMPACTION_SECTION).safe_substitute(keep_recent=str(keep_recent))
 
     @staticmethod

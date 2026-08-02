@@ -24,7 +24,9 @@ from mote.product.inference.daemon.lifecycle import SharedDaemonLifecycle
 from mote.product.inference.daemon.operations_audit import SharedOperationsAudit
 from mote.product.inference.daemon.security import SharedHandshakeAuthority
 from mote.product.inference.security.wire_permit import Ed25519WirePermitVerifier
+from mote.runtime.clock import SystemClock
 from mote.runtime.inference.command_runtime import EmbeddedServiceCommandRuntime
+from mote.runtime.inference.epochs import ExecutionEpochAuthority
 from mote.runtime.inference.generation import GatewayGenerationOwner
 from mote.runtime.inference.governance import CredentialHealthAuthority, ProviderQuotaAuthority
 from mote.runtime.inference.runtime import EmbeddedInferenceRuntime
@@ -67,13 +69,14 @@ class SharedDaemonApplication:
             busy_timeout_seconds=busy_timeout_seconds,
         )
         session_receipts = SQLiteSessionReceiptStore(receipts)
-        usage = SQLiteUsageLedger(receipts)
+        usage = SQLiteUsageLedger(receipts, clock_source=SystemClock())
         reconciliation = SQLiteReconciliationAuthority(receipts)
         generations = GatewayGenerationOwner()
         verifier = Ed25519WirePermitVerifier({})
         quota = ProviderQuotaAuthority()
         health = CredentialHealthAuthority()
-        epoch = lambda: (0, 0)
+        epoch_authority = ExecutionEpochAuthority()
+        epoch = epoch_authority.pair
         audience = f"shared/{socket_generation}/model/{tenant_id}"
         runtime_limits = {
             "queue_capacity": queue_capacity,
@@ -140,6 +143,7 @@ class SharedDaemonApplication:
         lifecycle = SharedDaemonLifecycle(
             persistence=receipts,
             generations=generations,
+            epochs=epoch_authority,
             hard_min_free_bytes=hard_min_free_bytes,
         )
         backend = SharedEmbeddedExecutionBackend(
@@ -150,6 +154,8 @@ class SharedDaemonApplication:
             receipts=receipts,
             session_receipts=session_receipts,
             events=receipts,
+            owners=receipts,
+            epoch_provider=epoch,
         )
         authority = SharedHandshakeAuthority(
             socket_generation=socket_generation,
@@ -169,6 +175,7 @@ class SharedDaemonApplication:
         self._usage = usage
         self._receipts = receipts
         self._reconciliation = reconciliation
+        self._epoch_authority = epoch_authority
         self._operations_audit = SharedOperationsAudit(
             database_path.with_suffix(database_path.suffix + ".operations-audit.jsonl")
         )
@@ -223,6 +230,8 @@ class SharedDaemonApplication:
             raise ValueError("Shared daemon online backup consistency must be crash_consistent")
         if not destination.is_absolute():
             raise ValueError("backup destination must be absolute")
+        self._epoch_authority.replace(await self._receipts.advance_backup_epoch())
+        self._lifecycle.refresh_epochs()
         await self._receipts.backup_to(destination)
         metadata = await self._receipts.describe_backup(destination)
         await self._operations_audit.record(

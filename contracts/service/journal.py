@@ -8,7 +8,13 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mote.contracts.model.failover import AttemptBudget, AttemptState, FailoverDecision, FailureDisposition
-from mote.contracts.service.models import ServiceCallState, ServiceExecutionSemantics, ServiceReceipt, ServiceResponse
+from mote.contracts.service.models import (
+    HostedServicePayload,
+    ServiceCallState,
+    ServiceExecutionSemantics,
+    ServiceReceipt,
+    ServiceResponse,
+)
 
 
 class _FrozenRecord(BaseModel):
@@ -17,11 +23,12 @@ class _FrozenRecord(BaseModel):
 
 class ServiceCallPlannedRecord(_FrozenRecord):
     kind: Literal["service_call_planned"] = "service_call_planned"
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     service_call_id: str = Field(min_length=1)
     plan_id: str = Field(min_length=1)
     route_id: str = Field(min_length=1)
     capability: str = Field(min_length=1)
+    payload: HostedServicePayload
     config_revision: str = Field(min_length=1)
     endpoint_ids: tuple[str, ...] = Field(min_length=1)
     budget: AttemptBudget
@@ -54,6 +61,16 @@ class ServiceReceiptAcceptedRecord(_FrozenRecord):
     attempt_id: str = Field(min_length=1)
     receipt: ServiceReceipt
     poll_ordinal: int = Field(default=0, ge=0)
+    occurred_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ServiceCallSuspendedRecord(_FrozenRecord):
+    kind: Literal["service_call_suspended"] = "service_call_suspended"
+    schema_version: Literal[1] = 1
+    service_call_id: str = Field(min_length=1)
+    attempt_id: str = Field(min_length=1)
+    reason: Literal["deadline"] = "deadline"
+    resume_generation: int = Field(ge=0)
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -114,7 +131,11 @@ class ServiceCallFinishedRecord(_FrozenRecord):
 
     @model_validator(mode="after")
     def _validate_outcome(self) -> "ServiceCallFinishedRecord":
-        if self.state in {ServiceCallState.PLANNED, ServiceCallState.RUNNING}:
+        if self.state in {
+            ServiceCallState.PLANNED,
+            ServiceCallState.RUNNING,
+            ServiceCallState.WAITING_REMOTE,
+        }:
             raise ValueError("service call finish requires a terminal state")
         success_fields = (
             self.selected_endpoint_id,
@@ -140,6 +161,7 @@ ServiceCallJournalRecord = Annotated[
         ServiceCallPlannedRecord,
         ServiceAttemptStartedRecord,
         ServiceReceiptAcceptedRecord,
+        ServiceCallSuspendedRecord,
         ServiceAttemptFinishedRecord,
         ServiceDecisionRecord,
         ServiceCallFinishedRecord,
@@ -155,6 +177,7 @@ class ServiceCallRecovery(_FrozenRecord):
     plans: tuple[ServiceCallPlannedRecord, ...]
     attempt_starts: tuple[ServiceAttemptStartedRecord, ...] = ()
     receipts: tuple[ServiceReceiptAcceptedRecord, ...] = ()
+    suspensions: tuple[ServiceCallSuspendedRecord, ...] = ()
     attempt_finishes: tuple[ServiceAttemptFinishedRecord, ...] = ()
     decisions: tuple[ServiceDecisionRecord, ...] = ()
     terminal: ServiceCallFinishedRecord | None = None
@@ -167,6 +190,7 @@ __all__ = [
     "ServiceCallJournalRecord",
     "ServiceCallPlannedRecord",
     "ServiceCallRecovery",
+    "ServiceCallSuspendedRecord",
     "ServiceDecisionRecord",
     "ServiceReceiptAcceptedRecord",
 ]

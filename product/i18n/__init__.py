@@ -11,8 +11,9 @@ The public surface for localising the CLI's human-facing text (``cli/view`` +
     t(K.SUMMARY_READ_LINES, count=1024)
 
 Importing this package registers the bundled zh + en catalogs as a side effect.
-Model-facing text is deliberately NOT localised here — see ``common/text/*``.
+Model-facing text is deliberately not localised by this Product presentation package.
 """
+
 from __future__ import annotations
 
 # Registers the bundled catalogs (zh + en) into the runtime as an import side effect.

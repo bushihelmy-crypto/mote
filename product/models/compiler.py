@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from typing import Mapping, Protocol
 
 from mote.contracts.model.execution_policy import EndpointExecutionPolicy
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.profile import profile_for
 from mote.contracts.model.topology import (
     DefaultRoute,
-    EndpointCapabilities,
+    EndpointCapabilityDeclaration,
     FailoverGroupTopology,
     ModelEndpointTopology,
     ModelTopology,
@@ -35,6 +36,52 @@ _CONTEXT_WINDOWS = {
     "gpt-4": 128_000,
     "gpt-5": 400_000,
 }
+
+_GENERATE_TRANSPORTS = frozenset(
+    {
+        "anthropic",
+        "anthropic_messages",
+        "bedrock",
+        "aws_bedrock",
+        "google",
+        "gemini",
+        "google_generate_content",
+        "vertex",
+        "openai",
+        "openai_chat",
+        "openai_responses",
+        "azure",
+        "openrouter",
+        "vllm",
+        "xai",
+    }
+)
+_OPENAI_FINITE_TRANSPORTS = frozenset(
+    {"openai", "openai_chat", "openai_responses", "azure", "openrouter", "vllm", "xai"}
+)
+_GOOGLE_FINITE_TRANSPORTS = frozenset({"google", "gemini", "google_generate_content", "vertex"})
+
+
+def supported_operations_for_transport(transport: str) -> frozenset[ModelOperation]:
+    """Return the exact operation set backed by Product transport factories."""
+    normalized = transport.lower()
+    operations: set[ModelOperation] = set()
+    if normalized in _GENERATE_TRANSPORTS:
+        operations.add(ModelOperation.GENERATE)
+    if normalized in _OPENAI_FINITE_TRANSPORTS:
+        operations.update(
+            {
+                ModelOperation.EMBEDDING,
+                ModelOperation.IMAGE_GENERATION,
+                ModelOperation.SPEECH,
+                ModelOperation.TRANSCRIPTION,
+            }
+        )
+    elif normalized in _GOOGLE_FINITE_TRANSPORTS:
+        operations.update({ModelOperation.EMBEDDING, ModelOperation.IMAGE_GENERATION})
+    if not operations:
+        raise ValueError(f"unsupported model transport {transport!r}")
+    return frozenset(operations)
 
 
 def context_tokens_for_model(model: str | None) -> int | None:
@@ -69,11 +116,9 @@ class CredentialSourceDescriptor:
 
 
 class CredentialSourceCatalog(Protocol):
-    def describe(self, source_ids: tuple[str, ...]) -> tuple[CredentialSourceDescriptor, ...]:
-        ...
+    def describe(self, source_ids: tuple[str, ...]) -> tuple[CredentialSourceDescriptor, ...]: ...
 
-    async def create_handle(self, slot_id: str, endpoint_id: str, source_id: str) -> SecretHandle:
-        ...
+    async def create_handle(self, slot_id: str, endpoint_id: str, source_id: str) -> SecretHandle: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +159,7 @@ def _transport(endpoint: ProductEndpointInput) -> str:
 def _capabilities(
     endpoint: ProductEndpointInput,
     explicit: ProductEndpointCapabilitiesInput | None,
-) -> EndpointCapabilities:
+) -> EndpointCapabilityDeclaration:
     profile = profile_for(endpoint.model)
     inferred_context_tokens = context_tokens_for_model(endpoint.model)
     known = inferred_context_tokens is not None
@@ -141,7 +186,20 @@ def _capabilities(
     context_tokens = getattr(explicit, "context_tokens", None) if explicit is not None else None
     if context_tokens is None:
         context_tokens = inferred_context_tokens or 0
-    return EndpointCapabilities(
+    adapter_operations = supported_operations_for_transport(_transport(endpoint))
+    declared_operations = (
+        explicit.supported_operations
+        if explicit is not None and explicit.supported_operations is not None
+        else adapter_operations
+    )
+    unsupported = declared_operations - adapter_operations
+    if unsupported:
+        raise ValueError(
+            "endpoint declares operations without a Product transport adapter: "
+            f"{sorted(operation.value for operation in unsupported)!r}"
+        )
+    return EndpointCapabilityDeclaration(
+        supported_operations=declared_operations,
         supports_tools=choose("supports_tools", True),
         supports_native_schema=choose("supports_native_schema", profile.supports_native_structured_output),
         supports_server_web_search=choose("supports_server_web_search", profile.supports_web_search),
@@ -332,4 +390,5 @@ __all__ = [
     "PublicModelGenerationPlan",
     "compile_model_generation",
     "prepare_model_generation",
+    "supported_operations_for_transport",
 ]

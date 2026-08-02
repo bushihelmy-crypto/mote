@@ -51,6 +51,8 @@ def test_shared_composition_fences_gateway_and_drains() -> None:
             runtime_generation_id=RuntimeGenerationId("runtime-one"),
             executor=executor,
             generation=generation,
+            gateway_decorator=None,
+            reuse_key="runtime-one",
         )
         lease = await handle.acquire()
         assert lease.runtime_generation_id == RuntimeGenerationId("runtime-one")

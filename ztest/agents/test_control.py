@@ -4,10 +4,14 @@
 
 import asyncio
 import types
+import uuid
 
 import pytest
 
+from mote.contracts.agent.delivery import AgentDeliveryState
+from mote.contracts.agent.errors import AgentLimitReached, AgentNotFound, AgentNotKnown
 from mote.contracts.conversation import MessageQueue, UserMessage
+from mote.contracts.ports.agent.control import ChildReleaseDisposition
 from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
 from mote.orchestration.agents.control import AgentControl, format_completion_notification
 from mote.orchestration.agents.identity.path import AgentPath
@@ -15,8 +19,8 @@ from mote.orchestration.agents.identity.registry import AgentMetadata
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime, AgentStatus
 from mote.orchestration.agents.messaging.mailbox import DeliveryMode, InterAgentCommunication
 from mote.orchestration.agents.residency.store import ResidencyStore
-from mote.runtime.errors import AgentLimitReached, AgentNotFound, AgentNotKnown
-from mote.runtime.events import TelemetryBinding
+from mote.runtime.control.leases import InMemoryLeaseCoordinator
+from mote.runtime.events import AllTelemetryBinding
 
 
 class FakeRole:
@@ -32,7 +36,7 @@ class FakeRole:
     def bind_agent_control(self, control):
         self.agent_control = control
 
-    def spawn_cost_tracker(self):
+    def spawn_cost_attribution(self):
         return None
 
     async def run(self, with_message=None):
@@ -56,10 +60,6 @@ class FakeRole:
         child.provision_unparented_spawn(None)
 
 
-def fake_role_loader(role_dump):
-    return FakeRole(role_dump.get("session_id", "?"))
-
-
 def make_runtime(session_id, *, status=AgentStatus.IDLE):
     rt = AgentRuntime(FakeRole(session_id))
     rt.status = status
@@ -67,12 +67,15 @@ def make_runtime(session_id, *, status=AgentStatus.IDLE):
 
 
 def make_control(tmp_path, **kwargs):
+    leases = InMemoryLeaseCoordinator()
     return AgentControl(
         store=ResidencyStore(
             base_dir=str(tmp_path / "residency"),
             sessions_base_dir=str(tmp_path / "sessions"),
+            lease_coordinator=leases,
         ),
-        role_loader=fake_role_loader,
+        residency_lease_coordinator=leases,
+        lineage_path=tmp_path / "agent-lineage.json",
         **kwargs,
     )
 
@@ -110,6 +113,7 @@ async def test_send_input_trigger_runs_turn(control):
     turns = await control.run_ready_turns(1)
     assert turns == 1
     assert rt.role.observed_turns == [["hello"]]
+    assert {record.state for record in control._delivery_store.records()} == {AgentDeliveryState.ACKED}
 
 
 @pytest.mark.asyncio
@@ -131,7 +135,7 @@ def test_send_input_parks_when_execution_cap_exhausted(tmp_path):
     # A trigger-turn delivery that arrives while the execution cap is exhausted
     # is parked (never raises, never drops): the mailbox stays empty until a
     # flush fulfils it once capacity frees up.
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_concurrent_turns=1)
     rt = make_runtime("a")
     control.add_agent(rt)
     guard = control.limiter.guard()  # occupy the single execution slot
@@ -148,7 +152,7 @@ def test_send_input_parks_when_execution_cap_exhausted(tmp_path):
 async def test_parked_execution_capped_delivery_flushed(tmp_path):
     # The parked item from an exhausted execution cap is fulfilled by a flush
     # once the slot frees.
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_concurrent_turns=1)
     rt = make_runtime("a")
     control.add_agent(rt)
     guard = control.limiter.guard()
@@ -286,16 +290,14 @@ class _CaptureSub:
 
 
 async def _subscribe_capture(control, cap):
-    return await control.telemetry.subscribe(
-        TelemetryBinding(
-            TelemetrySubscriptionSpec(
-                identity=TelemetryIdentity("mote.test.agent_lifecycle_capture"),
-                capacity=32,
-                overflow=TelemetryOverflow.DROP_NEWEST,
-            ),
-            cap,
-            cap,
-        )
+    return await control.telemetry.subscribe_all(
+        TelemetrySubscriptionSpec(
+            identity=TelemetryIdentity("mote.test.agent_lifecycle_capture"),
+            capacity=32,
+            overflow=TelemetryOverflow.DROP_NEWEST,
+        ),
+        cap,
+        cap,
     )
 
 
@@ -333,11 +335,14 @@ class _TestBuilder:
         self._factory = factory
 
     def build(self, request: AgentConstructionRequest):
-        return self._factory(request.spawn_context)
+        role = self._factory(request.spawn_context)
+        role._session_id = request.logical_agent_id
+        return role
 
 
 def SpawnSpec(*, role_factory, **kwargs):
     return SpawnPlan(
+        request_id=kwargs.pop("request_id", uuid.uuid4().hex),
         definition=SpawnableAgentDefinition(
             name=kwargs.get("agent_role") or kwargs.get("nickname") or "test",
             aliases=(),
@@ -385,7 +390,7 @@ class SpawnRole:
         self._services_owned = owned
         self._context = services.context
 
-    def spawn_cost_tracker(self):
+    def spawn_cost_attribution(self):
         return getattr(getattr(self, "_context", None), "cost_manager", None)
 
     def build_child_spawn_context(self, *, parent_id, agent_path):
@@ -395,7 +400,6 @@ class SpawnRole:
             parent_id=parent_id,
             agent_path=agent_path,
             config=getattr(getattr(self, "_context", None), "config", None),
-            parent_cost_tracker=self.spawn_cost_tracker(),
             parent_session_id=parent_id or "",
         )
 
@@ -470,7 +474,7 @@ async def test_spawn_policy_extension_denies_before_any_reservation(tmp_path):
 
 @pytest.mark.asyncio
 async def test_spawn_agent_ephemeral_not_in_scheduler_but_occupies_cap(tmp_path):
-    control = make_control(tmp_path, max_agents=2)
+    control = make_control(tmp_path, max_resident_incarnations=2)
     h1 = await control.spawn_agent(_spec())
     # EPHEMERAL children are run inline by the caller, not the scheduler.
     assert control.scheduler.get_runtime(h1.session_id) is None
@@ -492,7 +496,7 @@ async def test_spawn_agent_managed_enters_scheduler(control):
 
 @pytest.mark.asyncio
 async def test_spawn_agent_factory_failure_rolls_back(tmp_path):
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_resident_incarnations=1)
 
     def boom(ctx):
         raise RuntimeError("factory exploded")
@@ -552,7 +556,7 @@ async def test_spawn_supervisor_failure_rolls_back_before_publication(control, m
 async def test_spawn_cap_enforced_by_residency(tmp_path):
     # cap=2; two MANAGED residents that are IDLE (non-final → not evictable),
     # so the third spawn finds no room and is refused.
-    control = make_control(tmp_path, max_agents=2)
+    control = make_control(tmp_path, max_resident_incarnations=2)
     await control.spawn_agent(_spec(lifecycle=Lifecycle.MANAGED))
     await control.spawn_agent(_spec(lifecycle=Lifecycle.MANAGED))
     with pytest.raises(AgentLimitReached):
@@ -561,7 +565,7 @@ async def test_spawn_cap_enforced_by_residency(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ephemeral_aclose_frees_live_slot(tmp_path):
-    control = make_control(tmp_path, max_agents=2)
+    control = make_control(tmp_path, max_resident_incarnations=2)
     h1 = await control.spawn_agent(_spec())
     await control.spawn_agent(_spec())
     with pytest.raises(AgentLimitReached):
@@ -574,8 +578,25 @@ async def test_ephemeral_aclose_frees_live_slot(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_logical_terminal_releases_only_logical_capacity(tmp_path):
+    control = make_control(
+        tmp_path,
+        max_logical_agents=1,
+        max_resident_incarnations=2,
+        max_concurrent_turns=2,
+    )
+    first = await control.spawn_agent(_spec())
+    with pytest.raises(AgentLimitReached, match="logical Agent capacity"):
+        await control.spawn_agent(_spec())
+    assert control.limiter.active == 0
+    await first.aclose()
+    second = await control.spawn_agent(_spec())
+    await second.aclose()
+
+
+@pytest.mark.asyncio
 async def test_managed_eviction_frees_slot_but_keeps_identity(tmp_path):
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_resident_incarnations=1)
     h1 = await control.spawn_agent(_spec(nickname="first", lifecycle=Lifecycle.MANAGED))
     # make it unloadable: final status + empty mailbox/buffer (idle leaf)
     h1.runtime.status = AgentStatus.COMPLETED
@@ -591,11 +612,37 @@ async def test_managed_eviction_frees_slot_but_keeps_identity(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_managed_release_keeps_capacity_until_cleanup_settles(tmp_path, monkeypatch):
+    control = make_control(tmp_path, max_resident_incarnations=1)
+    handle = await control.spawn_agent(_spec(lifecycle=Lifecycle.MANAGED))
+    role = handle.runtime.role
+    original_cleanup = role.cleanup
+
+    async def failed_cleanup():
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(role, "cleanup", failed_cleanup)
+    failed = await control.release_child(handle.session_id)
+    assert failed.disposition is ChildReleaseDisposition.CLEANUP_FAILED
+    assert control.get_runtime(handle.session_id) is not None
+    assert control.residency.residents() == [handle.session_id]
+    with pytest.raises(AgentLimitReached):
+        await control.spawn_agent(_spec(lifecycle=Lifecycle.MANAGED))
+
+    monkeypatch.setattr(role, "cleanup", original_cleanup)
+    settled = await control.release_child(handle.session_id)
+    assert settled.disposition is ChildReleaseDisposition.SETTLED
+    assert control.get_runtime(handle.session_id) is None
+    replacement = await control.spawn_agent(_spec(lifecycle=Lifecycle.MANAGED))
+    assert replacement is not None
+
+
+@pytest.mark.asyncio
 async def test_rehydrate_at_hard_cap_parks_then_back_pressures(tmp_path):
     # cap=1; one busy (RUNNING, non-evictable) resident + one evicted-to-disk
     # agent. A sync delivery to the evicted agent can't make room → it PARKS
     # (never raises, never drops) and stays parked while the resident is busy.
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_resident_incarnations=1)
     # Evict an agent to disk directly.
     role = FakeRole("evicted")
     rt = AgentRuntime(role)
@@ -625,7 +672,7 @@ async def test_sustained_back_pressure_emits_lifecycle_event(tmp_path):
     # parked the whole time).
     from mote.orchestration.agents.control import _DELIVERY_STUCK_FLUSHES
 
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_resident_incarnations=1)
     await control.store.materialize(AgentRuntime(FakeRole("evicted")))
     busy = make_runtime("busy", status=AgentStatus.RUNNING)  # never evictable
     control.add_agent(busy)
@@ -655,7 +702,7 @@ async def test_back_pressure_event_resets_after_delivery(tmp_path):
     # parked delivery starts its own silent grace period again.
     from mote.orchestration.agents.control import _DELIVERY_STUCK_FLUSHES
 
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_resident_incarnations=1)
     await control.store.materialize(AgentRuntime(FakeRole("evicted")))
     busy = make_runtime("busy", status=AgentStatus.RUNNING)
     control.add_agent(busy)
@@ -674,7 +721,7 @@ async def test_back_pressure_event_resets_after_delivery(tmp_path):
 async def test_rehydrate_at_hard_cap_fulfilled_when_resident_idle(tmp_path):
     # Same setup, but once the resident becomes evictable (final + idle) the
     # next flush awaits an LRU eviction, rehydrates the target, and delivers.
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_resident_incarnations=1)
     role = FakeRole("evicted")
     await control.store.materialize(AgentRuntime(role))
     busy = make_runtime("busy", status=AgentStatus.RUNNING)
@@ -700,7 +747,7 @@ async def test_rehydrate_at_hard_cap_fulfilled_when_resident_idle(tmp_path):
 async def test_parked_delivery_fulfilled_by_run_boundary_flush(tmp_path):
     # End-to-end: a delivery parked behind a busy resident is fulfilled by the
     # scheduler's per-round boundary flush in run(k) — no direct flush call.
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_resident_incarnations=1)
     role = FakeRole("evicted")
     await control.store.materialize(AgentRuntime(role))
     # An idle (final) resident occupies the slot; it is evictable but no flush
@@ -722,14 +769,14 @@ async def test_parked_delivery_fulfilled_by_run_boundary_flush(tmp_path):
 async def test_release_child_clears_parked_deliveries(tmp_path):
     # A delivery parked for an agent is forgotten once that agent is released:
     # the target is gone for good, so its parked mail must not linger.
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_resident_incarnations=1)
     role = FakeRole("evicted")
     await control.store.materialize(AgentRuntime(role))
     busy = make_runtime("busy", status=AgentStatus.RUNNING)
     control.add_agent(busy)
     control.send_input("evicted", UserMessage("wake"))
     assert control._pending.has_pending("evicted")
-    control.release_child("evicted")
+    await control.release_child("evicted")
     assert not control._pending.has_pending("evicted")
 
 
@@ -737,7 +784,7 @@ async def test_release_child_clears_parked_deliveries(tmp_path):
 async def test_parked_trigger_keeps_fleet_non_quiescent(tmp_path):
     # A trigger-turn delivery parked behind a busy resident is outstanding work:
     # the fleet must not report quiescent until it is fulfilled.
-    control = make_control(tmp_path, max_agents=1)
+    control = make_control(tmp_path, max_resident_incarnations=1)
     role = FakeRole("evicted")
     await control.store.materialize(AgentRuntime(role))
     busy = make_runtime("busy", status=AgentStatus.RUNNING)
@@ -747,7 +794,7 @@ async def test_parked_trigger_keeps_fleet_non_quiescent(tmp_path):
     # parked trigger work → not quiescent even though no runtime is woken
     assert control.quiescent() is False
     # once it's released (target gone), the parked work clears → quiescent
-    control.release_child("evicted")
+    await control.release_child("evicted")
     assert control.quiescent() is True
 
 
@@ -799,7 +846,7 @@ async def test_managed_ttl_watchdog_noops_when_child_finishes_early(control):
     # crash, no spurious interrupt of an unrelated later agent).
     handle = await control.spawn_agent(_spec(lifecycle=Lifecycle.MANAGED, timeout_seconds=0.05))
     control.get_runtime(handle.session_id).status = AgentStatus.COMPLETED
-    control.release_child(handle.session_id)  # gone from _runtimes
+    await control.release_child(handle.session_id)  # gone from _runtimes
     await asyncio.sleep(0.09)  # outlast the TTL; watchdog must not raise
     # nothing to assert beyond "no exception" — the child is already released.
     assert control.get_runtime(handle.session_id) is None
@@ -1175,7 +1222,7 @@ async def test_release_child_clears_comm_graph(control):
     handle = await control.spawn_agent(_spec(nickname="worker"))
     sid = handle.session_id
     control.comm_graph.join_channel("alerts", sid)
-    control.release_child(sid)
+    await control.release_child(sid)
     assert control.comm_graph.path_for(sid) is None
     assert control.comm_graph.channel_members("alerts") == []
 

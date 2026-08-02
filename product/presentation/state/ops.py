@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, Optional, Protocol, Tuple, TypeVar
 
+from mote.contracts.activity import ActivityKind, ActivityNodeState, ActivityOutcome, ActivityTopology
 from mote.product.presentation.events import (
     ApprovalRequested,
     ArtifactBlock,
@@ -286,9 +287,9 @@ class OpenActivity(TranscriptOp):
 
     kind: ClassVar[str] = "open_activity"
     scope: Tuple[Any, ...] = ()
-    activity_kind: str = ""
+    activity_kind: ActivityKind = ActivityKind.GRAPH
     label: str = ""
-    topology: Optional[dict[str, Any]] = None
+    topology: ActivityTopology | None = None
 
     def surface_args(self) -> Tuple[Any, ...]:
         return (self.scope, self.activity_kind, self.label, self.topology)
@@ -339,8 +340,8 @@ class CloseActivity(TranscriptOp):
 
     kind: ClassVar[str] = "close_activity"
     scope: Tuple[Any, ...] = ()
-    outcome: str = "success"
-    node_states: Tuple[Any, ...] = ()
+    outcome: ActivityOutcome = ActivityOutcome.SUCCESS
+    node_states: tuple[ActivityNodeState, ...] = ()
     summary: str = ""
 
     def surface_args(self) -> Tuple[Any, ...]:

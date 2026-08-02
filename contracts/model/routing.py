@@ -16,7 +16,8 @@ from pydantic import (
     field_validator,
 )
 
-from mote.contracts.model.invocation import ModelOperation, RequestRequirements, TraceContext
+from mote.contracts.model.invocation import RequestRequirements, TraceContext
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.topology import SemanticRoute
 from mote.contracts.model.topology_codec import decode_route_id, encode_route_id
 
@@ -47,6 +48,7 @@ class RoutingDegradedReason(StrEnum):
 
 
 class RouteCapabilities(_FrozenContract):
+    supported_operations: frozenset[ModelOperation] = frozenset({ModelOperation.GENERATE})
     supports_tools: bool = False
     supports_native_schema: bool = False
     supports_server_web_search: bool = False

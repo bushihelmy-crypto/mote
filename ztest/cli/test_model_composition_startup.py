@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from mote.contracts.runtime.application import ApplicationState
@@ -22,14 +20,16 @@ def _config(api_key: str | None = "test-secret") -> Config:
     )
 
 
-def test_cli_installs_initial_generation_before_engine_is_returned(tmp_path) -> None:
-    engine = build_engine(config=_config(), cwd=str(tmp_path))
+@pytest.mark.asyncio
+async def test_cli_installs_initial_generation_before_engine_is_returned(tmp_path) -> None:
+    engine = await build_engine(config=_config(), cwd=str(tmp_path))
     composition = engine.services.application_composition
     assert composition is not None
     assert composition.state is ApplicationState.ACTIVE
-    asyncio.run(engine.aclose())
+    await engine.aclose()
 
 
-def test_cli_initial_generation_failure_does_not_return_engine(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_cli_initial_generation_failure_does_not_return_engine(tmp_path) -> None:
     with pytest.raises(ValueError, match="has no credential"):
-        build_engine(config=_config(None), cwd=str(tmp_path))
+        await build_engine(config=_config(None), cwd=str(tmp_path))

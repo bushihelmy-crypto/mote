@@ -34,16 +34,18 @@ from __future__ import annotations
 import asyncio
 import re
 from contextlib import asynccontextmanager
+from contextvars import Token
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, TypeVar, cast
 from uuid import uuid4
 
 from mote.contracts.artifact import ArtifactRetention
 from mote.contracts.ports.artifact.store import ArtifactPublicationOutbox
 from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.contracts.runtime.application import ApplicationLeasePort, RuntimeCompositionLeasePort
 from mote.kernel.execution import ExecutionEngine
 from mote.runtime.agent.capabilities import RoleCapabilities
 from mote.runtime.agent.component_accessors import RoleComponentAccessors
-from mote.runtime.agent.component_graph import ComponentGraph, ComponentKey, ComponentSpec
+from mote.runtime.agent.component_graph import BuildContext, ComponentGraph, ComponentKey, ComponentSpec
 from mote.runtime.agent.component_keys import (
     ARTIFACT_REPOSITORY_BUNDLE,
     BACKGROUND_POOL,
@@ -69,6 +71,10 @@ from mote.runtime.agent.component_keys import (
     WORKSPACE_STORE,
 )
 from mote.runtime.agent.components import (
+    ContextComponentInputs,
+    IntegrationComponentInputs,
+    PolicyComponentInputs,
+    SessionComponentInputs,
     WatchingCallbacks,
     action_component_specs,
     cognition_component_specs,
@@ -81,12 +87,13 @@ from mote.runtime.agent.components import (
     session_event_subscribers,
     watching_component_specs,
 )
+from mote.runtime.agent.components.action import ActionComponentInputs
 from mote.runtime.agent.role_state import RoleStateController
 from mote.runtime.agent.runtime_maintenance import RuntimeMaintenance
 from mote.runtime.agent.session_manager import RoleSessionManager
 from mote.runtime.events.log_subscriber import LogSubscriber
 from mote.runtime.events.telemetry import TelemetryManifest, TelemetryRuntime
-from mote.runtime.interactive import RuntimeHost
+from mote.runtime.interactive.host import RuntimeHost
 from mote.runtime.models.composition_context import bind_runtime_composition, reset_runtime_composition
 from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.session.log import SessionLog
@@ -110,6 +117,16 @@ def _telemetry_spec(handler: object) -> TelemetrySubscriptionSpec:
     )
 
 
+def _build_telemetry() -> TelemetryRuntime:
+    """Build the canonical per-Role telemetry runtime without activation."""
+
+    return TelemetryRuntime(TelemetryManifest(()))
+
+
+def _build_state_controller(ctx: "BuildContext[Role, ComponentsState]") -> RoleStateController:
+    return RoleStateController(ctx.role.state)
+
+
 class ComponentsState:
     """Mutable per-Role extras that are not themselves graph components.
 
@@ -130,9 +147,9 @@ class ComponentsState:
         self.runtime_projections_reconciled = False
         self.artifact_reconciliation_lock = asyncio.Lock()
         self.runtime_projection_reconciliation_lock = asyncio.Lock()
-        self.application_lease = None
-        self.runtime_composition_lease = None
-        self.runtime_composition_token = None
+        self.application_lease: ApplicationLeasePort | None = None
+        self.runtime_composition_lease: RuntimeCompositionLeasePort | None = None
+        self.runtime_composition_token: Token[object | None] | None = None
 
 
 OutputT = TypeVar("OutputT")
@@ -384,6 +401,9 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
         graph as data; the resolver (:class:`ComponentGraph`) turns it into lazy,
         cycle-checked access.
         """
+        projection = self._role.wiring.dependencies.component_projection
+        if projection is None:
+            raise RuntimeError("Agent composition requires a Product component projection")
         return [
             # --- leaves (read no sibling) -----------------------------------
             # Behaviour holders over the Role: the state controller reads only the
@@ -391,7 +411,7 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
             # Registered as leaves so the Role's ``_state_ctl`` / ``_capabilities``
             # delegators resolve them through the one graph like every other
             # collaborator (Role.__init__ builds nothing but this holder).
-            ComponentSpec(STATE_CTL, lambda ctx: RoleStateController(ctx.role.state)),
+            ComponentSpec(STATE_CTL, _build_state_controller),
             ComponentSpec(CAPABILITIES, lambda ctx: RoleCapabilities(ctx.role)),
             ComponentSpec(SESSION_MANAGER, lambda ctx: RoleSessionManager(ctx.role)),
             ComponentSpec(
@@ -405,17 +425,20 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
                     durability_observer=ctx.dep(TELEMETRY).emit_sync,
                 ),
             ),
-            *action_component_specs(self._role.wiring.dependencies.background_task_pool_builder),
-            *session_component_specs(),
+            *action_component_specs(inputs=projection.action()),
+            *session_component_specs(projection.session()),
             ComponentSpec(
                 TELEMETRY,
-                lambda ctx: TelemetryRuntime(TelemetryManifest(())),
+                lambda ctx: _build_telemetry(),
             ),
-            *integration_component_specs(),
+            *integration_component_specs(projection.integrations()),
             event_fabric_component_spec(),
-            *policy_component_specs(),
-            *context_component_specs(),
-            *cognition_component_specs(self._execution_engine_factory_key),
+            *policy_component_specs(projection.policy()),
+            *context_component_specs(projection.context()),
+            *cognition_component_specs(
+                self._execution_engine_factory_key,
+                inputs=projection.cognition(),
+            ),
             # --- per-turn factories (cached factory, fresh instance per turn) -
             # These resolve to a *callable* (not an instance): the factory reads
             # the ``*_kind`` schema knob at call-time and builds a fresh instance
@@ -431,7 +454,8 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
                     reload_mcp=self._maintenance.reload_mcp_on_change,
                     reindex_code_map=self._maintenance.reindex_code_map_on_change,
                     config_source_roots=self._maintenance.config_source_roots,
-                )
+                ),
+                projection.watching(),
             ),
         ]
 

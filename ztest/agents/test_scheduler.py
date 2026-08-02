@@ -11,6 +11,11 @@ from mote.contracts.conversation import MessageQueue, UserMessage
 from mote.orchestration.agents.execution.turn_scheduler import EventDrivenScheduler
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime, AgentStatus
 from mote.orchestration.agents.messaging.mailbox import DeliveryMode
+from mote.orchestration.agents.turn_queue.limiter import AgentExecutionLimiter
+from mote.orchestration.agents.turn_queue.scheduling import TurnSchedulingConfig
+from mote.orchestration.agents.turn_queue.store import DurableTurnQueueStore
+from mote.runtime.clock import SystemClock
+from mote.runtime.control.leases import InMemoryLeaseCoordinator
 
 
 class FakeRole:
@@ -189,3 +194,75 @@ async def test_persistent_driver_runs_turn_on_wake():
     finally:
         await sched.stop()
     assert rt.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_persistent_drivers_never_enter_more_turns_than_atomic_limit():
+    limiter = AgentExecutionLimiter()
+    limiter.initialize(1)
+    sched = EventDrivenScheduler(limiter=limiter)
+    a, b = make_runtime("a"), make_runtime("b")
+    entered: list[str] = []
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def block(role):
+        entered.append(role.session_id)
+        first_entered.set()
+        await release_first.wait()
+
+    a.role.on_run = block
+    b.role.on_run = block
+    sched.add_runtime(a)
+    sched.add_runtime(b)
+    sched.start()
+    try:
+        sched.notify("a", UserMessage("a"))
+        sched.notify("b", UserMessage("b"))
+        await first_entered.wait()
+        await asyncio.sleep(0)
+        assert len(entered) == 1
+        assert limiter.active == 1
+        release_first.set()
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if len(entered) == 2:
+                break
+        assert len(entered) == 2
+    finally:
+        release_first.set()
+        await sched.stop()
+    assert limiter.active == 0
+
+
+@pytest.mark.asyncio
+async def test_production_scheduler_executes_only_through_durable_claim(tmp_path):
+    leases = InMemoryLeaseCoordinator()
+    lease = leases.acquire("queue", "scheduler", 30.0)
+    store = DurableTurnQueueStore(
+        tmp_path / "turns.json",
+        queue_id="queue",
+        capacity=8,
+        lease_coordinator=leases,
+    )
+    limiter = AgentExecutionLimiter()
+    limiter.initialize(1)
+    clock = SystemClock()
+    scheduler = EventDrivenScheduler(
+        limiter=limiter,
+        durable_store=store,
+        durable_lease=lease,
+        scheduling_config=TurnSchedulingConfig(1),
+        now=clock.now,
+        process_instance_id="process",
+        root_owner_id="root-agent",
+    )
+    runtime = make_runtime()
+    scheduler.add_runtime(runtime)
+    assert scheduler.notify("s1", UserMessage("durable"))
+
+    assert await scheduler.run_ready_turns(1) == 1
+    item = store.load().items[0]
+    assert item.state.value == "succeeded"
+    assert item.identity.root_id == "root-agent"
+    assert runtime.role.observed_turns == [["durable"]]

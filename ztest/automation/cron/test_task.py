@@ -2,7 +2,17 @@
 # -*- coding: utf-8 -*-
 """Tests for the CronTask model + jitter config defaults."""
 
-from mote.orchestration.automation.cron.task import DEFAULT_CRON_JITTER_CONFIG, CronJitterConfig, CronTask
+from dataclasses import FrozenInstanceError, replace
+
+import pytest
+
+from mote.orchestration.automation.cron.task import (
+    DEFAULT_CRON_JITTER_CONFIG,
+    CronJitterConfig,
+    CronTask,
+    DurableCronTaskId,
+    SessionCronTaskId,
+)
 
 
 def test_new_mints_8_hex_id():
@@ -19,12 +29,29 @@ def test_new_defaults():
     assert task.last_fired_at is None
     assert task.agent_id is None
     assert task.target_session_id is None
+    assert task.revision == 0
+    assert type(task.id) is DurableCronTaskId
 
 
-def test_to_dict_omits_none_and_defaults():
+def test_to_dict_has_exact_canonical_shape():
     task = CronTask.new("* * * * *", "ping", 1000)
     d = task.to_dict()
-    assert d == {"id": task.id, "cron": "* * * * *", "prompt": "ping", "created_at": 1000}
+    assert d == {
+        "id": str(task.id),
+        "revision": 0,
+        "cron": "* * * * *",
+        "prompt": "ping",
+        "created_at": 1000,
+        "last_fired_at": None,
+        "recurring": False,
+        "permanent": False,
+        "agent_id": None,
+        "target_session_id": None,
+        "timezone_name": "UTC",
+        "misfire_policy": "fire_once",
+        "overlap_policy": "forbid",
+        "dst_policy": "earliest_fold_skip_gap",
+    }
 
 
 def test_to_dict_includes_set_fields():
@@ -36,13 +63,13 @@ def test_to_dict_includes_set_fields():
         agent_id="agt",
         target_session_id="sess",
     )
-    task.last_fired_at = 2000
+    task = replace(task, last_fired_at=2000)
     d = task.to_dict()
     assert d["recurring"] is True
     assert d["last_fired_at"] == 2000
     assert d["agent_id"] == "agt"
     assert d["target_session_id"] == "sess"
-    assert "permanent" not in d
+    assert d["permanent"] is False
 
 
 def test_round_trip():
@@ -54,7 +81,7 @@ def test_round_trip():
         permanent=True,
         target_session_id="root",
     )
-    task.last_fired_at = 67890
+    task = replace(task, last_fired_at=67890)
     restored = CronTask.from_dict(task.to_dict())
     # durable defaults True on disk read.
     assert restored.id == task.id
@@ -65,6 +92,21 @@ def test_round_trip():
     assert restored.recurring is True
     assert restored.permanent is True
     assert restored.target_session_id == "root"
+    assert type(restored.id) is DurableCronTaskId
+
+
+def test_session_task_has_distinct_identity_and_cannot_be_serialized():
+    task = CronTask.new("* * * * *", "ping", 1000, durable=False)
+    assert type(task.id) is SessionCronTaskId
+    with pytest.raises(ValueError, match="session-only"):
+        task.to_dict()
+
+
+def test_cron_task_snapshot_is_immutable() -> None:
+    task = CronTask.new("* * * * *", "prompt", 1)
+
+    with pytest.raises(FrozenInstanceError):
+        task.revision = 2
 
 
 def test_default_jitter_config_values():

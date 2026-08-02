@@ -41,7 +41,7 @@ from mote.runtime.fileops.candidate_discovery import CandidateDiscoveryService
 from mote.runtime.fileops.encoding import decode_text, editable_text
 from mote.runtime.fileops.journal import DurableFileOperationsJournal
 from mote.runtime.fileops.metadata_manifest import MAX_METADATA_MANIFEST_BYTES
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, FileMutationArtifactRepository
 from mote.runtime.fileops.mutation_factory import MutationFactory
 from mote.runtime.fileops.query_semantics import (
     CandidateDiscovery,
@@ -277,7 +277,7 @@ class EditPlanStore:
     def __init__(
         self,
         *,
-        artifacts: ArtifactRepository,
+        artifacts: FileMutationArtifactRepository,
         journal: DurableFileOperationsJournal,
         session_id: str,
     ) -> None:
@@ -359,7 +359,7 @@ class EditPlanner:
     def __init__(
         self,
         *,
-        artifacts: ArtifactRepository,
+        artifacts: FileMutationArtifactRepository,
         sources: TextSourceService,
         discovery: CandidateDiscoveryService,
         store: EditPlanStore,
@@ -869,7 +869,7 @@ def _plan_payload(**values) -> dict[str, Any]:
 def _plan_from_payload(
     payload: Any,
     manifest: ContentIdentity,
-    artifacts: ArtifactRepository,
+    artifacts: FileMutationArtifactRepository,
 ) -> EditPlan:
     if type(payload) is not dict or set(payload) != _MANIFEST_KEYS:
         raise EditPlanManifestError("edit plan fields are not canonical")
@@ -963,7 +963,7 @@ def _validate_plan_identity(plan: EditPlan) -> None:
 
 def _validate_plan_artifacts(
     plan: EditPlan,
-    artifacts: ArtifactRepository,
+    artifacts: FileMutationArtifactRepository,
 ) -> None:
     for source, mutation, fact in zip(
         plan.sources,

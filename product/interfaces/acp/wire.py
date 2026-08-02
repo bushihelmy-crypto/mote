@@ -22,7 +22,7 @@ Design notes
   ``{sessionId, update}`` and sends it as a ``session/update`` notification.
 * **Id correlation.** ACP keys streaming text by ``messageId`` (all chunks of one
   assistant message share it) and tool calls by ``toolCallId``. mote already
-  carries ``tool_use_id`` on tool events; for message blocks (no per-block id on
+  carries execution-owner invocation identity; for message blocks (no per-block id on
   the wire until completion) the mapper mints a stable per-session ``messageId``
   from a monotonic block counter. :class:`AcpWireState` holds that tiny
   correlation state so the mapper functions stay pure w.r.t. their inputs.
@@ -39,10 +39,13 @@ Design notes
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import List, Optional, Set
 
+from mote.contracts.async_work.codec import decode_async_work_observation, encode_async_work_observation
 from mote.product.presentation.events import events as ev
+from mote.product.presentation.wire_types import WireObject, to_wire_json
 
 # ── ACP ``sessionUpdate`` discriminators (snake_case per the v1 schema) ─────
 USER_MESSAGE_CHUNK = "user_message_chunk"
@@ -73,7 +76,7 @@ STATUS_FAILED = "failed"
 # Map a mote tool name → ACP ToolKind. The editor renders a per-kind icon +
 # affordance (a ``read`` shows a file peek, an ``edit`` shows a diff, an
 # ``execute`` shows a terminal). Unknown tools fall through to ``other``.
-_TOOL_KIND: Dict[str, str] = {
+_TOOL_KIND: dict[str, str] = {
     "Read": TOOL_KIND_READ,
     "Edit": TOOL_KIND_EDIT,
     "Write": TOOL_KIND_EDIT,
@@ -107,8 +110,8 @@ class AcpWireState:
     the monotonic block counter used to mint a stable ``messageId`` for an
     assistant message block (mote blocks carry no id on the wire until
     completion) and remembers the currently-open block id so ``delta`` chunks
-    reference the same message. Tool calls need no state — they carry
-    ``tool_use_id`` end-to-end. ``seen_tools`` tracks which ``toolCallId``s have
+    reference the same message. Tool calls need no state — they carry canonical
+    invocation identity. ``seen_tools`` tracks which ``toolCallId``s have
     had their initial ``tool_call`` announced so a completion emits a
     ``tool_call_update`` (partial) rather than re-announcing.
     """
@@ -144,31 +147,24 @@ BLOCK_DIFF = "diff"
 
 
 # ── ContentBlock builders (tagged by ``type``) ──────────────────────────────
-def text_block(text: str) -> Dict[str, Any]:
+def text_block(text: str) -> WireObject:
     """A ``text`` ContentBlock — the one block every ACP client must render."""
     return {"type": BLOCK_TEXT, "text": text}
 
 
-def _content_block(text: str) -> Dict[str, Any]:
+def _content_block(text: str) -> WireObject:
     """A ToolCallContent wrapper around a text block (editor call preview)."""
     return {"type": BLOCK_CONTENT, "content": text_block(text)}
 
 
-def _tool_id(e: Any, st: AcpWireState, *, prefix: str = "tool") -> str:
-    """The stable ``toolCallId`` for a tool-ish event.
+def _tool_id(e: ev.ToolCallStarted | ev.ToolCallCompleted | ev.FileDiffBlock) -> str:
+    """Project the invocation identity minted by the Tool execution owner."""
 
-    Prefer the end-to-end ``tool_use_id``; without one, mint a per-session id
-    from the block counter (NOT ``id(e)`` — a started event and its completion
-    are different objects, so ``id()`` would break start↔complete correlation).
-    """
-    if e.tool_use_id:
-        return e.tool_use_id
-    st._block_seq += 1
-    return f"{st.session_id}-{prefix}-{st._block_seq}"
+    return str(e.identity.invocation_id)
 
 
 def _promote_to_call(
-    update: Dict[str, Any],
+    update: WireObject,
     st: AcpWireState,
     *,
     title: str,
@@ -188,35 +184,38 @@ def _promote_to_call(
     update["kind"] = kind
     if status is not None:
         update["status"] = status
-    st.seen_tools.add(update["toolCallId"])
+    tool_call_id = update["toolCallId"]
+    if not isinstance(tool_call_id, str):
+        raise TypeError("ACP toolCallId must be a string")
+    st.seen_tools.add(tool_call_id)
 
 
-def _chunk(session_update: str, content: Dict[str, Any], message_id: Optional[str] = None) -> Dict[str, Any]:
+def _chunk(session_update: str, content: WireObject, message_id: Optional[str] = None) -> WireObject:
     """A ContentChunk update (user / agent / thought), optionally message-keyed."""
-    update: Dict[str, Any] = {"sessionUpdate": session_update, "content": content}
+    update: WireObject = {"sessionUpdate": session_update, "content": content}
     if message_id is not None:
         update["messageId"] = message_id
     return update
 
 
-def agent_text(text: str, message_id: Optional[str] = None) -> Dict[str, Any]:
+def agent_text(text: str, message_id: Optional[str] = None) -> WireObject:
     """An ``agent_message_chunk`` carrying a text block (the common fallback)."""
     return _chunk(AGENT_MESSAGE_CHUNK, text_block(text), message_id)
 
 
-def _on_output_snapshot(e: ev.OutputSnapshot, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_output_snapshot(e: ev.OutputSnapshot, st: AcpWireState) -> list[WireObject]:
     return [
         {
             "sessionUpdate": "mote_output_snapshot",
             "runId": e.run_id,
             "revision": e.revision,
             "schemaFingerprint": e.schema_fingerprint,
-            "value": e.value,
+            "value": to_wire_json(e.value),
         }
     ]
 
 
-def _on_output_snapshot_invalidated(e: ev.OutputSnapshotInvalidated, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_output_snapshot_invalidated(e: ev.OutputSnapshotInvalidated, st: AcpWireState) -> list[WireObject]:
     return [
         {
             "sessionUpdate": "mote_output_snapshot_invalidated",
@@ -227,7 +226,7 @@ def _on_output_snapshot_invalidated(e: ev.OutputSnapshotInvalidated, st: AcpWire
     ]
 
 
-def _on_output_committed(e: ev.OutputCommitted, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_output_committed(e: ev.OutputCommitted, st: AcpWireState) -> list[WireObject]:
     return [
         {
             "sessionUpdate": "mote_output_committed",
@@ -235,7 +234,7 @@ def _on_output_committed(e: ev.OutputCommitted, st: AcpWireState) -> List[Dict[s
             "runKind": e.run_kind,
             "contractId": e.contract_id,
             "schemaFingerprint": e.schema_fingerprint,
-            "value": e.value,
+            "value": to_wire_json(e.value),
         }
     ]
 
@@ -251,7 +250,7 @@ PERM_REJECT_ONCE = "reject_once"
 PERM_REJECT_ALWAYS = "reject_always"
 
 #: ACP PermissionOptionKind → mote ApprovalDecision.outcome.
-PERM_KIND_TO_OUTCOME: Dict[str, str] = {
+PERM_KIND_TO_OUTCOME: dict[str, str] = {
     PERM_ALLOW_ONCE: "accept",
     PERM_ALLOW_ALWAYS: "always_allow",
     PERM_REJECT_ONCE: "reject",
@@ -259,7 +258,7 @@ PERM_KIND_TO_OUTCOME: Dict[str, str] = {
 }
 
 
-def permission_options() -> List[Dict[str, Any]]:
+def permission_options() -> list[WireObject]:
     """The four ACP ``PermissionOption``s a gated tool call offers the client.
 
     Stable ``optionId``s (== the kind) so the port maps the chosen id straight
@@ -274,14 +273,14 @@ def permission_options() -> List[Dict[str, Any]]:
     ]
 
 
-def tool_call_update_for_permission(*, tool_call_id: str, tool_name: str = "", title: str = "") -> Dict[str, Any]:
+def tool_call_update_for_permission(*, tool_call_id: str, tool_name: str = "", title: str = "") -> WireObject:
     """The ``ToolCallUpdate`` a ``session/request_permission`` request carries.
 
     ACP's request embeds the tool call awaiting approval as a ``toolCall``
     (ToolCallUpdate shape: ``toolCallId`` + optional overrides). We surface the
     kind + title so the editor renders *which* call it is gating.
     """
-    update: Dict[str, Any] = {"toolCallId": tool_call_id, "status": STATUS_PENDING}
+    update: WireObject = {"toolCallId": tool_call_id, "status": STATUS_PENDING}
     if tool_name:
         update["kind"] = tool_kind_for(tool_name)
     if title:
@@ -289,7 +288,7 @@ def tool_call_update_for_permission(*, tool_call_id: str, tool_name: str = "", t
     return update
 
 
-def to_acp_updates(event: ev.ViewEvent, state: AcpWireState) -> List[Dict[str, Any]]:
+def to_acp_updates(event: ev.ViewEvent, state: AcpWireState) -> list[WireObject]:
     """Map one ``ViewEvent`` to zero-or-more ACP ``update`` dicts.
 
     Pure w.r.t. ``(event, state)``: the only mutation is ``state``'s message-id /
@@ -297,28 +296,27 @@ def to_acp_updates(event: ev.ViewEvent, state: AcpWireState) -> List[Dict[str, A
     tool_call-vs-tool_call_update distinction that mote's flat events don't
     carry). Unknown / display-only kinds → ``[]``.
     """
-    kind = getattr(event, "kind", None)
-    handler = _DISPATCH.get(kind) if kind else None
+    handler = _DISPATCH.get(event.kind)
     if handler is None:
         return []
     return handler(event, state)
 
 
 # ── per-kind handlers ───────────────────────────────────────────────────────
-def _on_message_started(e: ev.MessageBlockStarted, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_message_started(e: ev.MessageBlockStarted, st: AcpWireState) -> list[WireObject]:
     # Open a message id; ACP has no explicit "start" frame — the first chunk
     # carries the id. Nothing is emitted until content arrives.
     st.open_message()
     return []
 
 
-def _on_message_delta(e: ev.MessageBlockDelta, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_message_delta(e: ev.MessageBlockDelta, st: AcpWireState) -> list[WireObject]:
     if not e.text:
         return []
     return [agent_text(e.text, st.current_message())]
 
 
-def _on_message_completed(e: ev.MessageBlockCompleted, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_message_completed(e: ev.MessageBlockCompleted, st: AcpWireState) -> list[WireObject]:
     # If the block streamed, the deltas already carried the text; just close the
     # id. If it never streamed, emit the whole markdown as one chunk.
     if e.streamed:
@@ -331,16 +329,16 @@ def _on_message_completed(e: ev.MessageBlockCompleted, st: AcpWireState) -> List
     return [agent_text(e.markdown, mid)]
 
 
-def _on_reasoning_delta(e: ev.ReasoningDelta, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_reasoning_delta(e: ev.ReasoningDelta, st: AcpWireState) -> list[WireObject]:
     if not e.text:
         return []
     return [_chunk(AGENT_THOUGHT_CHUNK, text_block(e.text))]
 
 
-def _on_tool_started(e: ev.ToolCallStarted, st: AcpWireState) -> List[Dict[str, Any]]:
-    tool_call_id = _tool_id(e, st)
+def _on_tool_started(e: ev.ToolCallStarted, st: AcpWireState) -> list[WireObject]:
+    tool_call_id = _tool_id(e)
     st.seen_tools.add(tool_call_id)
-    call: Dict[str, Any] = {
+    call: WireObject = {
         "sessionUpdate": TOOL_CALL,
         "toolCallId": tool_call_id,
         "title": e.title or e.tool_name or "tool",
@@ -355,9 +353,9 @@ def _on_tool_started(e: ev.ToolCallStarted, st: AcpWireState) -> List[Dict[str, 
     return [call]
 
 
-def _on_tool_completed(e: ev.ToolCallCompleted, st: AcpWireState) -> List[Dict[str, Any]]:
-    tool_call_id = _tool_id(e, st)
-    update: Dict[str, Any] = {
+def _on_tool_completed(e: ev.ToolCallCompleted, st: AcpWireState) -> list[WireObject]:
+    tool_call_id = _tool_id(e)
+    update: WireObject = {
         "sessionUpdate": TOOL_CALL_UPDATE,
         "toolCallId": tool_call_id,
         "status": STATUS_COMPLETED if e.ok else STATUS_FAILED,
@@ -374,18 +372,18 @@ def _on_tool_completed(e: ev.ToolCallCompleted, st: AcpWireState) -> List[Dict[s
     return [update]
 
 
-def _on_file_diff(e: ev.FileDiffBlock, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_file_diff(e: ev.FileDiffBlock, st: AcpWireState) -> list[WireObject]:
     # A file change → a tool_call_update carrying a ``diff`` content block, keyed
     # to the same toolCallId the Edit/Write tool call used. ``oldText`` is null
     # for a creation (ACP convention); ``newText`` empty for a deletion.
-    tool_call_id = _tool_id(e, st, prefix="diff")
-    diff: Dict[str, Any] = {
+    tool_call_id = _tool_id(e)
+    diff: WireObject = {
         "type": BLOCK_DIFF,
         "path": e.path,
         "oldText": e.old if e.old != "" else None,
         "newText": e.new,
     }
-    update: Dict[str, Any] = {
+    update: WireObject = {
         "sessionUpdate": TOOL_CALL_UPDATE if tool_call_id in st.seen_tools else TOOL_CALL,
         "toolCallId": tool_call_id,
         "content": [diff],
@@ -399,33 +397,43 @@ def _on_file_diff(e: ev.FileDiffBlock, st: AcpWireState) -> List[Dict[str, Any]]
     return [update]
 
 
-def _on_activity_started(e: ev.ActivityStarted, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_activity_started(e: ev.ActivityStarted, st: AcpWireState) -> list[WireObject]:
     label = e.label or e.activity_kind or "activity"
     return [agent_text(f"▶ {label}")]
 
 
-def _on_activity_completed(e: ev.ActivityCompleted, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_activity_completed(e: ev.ActivityCompleted, st: AcpWireState) -> list[WireObject]:
     label = e.summary or e.outcome or "activity"
     return [agent_text(f"✓ {label}" if e.outcome == "success" else f"✗ {label}")]
 
 
-def _on_notice(e: ev.Notice, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_notice(e: ev.Notice, st: AcpWireState) -> list[WireObject]:
     if not e.text:
         return []
     return [agent_text(e.text)]
 
 
-def _on_error(e: ev.ErrorRaised, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_error(e: ev.ErrorRaised, st: AcpWireState) -> list[WireObject]:
     if not e.text:
         return []
     return [agent_text(f"⚠ {e.text}")]
 
 
-def _on_media(e: ev.MediaBlock, st: AcpWireState) -> List[Dict[str, Any]]:
+def _on_media(e: ev.MediaBlock, st: AcpWireState) -> list[WireObject]:
     # Degrade to a text pointer (an image ContentBlock needs base64 data we don't
     # carry inline here); the editor gets the alt text + locator.
     label = e.alt or e.ref or e.media_kind
     return [agent_text(f"[{e.media_kind}] {label}")]
+
+
+def _on_async_work(e: ev.AsyncWorkObserved, st: AcpWireState) -> list[WireObject]:
+    observation = decode_async_work_observation(json.loads(e.observation_json))
+    return [
+        {
+            "sessionUpdate": "mote_async_work_observation",
+            "observation": to_wire_json(encode_async_work_observation(observation)),
+        }
+    ]
 
 
 # kind string → handler. Absent kinds (usage_updated, task_progress,
@@ -449,6 +457,7 @@ _DISPATCH = {
     ev.OUTPUT_SNAPSHOT: _on_output_snapshot,
     ev.OUTPUT_SNAPSHOT_INVALIDATED: _on_output_snapshot_invalidated,
     ev.OUTPUT_COMMITTED: _on_output_committed,
+    ev.ASYNC_WORK_OBSERVED: _on_async_work,
 }
 
 

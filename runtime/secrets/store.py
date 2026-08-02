@@ -38,16 +38,20 @@ versa. Missing files mean an empty vault; unreadable, undecryptable, or malforme
 files fail loud so domain disclosure policies can fail closed instead of silently
 treating damaged protection state as empty.
 """
+
 from __future__ import annotations
 
 import json
-import os
+import threading
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 import yaml
+from filelock import FileLock
 
+from mote.runtime.persistence.atomic import atomic_write, mtime_ns
 from mote.runtime.secrets.cipher import VaultCipher
 
 # The user vault file, in the config path (~/.mote/), never in a project tree.
@@ -58,11 +62,41 @@ _SECRETS_CONFIG_FILE = "secrets_config.json"
 _CONFIG_SECTION = "config"
 _FILE_SECTION = "file"
 _SECRETS_SECTION = "secrets"
+_VAULT_SCHEMA = "mote.secret-vault/v1"
+_VAULT_SCHEMA_VERSION = 1
+_VAULT_SECTIONS = frozenset({_CONFIG_SECTION, _FILE_SECTION, _SECRETS_SECTION})
 
 # Sentinel distinguishing "never synced" from "synced, file was absent (mtime None)"
 # so the file section is reconciled once on construct even when the file is missing
 # (a stale encrypted entry from a since-deleted file is then cleared on startup).
 _UNSET = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _VaultDocument:
+    revision: int
+    config: Dict[str, str]
+    file: Dict[str, str]
+    secrets: Dict[str, str]
+
+    def section(self, name: str) -> Dict[str, str]:
+        if name == _CONFIG_SECTION:
+            return dict(self.config)
+        if name == _FILE_SECTION:
+            return dict(self.file)
+        if name == _SECRETS_SECTION:
+            return dict(self.secrets)
+        raise ValueError("unknown secret vault section")
+
+    def replace_section(self, name: str, value: Dict[str, str]) -> "_VaultDocument":
+        if name not in _VAULT_SECTIONS:
+            raise ValueError("unknown secret vault section")
+        return _VaultDocument(
+            revision=self.revision + 1,
+            config=dict(value) if name == _CONFIG_SECTION else dict(self.config),
+            file=dict(value) if name == _FILE_SECTION else dict(self.file),
+            secrets=dict(value) if name == _SECRETS_SECTION else dict(self.secrets),
+        )
 
 
 def secrets_path(root: Path) -> Path:
@@ -89,6 +123,8 @@ class SecretStore:
     ) -> None:
         self._cipher = cipher
         self._vault_path = Path(vault_path)
+        self._vault_lock_path = self._vault_path.with_name(self._vault_path.name + ".lock")
+        self._state_lock = threading.RLock()
         #: The ``config.yaml`` whose secret leaves seed the config section. ``None``
         #: disables config auto-sync (unit tests that exercise only user/session).
         self._config_path = Path(config_path) if config_path is not None else None
@@ -107,11 +143,11 @@ class SecretStore:
         self._session: Dict[str, str] = {}  # {key: value}
 
         # mtimes we last synced from, so ``refresh`` can skip untouched files.
-        self._config_mtime: Optional[float] = None
+        self._config_mtime: Optional[int] = None
         # _UNSET (not None) so the file section reconciles once on construct even
         # when the file is absent — clearing a stale entry left by a deleted file.
         self._file_mtime: Any = _UNSET
-        self._vault_mtime: Optional[float] = None
+        self._vault_mtime: Optional[int] = None
         # Construction is deliberately I/O-free.  Runtime assembly may create a
         # store while it is only resolving the component graph; touching the
         # vault here would turn an ordinary property read into filesystem I/O.
@@ -126,13 +162,14 @@ class SecretStore:
         all existing hot-refresh operations are synchronous.  This explicit
         lifecycle boundary ensures ``__init__`` remains a pure in-memory step.
         """
-        if self._prepared:
-            return
-        # Mark first: refresh() is also the public lazy-entry point and must not
-        # recurse while performing the initial reconciliation.
-        self._prepared = True
-        self._load()
-        self.refresh()
+        with self._state_lock:
+            if self._prepared:
+                return
+            # Mark first: refresh() is also the public lazy-entry point and must not
+            # recurse while performing the initial reconciliation.
+            self._prepared = True
+            self._load()
+            self.refresh()
 
     # -- reads --------------------------------------------------------------
 
@@ -230,9 +267,10 @@ class SecretStore:
         Section-isolated write: only the ``secrets`` section is rewritten, so the
         auto-synced config section is preserved.
         """
+        if type(key) is not str or not key or type(value) is not str:
+            raise ValueError("named secret key/value must be non-empty-string/string")
         self.prepare()
-        self._user_section[key] = value
-        self._write_section(_SECRETS_SECTION, self._user_section)
+        self._update_user_secret(key, value)
         return f"<agent-vault:{key}>"
 
     def add_session_secret(self, value: str, *, key: Optional[str] = None) -> str:
@@ -277,12 +315,13 @@ class SecretStore:
         underneath us (an external write, or our own section write), the
         disk-backed tiers are reloaded. The in-memory session tier is untouched.
         """
-        if not self._prepared:
-            self.prepare()
-            return
-        self._reseed_config_if_changed()
-        self._reseed_file_if_changed()
-        self._reload_vault_if_changed()
+        with self._state_lock:
+            if not self._prepared:
+                self.prepare()
+                return
+            self._reseed_config_if_changed()
+            self._reseed_file_if_changed()
+            self._reload_vault_if_changed()
 
     def _reseed_config_if_changed(self) -> None:
         if self._config_path is None:
@@ -374,17 +413,14 @@ class SecretStore:
 
     def _load(self) -> None:
         """Decrypt the vault and mirror its three sections in memory."""
-        data = self._read_vault()
-        self._config_section = _string_map(data.get(_CONFIG_SECTION))
-        self._file_section = _string_map(data.get(_FILE_SECTION))
-        self._user_section = _string_map(data.get(_SECRETS_SECTION))
+        self._mirror(self._read_vault())
 
-    def _read_vault(self) -> Dict[str, Any]:
+    def _read_vault(self) -> _VaultDocument:
         """Return the decrypted vault document; only absence means empty."""
         try:
             blob = self._vault_path.read_bytes()
         except FileNotFoundError:
-            return {}
+            return _VaultDocument(0, {}, {}, {})
         except OSError as exc:
             raise RuntimeError("secret vault could not be read") from exc
         try:
@@ -392,36 +428,41 @@ class SecretStore:
             data = json.loads(plain.decode("utf-8"))
         except Exception as exc:  # noqa: BLE001 -- crypto/codec boundary
             raise ValueError("secret vault is undecryptable or malformed") from exc
-        if not isinstance(data, dict):
-            raise ValueError("secret vault must contain a mapping")
-        return data
+        return _decode_vault(data)
 
     def _write_section(self, section: str, mapping: Dict[str, str]) -> None:
-        """Read-modify-write one section of the encrypted vault, atomically."""
-        data = self._read_vault()
-        data[section] = dict(mapping)
-        self._atomic_write(data)
-        # Mirror the just-written section so a caller sees it without a reload,
-        # and record the fresh vault mtime so ``refresh`` does not reload our own
-        # write back over the (identical) in-memory state.
-        if section == _CONFIG_SECTION:
-            self._config_section = _string_map(mapping)
-        elif section == _FILE_SECTION:
-            self._file_section = _string_map(mapping)
-        elif section == _SECRETS_SECTION:
-            self._user_section = _string_map(mapping)
-        self._vault_mtime = _mtime(self._vault_path)
+        """Replace one section under the canonical cross-instance transaction lock."""
+        canonical = _strict_string_map(mapping, owner=f"secret vault {section}")
+        with self._state_lock:
+            self._vault_path.parent.mkdir(parents=True, exist_ok=True)
+            with FileLock(str(self._vault_lock_path)):
+                document = self._read_vault().replace_section(section, canonical)
+                self._atomic_write(document)
+                self._mirror(document)
 
-    def _atomic_write(self, data: Dict[str, Any]) -> None:
-        blob = self._cipher.encrypt(json.dumps(data).encode("utf-8"))
-        self._vault_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._vault_path.with_name(self._vault_path.name + ".tmp")
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, blob)
-        finally:
-            os.close(fd)
-        os.replace(tmp, self._vault_path)
+    def _update_user_secret(self, key: str, value: str) -> None:
+        """Merge one named secret against the latest committed section."""
+        with self._state_lock:
+            self._vault_path.parent.mkdir(parents=True, exist_ok=True)
+            with FileLock(str(self._vault_lock_path)):
+                current = self._read_vault()
+                secrets = current.section(_SECRETS_SECTION)
+                secrets[key] = value
+                document = current.replace_section(_SECRETS_SECTION, secrets)
+                self._atomic_write(document)
+                self._mirror(document)
+
+    def _atomic_write(self, document: _VaultDocument) -> None:
+        payload = _encode_vault(document)
+        blob = self._cipher.encrypt(payload)
+        atomic_write(self._vault_path, blob, fsync=True, mode=0o600)
+
+    def _mirror(self, document: _VaultDocument) -> None:
+        with self._state_lock:
+            self._config_section = dict(document.config)
+            self._file_section = dict(document.file)
+            self._user_section = dict(document.secrets)
+            self._vault_mtime = _mtime(self._vault_path)
 
 
 # ---------------------------------------------------------------------------
@@ -429,18 +470,60 @@ class SecretStore:
 # ---------------------------------------------------------------------------
 
 
-def _mtime(path: Path) -> Optional[float]:
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return None
+def _mtime(path: Path) -> Optional[int]:
+    return mtime_ns(path)
 
 
-def _string_map(node: Any) -> Dict[str, str]:
-    """Coerce a decoded section into a ``{str: str}`` map (drop non-string leaves)."""
-    if not isinstance(node, dict):
-        return {}
-    return {str(k): v for k, v in node.items() if isinstance(v, str)}
+def _strict_string_map(node: object, *, owner: str) -> Dict[str, str]:
+    if type(node) is not dict:
+        raise ValueError(f"{owner} must be an object")
+    if any(type(key) is not str or type(value) is not str for key, value in node.items()):
+        raise ValueError(f"{owner} keys and values must be strings")
+    return dict(node)
+
+
+def _decode_vault(raw: object) -> _VaultDocument:
+    if type(raw) is not dict or set(raw) != {
+        "schema",
+        "schema_version",
+        "revision",
+        "sections",
+    }:
+        raise ValueError("secret vault envelope shape is invalid")
+    if raw["schema"] != _VAULT_SCHEMA:
+        raise ValueError("secret vault schema is unknown")
+    if type(raw["schema_version"]) is not int or raw["schema_version"] != _VAULT_SCHEMA_VERSION:
+        raise ValueError("secret vault schema version is unknown")
+    if type(raw["revision"]) is not int or raw["revision"] < 1:
+        raise ValueError("secret vault revision is invalid")
+    sections = raw["sections"]
+    if type(sections) is not dict or set(sections) != _VAULT_SECTIONS:
+        raise ValueError("secret vault sections are invalid")
+    return _VaultDocument(
+        raw["revision"],
+        _strict_string_map(sections[_CONFIG_SECTION], owner="secret vault config section"),
+        _strict_string_map(sections[_FILE_SECTION], owner="secret vault file section"),
+        _strict_string_map(sections[_SECRETS_SECTION], owner="secret vault secrets section"),
+    )
+
+
+def _encode_vault(document: _VaultDocument) -> bytes:
+    payload = {
+        "schema": _VAULT_SCHEMA,
+        "schema_version": _VAULT_SCHEMA_VERSION,
+        "revision": document.revision,
+        "sections": {
+            _CONFIG_SECTION: document.config,
+            _FILE_SECTION: document.file,
+            _SECRETS_SECTION: document.secrets,
+        },
+    }
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 def _harvest(

@@ -1,6 +1,6 @@
 """File-watch config — deploy-time Runtime settings.
 
-Lives in ``common/schema`` alongside the other declarative role policies so
+Lives with the file-watch mechanism and is projected by Product composition so
 ``RoleSchema`` (which declares it) can reference it without importing the watch
 service. The service itself lives in ``mote.runtime.watching``; this is
 only the declarative shape: which roots to watch and how often to poll.
@@ -11,7 +11,9 @@ subsystem can be toggled without dropping config.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from mote.contracts.config.base import ConfigModel
 
 #: Default ignore globs — VCS metadata, caches, and the agent's own workspace
 #: scratch dirs (session logs / blobs / residency), so they never echo back.
@@ -26,7 +28,7 @@ _DEFAULT_IGNORE = [
 ]
 
 
-class FileWatchConfig(BaseModel):
+class FileWatchConfig(ConfigModel):
     """Per-Role file-watch policy, declared on :class:`RoleSchema`.
 
     ``roots`` are the directories/files to watch; empty means "default to the

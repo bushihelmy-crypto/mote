@@ -14,6 +14,7 @@ Design:
   same single dispatch path.
 - No special-cased commands — everything is a tool.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -21,14 +22,26 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generic, Mapping, TypeVar
 
 from mote.contracts.config.tool import DurableConfig, LoopGuardConfig, RunJournalConfig, ToolResultLimitConfig
+from mote.contracts.foundation.errors.codes import RecoveryAction
+from mote.contracts.ports.tool.deferred import DeferredResultProjector
 from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolResultPolicy
-from mote.contracts.tool import CommandProtocol, ToolEffect, serialize_tool_call_args
+from mote.contracts.tool import (
+    CommandProtocol,
+    ToolAttemptOrdinal,
+    ToolEffect,
+    ToolInvocationId,
+    ToolInvocationIdentity,
+    serialize_tool_call_args,
+    tool_arguments_digest,
+)
+from mote.contracts.tool.errors import ToolNotFoundError
 from mote.kernel.execution.run_context import RunContext
 from mote.runtime.config.mcp import MCPServerConfig
-from mote.runtime.errors import RecoveryAction, RecoveryRunner, RecoveryStrategy, ToolNotFoundError
 from mote.runtime.events.telemetry import TelemetryManifest, TelemetryRuntime
 from mote.runtime.ledger import RunJournal
+from mote.runtime.resilience.recovery import RecoveryRunner, RecoveryStrategy
 from mote.runtime.resources import spill as tool_result_limit
+from mote.runtime.run_context import current_run_context
 from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.telemetry.logging import log_class
 from mote.runtime.tools.base_executor import BaseToolExecutor
@@ -37,6 +50,7 @@ from mote.runtime.tools.mcp.lifecycle import McpLifecycle
 from mote.runtime.tools.policy import build_tool_call_policy, build_tool_result_policy
 from mote.runtime.tools.provider import NativeToolset, XmlToolset, validate_toolset_protocols
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
+from mote.runtime.tools.tool_binding import ExecutableToolBinding
 from mote.runtime.tools.tool_catalog import NativeToolCatalog, XmlToolCatalog
 from mote.runtime.tools.tool_lifecycle import ToolLifecycle
 from mote.runtime.tools.tool_pipeline import ToolExecutionPipeline, failed_result
@@ -110,7 +124,7 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
         loop_guard_config: LoopGuardConfig | None = None,
         telemetry: TelemetryRuntime | None = None,
         recovery_strategies: Mapping[RecoveryAction, RecoveryStrategy] | None = None,
-        get_bg_pool: Callable[[], Any] | None = None,
+        deferred_result_projector: DeferredResultProjector | None = None,
         pipelines_enabled: bool = True,
         workspace_store: SessionWorkspace | None = None,
         deferred_tools: set[str] | None = None,
@@ -135,11 +149,11 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
         validate_toolset_protocols(self._command_protocol, self._toolsets)
         catalog_type = XmlToolCatalog if self._command_protocol is CommandProtocol.XML else NativeToolCatalog
         self._catalog = catalog_type(deferred=deferred_tools, get_revealed=get_revealed)
+        self._attempt_ordinals: dict[ToolInvocationId, int] = {}
         self._mcp_lifecycle = McpLifecycle(
             servers=mcp_servers,
             oauth_root=oauth_root,
         )
-        self._get_bg_pool = get_bg_pool
         # Telemetry carries post-operation observations and settlement
         # policy. Pre-invocation control belongs exclusively to ToolCallPolicy.
         self._telemetry = telemetry or TelemetryRuntime(TelemetryManifest(()))
@@ -211,24 +225,31 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
             policy=self._tool_call_policy,
             journal=self._journal if self._journal_config.enabled else None,
             recovery_runner=self._recovery_runner,
-            get_bg_pool=self._get_bg_pool,
+            deferred_projector=deferred_result_projector,
             settlement=self._settlement,
         )
+        self._deferred_result_projector = deferred_result_projector
 
     def prepare(self) -> None:
         self._lifecycle.prepare()
 
     async def start_run(self, ctx: RunContext[AgentDepsT]) -> None:
         await self._lifecycle.start_run(ctx)
+        if self._deferred_result_projector is not None:
+            self._deferred_result_projector.activate()
 
     async def prepare_run_step(self, ctx: RunContext[AgentDepsT]) -> None:
         await self._lifecycle.prepare_run_step(ctx)
 
     async def end_run(self) -> None:
-        await self._lifecycle.end_run()
+        try:
+            await self._lifecycle.end_run()
+        finally:
+            if self._deferred_result_projector is not None:
+                self._deferred_result_projector.deactivate()
 
     @property
-    def catalog(self):
+    def _bound_catalog(self):
         return self._catalog
 
     @property
@@ -280,13 +301,9 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
 
     @property
     def _tools(self) -> dict[str, Any]:
-        """The live name→instance map, delegated to the catalog.
-
-        Kept as a read accessor so external introspection (and tests) can do
-        ``name in executor._tools`` without reaching into the collaborator.
-        """
+        """Package-internal live map used by executor lifecycle mechanics."""
         self.prepare()
-        return self._catalog.tools
+        return self._catalog._live_tools()
 
     def _get_tool(self, name: str):
         """Resolve a tool by name. Returns the BaseTool instance, or None."""
@@ -309,6 +326,25 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
         result_id: str | None = None,
     ) -> ToolResult:
         self.prepare()
+        invocation_id = ToolInvocationId(result_id or f"tool-{uuid.uuid4().hex}")
+        attempt = self._attempt_ordinals.get(invocation_id, 0) + 1
+        self._attempt_ordinals[invocation_id] = attempt
+        bound = self._catalog.get(name)
+        definition_identity = (
+            bound.semantic_identity
+            if isinstance(bound, ExecutableToolBinding)
+            else f"mote.tool-definition.missing/v1:{tool_arguments_digest({'name': name})}"
+        )
+        run_context = current_run_context()
+        identity = ToolInvocationIdentity(
+            invocation_id=invocation_id,
+            attempt_ordinal=ToolAttemptOrdinal(attempt),
+            definition_identity=definition_identity,
+            catalog_generation=self._catalog.generation,
+            arguments_digest=tool_arguments_digest(kwargs or {}),
+            owner_id=self._session_id,
+            run_id=run_context.run_id if run_context is not None else "",
+        )
         if self._catalog.is_hidden(name):
             return failed_result(
                 ToolNotFoundError(
@@ -316,7 +352,33 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
                     f"SearchTools(query='{name}') first, then retry it on the next turn."
                 )
             )
-        return await self._pipeline.run(name, kwargs or {}, result_id)
+        return await self._pipeline.run(name, kwargs or {}, identity)
+
+    async def run_pinned_command(
+        self,
+        binding: ExecutableToolBinding,
+        name: str,
+        kwargs: dict[str, Any],
+        *,
+        catalog_generation: int,
+        result_id: str | None = None,
+    ) -> ToolResult:
+        """Execute the exact immutable binding retained by a snapshot revision."""
+
+        invocation_id = ToolInvocationId(result_id or f"tool-{uuid.uuid4().hex}")
+        attempt = self._attempt_ordinals.get(invocation_id, 0) + 1
+        self._attempt_ordinals[invocation_id] = attempt
+        run_context = current_run_context()
+        identity = ToolInvocationIdentity(
+            invocation_id=invocation_id,
+            attempt_ordinal=ToolAttemptOrdinal(attempt),
+            definition_identity=binding.semantic_identity,
+            catalog_generation=catalog_generation,
+            arguments_digest=tool_arguments_digest(kwargs),
+            owner_id=self._session_id,
+            run_id=run_context.run_id if run_context is not None else "",
+        )
+        return await self._pipeline.run(name, kwargs, identity, binding=binding)
 
     def will_ledger(self, name: str, args: dict[str, Any], result_id: str | None) -> bool:
         tool = self._get_tool(name)
@@ -356,3 +418,5 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
 
     async def cleanup(self) -> None:
         await self._lifecycle.cleanup()
+        if self._deferred_result_projector is not None:
+            await self._deferred_result_projector.aclose()

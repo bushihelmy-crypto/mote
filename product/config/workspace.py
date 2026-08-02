@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from mote.product.config.base import ConfigModel as YamlModel
+from mote.contracts.config.base import ConfigModel as YamlModel
 
 
 class WorkspaceCleanupConfig(YamlModel):

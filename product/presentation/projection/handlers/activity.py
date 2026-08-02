@@ -30,7 +30,7 @@ def project_activity_event(event: PresentationInputEvent) -> Optional[list[ViewE
         return [
             ActivityCompleted(
                 outcome=event.outcome,
-                node_states=list(event.node_states),
+                node_states=event.node_states,
                 summary=event.summary,
             )
         ]

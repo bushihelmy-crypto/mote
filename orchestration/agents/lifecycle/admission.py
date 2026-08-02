@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import replace
 
 from mote.contracts.agent.policy import SpawnDecision, SpawnIntent, SpawnPolicyContribution, SpawnPolicyTraceEntry
-from mote.contracts.ports.agent.spawn_policy import SpawnPolicyExtensionSpec
+from mote.contracts.ports.agent.spawn_policy import SpawnPolicyExtension, SpawnPolicyExtensionSpec
 
 
 class DefaultSpawnAdmissionPolicy:
@@ -15,15 +15,13 @@ class DefaultSpawnAdmissionPolicy:
         extensions: tuple[SpawnPolicyExtensionSpec, ...] = (),
     ) -> None:
         identities: set[str] = set()
-        installed: list[tuple[SpawnPolicyExtensionSpec, object]] = []
+        installed: list[tuple[SpawnPolicyExtensionSpec, SpawnPolicyExtension]] = []
         for spec in extensions:
             if not spec.identity.strip() or spec.identity in identities:
                 raise ValueError(f"invalid spawn policy extension: {spec.identity!r}")
             if spec.timeout <= 0:
                 raise ValueError("spawn policy extension timeout must be positive")
             extension = spec.factory()
-            if not callable(getattr(extension, "evaluate", None)):
-                raise TypeError("spawn policy extension must expose evaluate()")
             identities.add(spec.identity)
             installed.append((spec, extension))
         self._manifest = tuple(extensions)
@@ -44,7 +42,7 @@ class DefaultSpawnAdmissionPolicy:
             step = f"extension:{spec.identity}"
             try:
                 contribution = await asyncio.wait_for(
-                    extension.evaluate(effective),  # type: ignore[attr-defined]
+                    extension.evaluate(effective),
                     timeout=spec.timeout,
                 )
                 if not isinstance(contribution, SpawnPolicyContribution):

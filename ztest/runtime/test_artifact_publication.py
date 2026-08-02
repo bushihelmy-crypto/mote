@@ -22,8 +22,8 @@ from mote.contracts.artifact.errors import (
 from mote.contracts.content import ContentIdentity
 from mote.contracts.ports.artifact.store import ArtifactPublicationOutbox
 from mote.contracts.ports.artifact.store import ReliableArtifactPublisher as ReliableArtifactPublisherPort
-from mote.runtime.artifacts import ArtifactRepositoryBlobStore, DurableArtifactStore, ReliableArtifactPublisher
-from mote.runtime.artifacts.repository import ArtifactRepository
+from mote.runtime.artifacts import ContentAddressedArtifactBlobStore, DurableArtifactStore, ReliableArtifactPublisher
+from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
 
 
 class MemoryBlobs:
@@ -359,13 +359,13 @@ async def test_maximum_publication_id_derives_a_bounded_idempotency_key(tmp_path
 
 @pytest.mark.asyncio
 async def test_real_repository_adapter_uses_reserved_durable_publication(tmp_path):
-    repository = ArtifactRepository(
+    repository = ContentAddressedArtifactStore(
         tmp_path / "blobs",
         hard_limit_bytes=1_024,
     )
     store = DurableArtifactStore(
         tmp_path / "artifacts.sqlite3",
-        ArtifactRepositoryBlobStore(repository),
+        ContentAddressedArtifactBlobStore(repository),
     )
 
     revision = await ReliableArtifactPublisher(store, store).publish(
@@ -386,13 +386,13 @@ async def test_sqlite_failure_leaves_live_orphan_never_aborted_blob(
     monkeypatch,
 ):
     content = b"durable-before-index"
-    repository = ArtifactRepository(
+    repository = ContentAddressedArtifactStore(
         tmp_path / "blobs",
         hard_limit_bytes=1_024,
     )
     store = DurableArtifactStore(
         tmp_path / "artifacts.sqlite3",
-        ArtifactRepositoryBlobStore(repository),
+        ContentAddressedArtifactBlobStore(repository),
     )
 
     def fail_index_open():

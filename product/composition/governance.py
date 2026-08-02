@@ -61,7 +61,7 @@ WIRE_AUTHORITY_DECLARATIONS = (
     ),
 )
 
-CLI_ROOT = "mote.product.entrypoints.cli.bootstrap.build_engine"
+PRODUCT_APPLICATION_ROOT = "mote.product.composition.bootstrap.activate_application"
 DAEMON_ROOT = "mote.product.inference.daemon.application.SharedDaemonApplication"
 TEXTUAL_ROOT = "mote.product.interfaces.textual.bootstrap.run_textual"
 AGUI_ROOT = "mote.product.interfaces.agui.server.create_app"
@@ -111,7 +111,7 @@ def _session_capability(
         capability_id=capability_id,
         implementation=implementation,
         implementation_owner="runtime",
-        applicable_root=CLI_ROOT,
+        applicable_root=PRODUCT_APPLICATION_ROOT,
         enablement=enablement,
         canonical_factory=factory,
         required_ports=required_ports,
@@ -128,7 +128,7 @@ CAPABILITY_DECLARATIONS = (
         capability_id="model-runtime",
         implementation="mote.runtime.models.composition.SharedRuntimeCompositionHandle",
         implementation_owner="runtime",
-        applicable_root=CLI_ROOT,
+        applicable_root=PRODUCT_APPLICATION_ROOT,
         enablement=Enablement.REQUIRED,
         canonical_factory="mote.product.composition.model_builder.build_application_candidate",
         required_ports=("mote.contracts.ports.model",),
@@ -141,7 +141,7 @@ CAPABILITY_DECLARATIONS = (
     _session_capability(
         "telemetry",
         "mote.runtime.events.telemetry.TelemetryRuntime",
-        "mote.runtime.agent.role_components.RoleComponents._build_telemetry",
+        "mote.runtime.agent.role_components._build_telemetry",
     ),
     _session_capability(
         "event-fabric",
@@ -174,7 +174,7 @@ CAPABILITY_DECLARATIONS = (
         capability_id="tool-catalog",
         implementation="mote.runtime.tools.tool_registry.ToolCatalog",
         implementation_owner="runtime",
-        applicable_root=CLI_ROOT,
+        applicable_root=PRODUCT_APPLICATION_ROOT,
         enablement=Enablement.REQUIRED,
         canonical_factory="mote.product.toolsets.builtin_tool_catalog",
         required_ports=(),
@@ -186,7 +186,7 @@ CAPABILITY_DECLARATIONS = (
     ),
     _session_capability(
         "permission-sandbox",
-        "mote.runtime.sandbox.SandboxRuntime",
+        "mote.runtime.sandbox.runtime.SandboxRuntime",
         "mote.runtime.agent.components.integrations._build_sandbox_runtime",
         enablement=Enablement.CONFIGURED,
     ),
@@ -216,17 +216,25 @@ CAPABILITY_DECLARATIONS = (
         "mote.runtime.agent.components.integrations._build_hook_manager",
         enablement=Enablement.CONFIGURED,
     ),
-    _session_capability(
-        "hosted-service-gateway",
-        "mote.runtime.models.inference_port.RuntimeModelInferencePort",
-        "mote.runtime.agent.components.cognition.cognition_component_specs",
-        required_ports=("mote.contracts.ports.inference",),
+    CapabilityDeclaration(
+        capability_id="hosted-service-gateway",
+        implementation="mote.runtime.service_gateway.gateway.RuntimeServiceGateway",
+        implementation_owner="runtime",
+        applicable_root=PRODUCT_APPLICATION_ROOT,
+        enablement=Enablement.REQUIRED,
+        canonical_factory="mote.product.composition.service_gateway.builtin_service_gateway",
+        required_ports=("mote.contracts.ports.service.gateway.ServiceGateway",),
+        deployment_mode=DeploymentMode.EMBEDDED,
+        instance_scope=InstanceScope.APPLICATION,
+        lifecycle_owner="product-composition",
+        start_owner="product-composition",
+        stop_owner="product-composition",
     ),
     CapabilityDeclaration(
         capability_id="agent-catalog-factory",
         implementation="mote.product.agents.catalog.AgentCatalog",
         implementation_owner="product",
-        applicable_root=CLI_ROOT,
+        applicable_root=PRODUCT_APPLICATION_ROOT,
         enablement=Enablement.REQUIRED,
         canonical_factory="mote.product.composition.container.ProductContainer.standard",
         required_ports=(),
@@ -290,7 +298,7 @@ CANDIDATE_CLASSIFICATIONS = (
         "telemetry",
         "mote.runtime.events.telemetry.TelemetryRuntime",
         CandidateRole.INFRASTRUCTURE_FACTORY,
-        "mote.runtime.agent.role_components.RoleComponents._build_telemetry",
+        "mote.runtime.agent.role_components._build_telemetry",
     ),
     CandidateClassification(
         "event-fabric",
@@ -330,7 +338,7 @@ CANDIDATE_CLASSIFICATIONS = (
     ),
     CandidateClassification(
         "permission-sandbox",
-        "mote.runtime.sandbox.SandboxRuntime",
+        "mote.runtime.sandbox.runtime.SandboxRuntime",
         CandidateRole.INFRASTRUCTURE_FACTORY,
         "mote.runtime.agent.components.integrations._build_sandbox_runtime",
     ),
@@ -360,9 +368,9 @@ CANDIDATE_CLASSIFICATIONS = (
     ),
     CandidateClassification(
         "hosted-service-gateway",
-        "mote.runtime.models.inference_port.RuntimeModelInferencePort",
+        "mote.runtime.service_gateway.gateway.RuntimeServiceGateway",
         CandidateRole.GOVERNED_PORT_IMPLEMENTATION,
-        "mote.runtime.agent.components.cognition.cognition_component_specs",
+        "mote.product.composition.service_gateway.builtin_service_gateway",
     ),
     CandidateClassification(
         "agent-catalog-factory",
@@ -482,7 +490,7 @@ __all__ = [
     "CANDIDATE_CLASSIFICATIONS",
     "CAPABILITY_DECLARATIONS",
     "CLASSIFIER_VERSION",
-    "CLI_ROOT",
+    "PRODUCT_APPLICATION_ROOT",
     "DAEMON_ROOT",
     "FACADE_DECLARATIONS",
     "OWNER_DECLARATIONS",

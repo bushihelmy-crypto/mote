@@ -6,7 +6,7 @@ from pathlib import Path
 
 from mote.contracts.config.model.llm import LLMConfig, LLMType
 from mote.contracts.model.transport import resolve_api_type
-from mote.runtime.errors import ProviderNotFoundError
+from mote.product.models.errors import ProviderNotFoundError
 from mote.runtime.models.clients.base import BaseLLM
 
 

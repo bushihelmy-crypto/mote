@@ -13,12 +13,21 @@ from mote.orchestration.workflows import (
     From,
     GraphParamTypeError,
     GraphState,
+    NoOutput,
+    Output,
     Stage,
     WorkflowBuilder,
 )
-from mote.orchestration.workflows.deferred import BgTaskResult
+from mote.orchestration.workflows.deferred import WorkflowDeferredResult
 
 from .conftest import S
+
+
+class BaseNodeState(S):
+    doubler: Annotated[int | None, Output] = None
+    triple: Annotated[int | None, Output] = None
+    typed: Annotated[int | None, Output] = None
+
 
 # ---------------------------------------------------------------------------
 # Concrete test nodes
@@ -81,7 +90,7 @@ pytestmark = pytest.mark.asyncio
 
 async def _run(graph: WorkflowBuilder, **inputs):
     res = await graph.compile()(**inputs)
-    assert isinstance(res, BgTaskResult)
+    assert isinstance(res, WorkflowDeferredResult)
     return await res.poll_factory()
 
 
@@ -125,7 +134,7 @@ def test_get_params_class_docstring():
 
 async def test_base_node_class_in_graph():
     """Register a BaseNode subclass (type) and run the compiled graph."""
-    g = WorkflowBuilder("test", state_schema=S)
+    g = WorkflowBuilder("test", state_schema=BaseNodeState)
     g.add_node("doubler", Doubler)
     g.add_edge(START, "doubler")
     g.add_edge("doubler", END)
@@ -135,7 +144,7 @@ async def test_base_node_class_in_graph():
 
 async def test_base_node_instance_in_graph():
     """Register a BaseNode instance and run."""
-    g = WorkflowBuilder("test", state_schema=S)
+    g = WorkflowBuilder("test", state_schema=BaseNodeState)
     g.add_node("doubler", Doubler())
     g.add_edge(START, "doubler")
     g.add_edge("doubler", END)
@@ -158,7 +167,7 @@ async def test_plain_function_backward_compat():
 
         return Stage(submit=submit())
 
-    g = WorkflowBuilder("test", state_schema=S)
+    g = WorkflowBuilder("test", state_schema=BaseNodeState)
     g.add_node("triple", triple)
     g.add_edge(START, "triple")
     g.add_edge("triple", END)
@@ -168,7 +177,7 @@ async def test_plain_function_backward_compat():
 
 def test_stage_summary_uses_base_node_description():
     """BaseNode description appears in stage_summary."""
-    g = WorkflowBuilder("test", state_schema=S)
+    g = WorkflowBuilder("test", state_schema=BaseNodeState)
     g.add_node("doubler", Doubler)
     g.add_edge(START, "doubler")
     g.add_edge("doubler", END)
@@ -380,7 +389,7 @@ async def test_runtime_type_mismatch_raises():
     class BadState(GraphState):
         x: int = 0  # declared int but we'll set it to string at runtime
 
-    g2 = WorkflowBuilder("test", state_schema=BadState)
+    g2 = WorkflowBuilder("test", state_schema=BadState, output=NoOutput)
     g2.add_node(
         "a",
         lambda state: None,  # placeholder — won't reach fn call
@@ -402,13 +411,13 @@ async def test_runtime_type_mismatch_raises():
 
 async def test_runtime_type_ok_passes():
     """state.x = 42 + param type int → no error."""
-    g = WorkflowBuilder("test", state_schema=S)
+    g = WorkflowBuilder("test", state_schema=BaseNodeState)
     g.add_node("typed", TypedNode)
     g.add_edge(START, "typed")
     g.add_edge("typed", END)
 
     res = await g.compile()(x=5)
-    assert isinstance(res, BgTaskResult)
+    assert isinstance(res, WorkflowDeferredResult)
     result = await res.poll_factory()
     assert result["typed"] == 10
 
@@ -420,7 +429,7 @@ async def test_runtime_none_value_skipped():
     class NullState(GraphState):
         x: int = 0
 
-    g = WorkflowBuilder("test", state_schema=NullState)
+    g = WorkflowBuilder("test", state_schema=NullState, output=NoOutput)
     g.add_node(
         "a",
         lambda state: None,
@@ -443,7 +452,7 @@ async def test_runtime_generic_type_validated():
     class ListState(GraphState):
         items: list = []
 
-    g = WorkflowBuilder("test", state_schema=ListState)
+    g = WorkflowBuilder("test", state_schema=ListState, output=NoOutput)
     g.add_node(
         "a",
         lambda state: None,
@@ -451,7 +460,6 @@ async def test_runtime_generic_type_validated():
     )
     g.add_edge(START, "a")
     g.add_edge("a", END)
-    g.compile()
 
     state = ListState(items=["hello", 123])  # 123 is not str
     with pytest.raises(GraphParamTypeError, match="expected list, got list"):

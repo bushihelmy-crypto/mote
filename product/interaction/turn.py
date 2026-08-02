@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
+from mote.contracts.conversation import Message
+from mote.orchestration.agents.control import AgentControl
 from mote.product.presentation.events import ErrorRaised, MediaBlock, MessageBlockCompleted
 from mote.product.presentation.projection.base import BaseProjector
+
+
+@runtime_checkable
+class HttpStatusError(Protocol):
+    status_code: int
 
 
 def format_turn_error(err: BaseException) -> str:
     cls = type(err).__name__
     detail = str(err).strip() or repr(err)
-    status = getattr(err, "status_code", None)
-    if status is not None:
-        return f"{cls} (HTTP {status}): {detail}"
+    if isinstance(err, HttpStatusError):
+        return f"{cls} (HTTP {err.status_code}): {detail}"
     return f"{cls}: {detail}"
 
 
@@ -23,7 +29,7 @@ class TurnRunner:
 
     def __init__(
         self,
-        control: Any,
+        control: AgentControl,
         agent_id: str,
         projector: BaseProjector,
         *,
@@ -34,13 +40,13 @@ class TurnRunner:
         self._projector = projector
         self._quiescent_poll_interval = quiescent_poll_interval
 
-    async def run(self, message: Any, *, media: list[dict[str, Any]] | None = None) -> None:
+    async def run(self, message: Message, *, media: list[dict[str, Any]] | None = None) -> None:
         await self._projector.deliver(
             MessageBlockCompleted(
                 role="user",
-                markdown=getattr(message, "content", "") or "",
+                markdown=message.content or "",
                 streamed=False,
-                message_id=getattr(message, "id", None),
+                message_id=message.id,
             )
         )
         for item in media or []:
@@ -57,7 +63,7 @@ class TurnRunner:
         while not self._control.quiescent():
             await asyncio.sleep(self._quiescent_poll_interval)
         runtime = self._control.get_runtime(self._agent_id)
-        error = getattr(runtime, "last_error", None) if runtime is not None else None
+        error = runtime.last_error if runtime is not None else None
         if error is not None:
             await self._projector.deliver(ErrorRaised(text=format_turn_error(error)))
 

@@ -6,7 +6,7 @@ concrete ``roles`` implementation.
 
 Why a Protocol here (not a direct import): the ``executor`` layer must never
 import the ``roles`` layer (the strict downward-only layering rule). The concrete
-``ResourceRegistry`` lives in ``common.resource`` and is wired into a Role
+The Product resource registry is wired into a Role
 capability (``register_resource``) that the tool receives via injection; the tool
 only depends on this structural face, so no upward import is introduced.
 
@@ -24,7 +24,7 @@ class ResourceProvider(Protocol):
     """Registers a loaded capability body for post-compaction re-projection.
 
     Implemented by the Role capability that delegates to
-    ``common.resource.ResourceRegistry.load`` (production) and any test double.
+    the production resource registry and any test double.
     Called by the Skill tool right after it renders a skill body inline, so the
     body is re-projected after the head is compacted away. Must be cheap and
     non-throwing from the tool's point of view.

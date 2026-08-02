@@ -26,10 +26,58 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from enum import StrEnum
+from typing import Mapping, cast
 
+from mote.contracts.events.envelope import JsonValue, freeze_json, thaw_json
 from mote.contracts.foundation.errors.base import MoteError
 from mote.contracts.foundation.errors.codes import ErrorCode, RecoveryAction
+
+ERROR_REPORT_SCHEMA = "mote.error-report/v1"
+
+
+class ErrorNamespace(StrEnum):
+    FOUNDATION = "foundation"
+    MODEL = "model"
+    SERVICE = "service"
+    TOOL = "tool"
+    FILE = "file"
+    MEDIA = "media"
+    WORKFLOW = "workflow"
+    BACKGROUND_TASK = "background_task"
+    OAUTH = "oauth"
+    CONFIG = "config"
+    AGENT = "agent"
+    OUTPUT = "output"
+    RUNTIME = "runtime"
+    ARTIFACT = "artifact"
+    RESOURCE = "resource"
+
+
+def _namespace_for(code: ErrorCode) -> ErrorNamespace:
+    value = code.value
+    prefixes = (
+        ("LLM_", ErrorNamespace.MODEL),
+        ("MODEL_", ErrorNamespace.MODEL),
+        ("SERVICE_", ErrorNamespace.SERVICE),
+        ("TOOL", ErrorNamespace.TOOL),
+        ("FILE_", ErrorNamespace.FILE),
+        ("MEDIA_", ErrorNamespace.MEDIA),
+        ("GRAPH_", ErrorNamespace.WORKFLOW),
+        ("BG_TASK_", ErrorNamespace.BACKGROUND_TASK),
+        ("OAUTH", ErrorNamespace.OAUTH),
+        ("CONFIG_", ErrorNamespace.CONFIG),
+        ("ENV_", ErrorNamespace.CONFIG),
+        ("AGENT_", ErrorNamespace.AGENT),
+        ("SESSION_", ErrorNamespace.AGENT),
+        ("OUTPUT_", ErrorNamespace.OUTPUT),
+        ("RUN_", ErrorNamespace.OUTPUT),
+        ("RUNTIME_", ErrorNamespace.RUNTIME),
+        ("LEASE_", ErrorNamespace.RUNTIME),
+        ("ARTIFACT_", ErrorNamespace.ARTIFACT),
+        ("RESOURCE_", ErrorNamespace.RESOURCE),
+    )
+    return next((namespace for prefix, namespace in prefixes if value.startswith(prefix)), ErrorNamespace.FOUNDATION)
 
 
 @dataclass(frozen=True)
@@ -45,8 +93,33 @@ class ErrorReport:
     message: str
     retryable: bool
     recovery: str  # RecoveryAction value
-    detail: dict[str, Any] = field(default_factory=dict)
+    detail: Mapping[str, JsonValue] = field(default_factory=dict)
     cause: str | None = None
+    namespace: ErrorNamespace | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("error", "code", "message", "recovery"):
+            if type(getattr(self, name)) is not str:
+                raise TypeError(f"error report {name} must be a string")
+        if type(self.retryable) is not bool:
+            raise TypeError("error report retryable must be a boolean")
+        if self.cause is not None and type(self.cause) is not str:
+            raise TypeError("error report cause must be a string or null")
+        if self.namespace is not None and not isinstance(self.namespace, ErrorNamespace):
+            raise TypeError("error report namespace must be an ErrorNamespace or null")
+        try:
+            code = ErrorCode(self.code)
+            RecoveryAction(self.recovery)
+        except ValueError as exc:
+            raise ValueError("error report code or recovery is unknown") from exc
+        expected = _namespace_for(code)
+        if self.namespace is not None and self.namespace is not expected:
+            raise ValueError("error report namespace does not own code")
+        object.__setattr__(self, "namespace", expected)
+        frozen = freeze_json(self.detail, path="error_report.context")
+        if not isinstance(frozen, Mapping):
+            raise ValueError("error report context must be an object")
+        object.__setattr__(self, "detail", frozen)
 
     @classmethod
     def from_exception(cls, exc: BaseException) -> "ErrorReport":
@@ -56,9 +129,9 @@ class ErrorReport:
         ``code``, ``retryable`` marker, ``recovery`` hint, structured
         :meth:`~MoteError.detail`). An un-typed exception degrades to an
         ``UNKNOWN`` record whose retry classification reuses the single source of
-        truth, :func:`~mote.runtime.errors.classification.is_retryable` — imported
+        truth, :func:`~mote.runtime.resilience.error_classification.is_retryable` — imported
         lazily so this module stays a leaf (importing it never pulls in the
-        heavyweight ``handlers`` / ``common.utils`` chain).
+        heavyweight Runtime classification chain).
         """
         if isinstance(exc, MoteError):
             return cls(
@@ -67,7 +140,7 @@ class ErrorReport:
                 message=exc.message or type(exc).__name__,
                 retryable=exc.retryable,
                 recovery=exc.recovery.value,
-                detail=dict(exc.detail()),
+                detail=cast(Mapping[str, JsonValue], freeze_json(exc.detail(), path="error_report.context")),
                 cause=repr(exc.cause) if exc.cause is not None else None,
             )
 
@@ -83,40 +156,68 @@ class ErrorReport:
             cause=None,
         )
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self) -> dict[str, object]:
         """JSON-native form for embedding on serialized (pydantic) messages."""
+        namespace = self.namespace
+        assert namespace is not None
         return {
+            "schema": ERROR_REPORT_SCHEMA,
+            "namespace": namespace.value,
             "error": self.error,
             "code": self.code,
             "message": self.message,
             "retryable": self.retryable,
             "recovery": self.recovery,
-            "detail": self.detail,
+            "context": thaw_json(cast(JsonValue, self.detail)),
             "cause": self.cause,
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ErrorReport":
-        """Rebuild a report from its :meth:`as_dict` form (e.g. off a message)."""
+    def from_dict(cls, data: object) -> "ErrorReport":
+        """Strictly decode the sole current durable envelope; legacy fails closed."""
+        keys = {"schema", "namespace", "error", "code", "message", "retryable", "recovery", "context", "cause"}
+        if type(data) is not dict or set(data) != keys:
+            raise ValueError("error report envelope shape is invalid")
+        raw = cast(dict[str, object], data)
+        if raw["schema"] != ERROR_REPORT_SCHEMA:
+            raise ValueError("unsupported error report schema")
+        strings = ("error", "code", "message", "recovery")
+        if any(type(raw[name]) is not str for name in strings):
+            raise ValueError("error report string field is invalid")
+        if type(raw["retryable"]) is not bool:
+            raise ValueError("error report retryable is invalid")
+        cause = raw["cause"]
+        if cause is not None and type(cause) is not str:
+            raise ValueError("error report cause is invalid")
+        try:
+            namespace = ErrorNamespace(cast(str, raw["namespace"]))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("error report namespace is unknown") from exc
+        context = freeze_json(raw["context"], path="error_report.context")
+        if not isinstance(context, Mapping):
+            raise ValueError("error report context must be an object")
         return cls(
-            error=data.get("error", ""),
-            code=data.get("code", ErrorCode.UNKNOWN.value),
-            message=data.get("message", ""),
-            retryable=bool(data.get("retryable", False)),
-            recovery=data.get("recovery", RecoveryAction.ABORT.value),
-            detail=dict(data.get("detail") or {}),
-            cause=data.get("cause"),
+            error=cast(str, raw["error"]),
+            code=cast(str, raw["code"]),
+            message=cast(str, raw["message"]),
+            retryable=cast(bool, raw["retryable"]),
+            recovery=cast(str, raw["recovery"]),
+            detail=context,
+            cause=cast(str | None, cause),
+            namespace=namespace,
         )
 
 
-def _render_detail(detail: dict[str, Any], indent: str = "  ") -> list[str]:
+def _render_detail(detail: Mapping[str, JsonValue], indent: str = "  ") -> list[str]:
     """Render the structured ``detail`` dict as indented ``key: value`` lines.
 
     A ``failures`` list (graph batch failure) is expanded into per-node lines so
     the model sees every failed node's code + message, not an opaque blob.
     """
     lines: list[str] = []
-    for key, value in detail.items():
+    thawed = thaw_json(cast(JsonValue, detail))
+    assert isinstance(thawed, dict)
+    for key, value in thawed.items():
         if key == "type":
             continue  # redundant with the rendered class name
         if key == "failures" and isinstance(value, list):

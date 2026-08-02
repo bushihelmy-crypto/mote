@@ -27,6 +27,7 @@ and registered with the Role's managed RuntimeHost (one implicit terminal per
 session, with no model-facing id). The host owns identity, serialization,
 revision, fencing and teardown; this module owns the PTY engine and its driver.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -63,7 +64,7 @@ from mote.contracts.surface import (
     TerminalResizeInput,
 )
 from mote.contracts.tool.errors import ToolError
-from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
+from mote.runtime.interactive.checkpoint_codec import TERMINAL_CHECKPOINT_CODEC, ShellCheckpointState
 from mote.runtime.interactive.observation import SurfaceObservationHub
 from mote.runtime.interactive.session_state import diff_env_state
 from mote.runtime.interactive.terminal.vt import TerminalVTState
@@ -85,8 +86,7 @@ class _SandboxRuntime(Protocol):
         cwd: Optional[str] = ...,
         env: Optional[dict[str, str]] = ...,
         extra_writable: Optional[list[str]] = ...,
-    ) -> tuple[list[str], dict[str, str]]:
-        ...
+    ) -> tuple[list[str], dict[str, str]]: ...
 
 
 # --- Constants -------------------------------------------------------------
@@ -682,11 +682,7 @@ class TerminalRuntimeDriver:
             await session.start()
             restore = self._decode_checkpoint(checkpoint) if checkpoint is not None else None
             if restore:
-                await session.restore_state(
-                    restore.get("cwd", ""),
-                    restore.get("env", {}),
-                    restore.get("unset", []),
-                )
+                await session.restore_state(restore.cwd, dict(restore.env), list(restore.unset))
         except BaseException:
             session.shutdown()
             self._session = None
@@ -705,9 +701,8 @@ class TerminalRuntimeDriver:
         if state is None:
             raise RuntimeError("terminal state is unavailable while a foreground program is running")
         cwd, env, unset = state
-        return encode_inline_json(
-            {"cwd": cwd, "env": env, "unset": unset},
-            codec="terminal-state+json@1",
+        return TERMINAL_CHECKPOINT_CODEC.encode(
+            ShellCheckpointState(cwd, env, tuple(unset)),
             fidelity=CheckpointFidelity.LOGICAL,
         )
 
@@ -787,8 +782,5 @@ class TerminalRuntimeDriver:
             raise RuntimeError("terminal surface attachment is not current")
 
     @staticmethod
-    def _decode_checkpoint(checkpoint: RuntimeCheckpoint) -> Optional[dict]:
-        payload = decode_inline_json(checkpoint, codec="terminal-state+json@1")
-        if not isinstance(payload, dict):
-            raise ValueError("terminal checkpoint payload must be an object")
-        return payload
+    def _decode_checkpoint(checkpoint: RuntimeCheckpoint) -> ShellCheckpointState:
+        return TERMINAL_CHECKPOINT_CODEC.decode(checkpoint)

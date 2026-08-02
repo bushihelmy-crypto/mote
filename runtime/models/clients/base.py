@@ -12,11 +12,11 @@ from pydantic import BaseModel
 from mote.contracts.config.model.llm import LLMConfig
 from mote.contracts.conversation import Message
 from mote.contracts.conversation.fields import IMAGES, PDFS
-from mote.contracts.model import LLMResponse, LLMToolCall, WebSearchHit
+from mote.contracts.model import CanonicalToolCall, LLMResponse, WebSearchHit
 from mote.contracts.model.capabilities import supports_pdf_input, supports_vision
 from mote.contracts.model.constants import LLM_API_TIMEOUT, USE_CONFIG_TIMEOUT
+from mote.contracts.model.provider_errors import LLMEmptyResponseError
 from mote.kernel.inference.tokenization import count_message_tokens
-from mote.runtime.errors import LLMEmptyResponseError
 from mote.runtime.models.cost import Costs, CostTracker, TokenUsage
 from mote.runtime.models.media import build_data_url, pdfs_within_limits
 from mote.runtime.models.ratelimit import RateLimitTracker
@@ -342,7 +342,7 @@ class BaseLLM(ABC):
             content = llm.get_choice_text(rsp) or ""
             raw_calls = llm.get_choice_tool_calls(rsp)
             tool_calls = [
-                LLMToolCall(
+                CanonicalToolCall(
                     id=c.get("id", ""),
                     name=c["name"],
                     arguments=c.get("arguments") or {},
@@ -351,7 +351,7 @@ class BaseLLM(ABC):
             ]
             if not content.strip() and not tool_calls:
                 raise LLMEmptyResponseError("The LLM's response is empty.")
-            return LLMResponse(content=content, tool_calls=tool_calls)
+            return LLMResponse(content=content, tool_calls=tuple(tool_calls))
 
         return await _send(self, message)
 

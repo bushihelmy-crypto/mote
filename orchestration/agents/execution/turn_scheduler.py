@@ -24,12 +24,25 @@ Two drive modes (don't mix them on the same scheduler instance):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from contextlib import nullcontext
 from typing import Awaitable, Callable, ContextManager, Dict, Optional
 
-from mote.orchestration.agents.execution.limiter import AgentExecutionLimiter
+from mote.contracts.clock import AbsoluteInstant
+from mote.contracts.conversation import Message
+from mote.contracts.ports.runtime.lease import LeaseEpoch
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime
 from mote.orchestration.agents.messaging.mailbox import DeliveryMode
+from mote.orchestration.agents.turn_queue.limiter import AgentExecutionLimiter
+from mote.orchestration.agents.turn_queue.model import (
+    TurnAcceptanceRequest,
+    TurnAdmissionDisposition,
+    TurnPriority,
+    TurnQueueIdentity,
+)
+from mote.orchestration.agents.turn_queue.scheduler import DurableTurnScheduler, TurnClaimDisposition
+from mote.orchestration.agents.turn_queue.scheduling import TurnSchedulingConfig
+from mote.orchestration.agents.turn_queue.store import DurableTurnQueueStore
 from mote.runtime.telemetry.logging import logger
 
 
@@ -42,6 +55,13 @@ class EventDrivenScheduler:
         limiter: Optional[AgentExecutionLimiter] = None,
         control_binder: Optional[Callable[[], ContextManager]] = None,
         pending_flush: Optional[Callable[[], Awaitable]] = None,
+        delivery_ack: Callable[[str, tuple[str, ...]], None] | None = None,
+        durable_store: DurableTurnQueueStore | None = None,
+        durable_lease: LeaseEpoch | None = None,
+        scheduling_config: TurnSchedulingConfig | None = None,
+        now: Callable[[], AbsoluteInstant] | None = None,
+        process_instance_id: str = "",
+        root_owner_id: str = "",
     ):
         self._runtimes: Dict[str, AgentRuntime] = {}
         self._started = False
@@ -57,6 +77,27 @@ class EventDrivenScheduler:
         # cap is fulfilled (an eviction may be awaited here) the moment capacity
         # could have improved — i.e. right after a turn frees a resident.
         self._pending_flush = pending_flush
+        self._delivery_ack = delivery_ack
+        durable_values = (durable_store, durable_lease, scheduling_config, now)
+        if any(value is None for value in durable_values) != all(value is None for value in durable_values):
+            raise ValueError("durable turn scheduling dependencies must be complete")
+        if durable_store is not None and (limiter is None or not process_instance_id):
+            raise ValueError("durable turn scheduling requires limiter and process identity")
+        self._durable = (
+            DurableTurnScheduler(store=durable_store, limiter=limiter)
+            if durable_store is not None and limiter is not None
+            else None
+        )
+        self._durable_store = durable_store
+        self._durable_lease = durable_lease
+        self._scheduling_config = scheduling_config
+        self._now = now
+        self._process_instance_id = process_instance_id
+        self._root_owner_id = root_owner_id
+        if self._durable is not None and durable_store is not None and durable_lease is not None:
+            for item in durable_store.load().items:
+                if item.claim is not None:
+                    self._durable.settle_lost_claim(item, lease=durable_lease)
 
     # ------------------------------------------------------------------
     # Runtime membership
@@ -73,20 +114,13 @@ class EventDrivenScheduler:
     def get_runtime(self, session_id: str) -> Optional[AgentRuntime]:
         return self._runtimes.get(session_id)
 
-    # ------------------------------------------------------------------
-    # Delivery (enqueue + optional wake)
-    # ------------------------------------------------------------------
     def notify(
         self,
         session_id: str,
-        message,
+        message: Message,
         *,
         mode: DeliveryMode = DeliveryMode.TRIGGER_TURN,
     ) -> bool:
-        """Enqueue *message* into a runtime's mailbox, waking it on trigger-turn.
-
-        Returns ``False`` if the session is unknown (caller may rehydrate first).
-        """
         runtime = self._runtimes.get(session_id)
         if runtime is None:
             return False
@@ -118,8 +152,18 @@ class EventDrivenScheduler:
             # re-arms the event and earns another turn (at worst a spurious empty
             # turn — never a lost wake).
             runtime.wake_event.clear()
-            self._stage_mailbox(runtime)
-            await self._run_turn_safe(runtime)
+            batch = self._stage_and_accept(runtime)
+            if batch is None:
+                runtime.wake_event.set()
+                await asyncio.sleep(0)
+                continue
+            if self._durable is None:
+                delivery_ids = batch
+                succeeded = await self._run_turn_safe(runtime)
+                if succeeded and delivery_ids and self._delivery_ack is not None:
+                    self._delivery_ack(runtime.session_id, delivery_ids)
+            else:
+                await self._run_durable_claim()
             # A turn just completed → a resident may now be idle/evictable, so
             # fulfil any mail parked behind the hard cap.
             await self._flush_pending()
@@ -153,8 +197,16 @@ class EventDrivenScheduler:
                 break
             for runtime in ready:
                 runtime.wake_event.clear()
-                self._stage_mailbox(runtime)
-                await self._run_turn_safe(runtime)
+                batch = self._stage_and_accept(runtime)
+                if batch is None:
+                    runtime.wake_event.set()
+                    continue
+                if self._durable is None:
+                    succeeded = await self._run_turn_safe(runtime)
+                    if succeeded and batch and self._delivery_ack is not None:
+                        self._delivery_ack(runtime.session_id, batch)
+                else:
+                    await self._run_durable_claim()
                 turns += 1
         return turns
 
@@ -178,10 +230,95 @@ class EventDrivenScheduler:
         return runtime.wake_event.is_set() or runtime.mailbox.has_trigger_turn()
 
     @staticmethod
-    def _stage_mailbox(runtime: AgentRuntime) -> None:
+    def _stage_mailbox(runtime: AgentRuntime) -> tuple[str, ...]:
         """Drain the mailbox at the turn boundary into the role's msg_buffer."""
-        for message in runtime.mailbox.drain_for_turn():
+        messages, delivery_ids = runtime.mailbox.drain_for_processing()
+        for message in messages:
             runtime.msg_buffer.push(message)
+        return delivery_ids
+
+    def _stage_and_accept(self, runtime: AgentRuntime) -> tuple[str, ...] | None:
+        messages, delivery_ids = runtime.mailbox.drain_for_processing()
+        if not messages:
+            return ()
+        if self._durable_store is not None:
+            path = runtime.agent_path.as_str() if runtime.agent_path is not None else "/root"
+            root_id = self._root_owner_id or runtime.session_id
+            request_id = (
+                "turn_" + hashlib.sha256((runtime.session_id + "\0" + "\0".join(delivery_ids)).encode()).hexdigest()
+            )
+            assert self._now is not None and self._scheduling_config is not None
+            receipt = self._durable_store.accept(
+                TurnAcceptanceRequest(
+                    TurnQueueIdentity(
+                        self._durable_store.load().queue_id,
+                        request_id,
+                        root_id,
+                        path,
+                        runtime.session_id,
+                        delivery_ids,
+                    ),
+                    self._scheduling_config.generation,
+                    TurnPriority.NORMAL,
+                    self._now(),
+                    None,
+                    3,
+                )
+            )
+            if receipt.disposition not in {
+                TurnAdmissionDisposition.ACCEPTED,
+                TurnAdmissionDisposition.DUPLICATE,
+            }:
+                runtime.mailbox.restore_processing(messages, delivery_ids)
+                return None
+        for message in messages:
+            runtime.msg_buffer.push(message)
+        return delivery_ids
+
+    async def _run_durable_claim(self) -> None:
+        assert self._durable is not None
+        assert self._durable_lease is not None
+        assert self._scheduling_config is not None
+        assert self._now is not None
+        attempt = self._durable.claim_next(
+            config=self._scheduling_config,
+            now=self._now(),
+            lease=self._durable_lease,
+            process_instance_id=self._process_instance_id,
+        )
+        if attempt.disposition is not TurnClaimDisposition.CLAIMED or attempt.claim is None:
+            return
+        claim = attempt.claim
+        runtime = self._runtimes.get(claim.item.identity.agent_id)
+        if runtime is None:
+            self._durable.settle(claim, succeeded=False, reason="agent_not_resident", lease=self._durable_lease)
+            return
+        try:
+            succeeded = await self._run_turn_safe(runtime, acquire_permit=False)
+        except asyncio.CancelledError:
+            self._durable.settle(
+                claim,
+                succeeded=False,
+                reason="turn_cancelled",
+                lease=self._durable_lease,
+            )
+            raise
+        receipt = self._durable.settle(
+            claim,
+            succeeded=succeeded,
+            reason="turn_completed" if succeeded else "turn_failed",
+            lease=self._durable_lease,
+        )
+        if succeeded and self._delivery_ack is not None:
+            self._delivery_ack(runtime.session_id, claim.item.identity.delivery_ids)
+
+    def cancel_agent_turns(self, agent_id: str) -> None:
+        if self._durable is not None and self._durable_lease is not None:
+            self._durable.cancel_agent(
+                agent_id,
+                reason="subtree_cancellation",
+                lease=self._durable_lease,
+            )
 
     def ensure_driver(self, runtime: AgentRuntime) -> None:
         """Re-spawn a runtime's driver task if it has exited (e.g. post-interrupt)."""
@@ -197,16 +334,18 @@ class EventDrivenScheduler:
         except Exception as exc:  # noqa: BLE001 — keep driving
             logger.warning(f"Scheduler: pending-delivery flush failed: {exc}")
 
-    async def _run_turn_safe(self, runtime: AgentRuntime) -> None:
-        guard = self._limiter.guard() if self._limiter is not None else None
+    async def _run_turn_safe(self, runtime: AgentRuntime, *, acquire_permit: bool = True) -> bool:
+        guard = await self._limiter.acquire() if self._limiter is not None and acquire_permit else None
         binder = self._control_binder() if self._control_binder is not None else nullcontext()
         try:
             with binder:
                 await runtime.run_one_turn()
+            return True
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — status already ERRORED; keep driving
             logger.warning(f"Scheduler: turn for {runtime.session_id} errored: {exc}")
+            return False
         finally:
             if guard is not None:
                 guard.release()

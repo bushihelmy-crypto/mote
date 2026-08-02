@@ -7,12 +7,13 @@
 one), builds its ``TaskAttachmentGenerator`` once, and renders running/finishing
 tasks as ``<task-attachment>`` blocks (or None when nothing is in flight).
 """
+
 from __future__ import annotations
 
 import asyncio
 
 from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
-from mote.orchestration.background_tasks import BackgroundTaskContextSource, BgStatus, TaskMeta
+from mote.orchestration.background_tasks import BackgroundTaskContextSource, BackgroundTaskStatus, TaskMeta
 
 
 def run(coro):
@@ -45,7 +46,7 @@ class TestBackgroundTaskContextSource:
         assert run(src.render()) is None
 
     def test_running_task_renders_attachment(self):
-        meta = TaskMeta(task_id="bg_1", command_name="job", status=BgStatus.RUNNING)
+        meta = TaskMeta(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.RUNNING)
         src = BackgroundTaskContextSource(lambda: FakePool([meta]))
         out = run(src.render())
         assert out is not None
@@ -54,7 +55,7 @@ class TestBackgroundTaskContextSource:
         assert "<status>running</status>" in out
 
     def test_generator_built_once_and_reused(self):
-        meta = TaskMeta(task_id="bg_1", command_name="job", status=BgStatus.RUNNING)
+        meta = TaskMeta(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.RUNNING)
         pool = FakePool([meta])
         src = BackgroundTaskContextSource(lambda: pool)
         run(src.render())
@@ -70,7 +71,7 @@ class TestBackgroundTaskContextSource:
         assert run(src.render()) is None
         assert src._generator is None  # not built while pool absent
 
-        meta = TaskMeta(task_id="bg_2", command_name="later", status=BgStatus.RUNNING)
+        meta = TaskMeta(task_id="bg_2", command_name="later", status=BackgroundTaskStatus.RUNNING)
         holder["pool"] = FakePool([meta])
         out = run(src.render())
         assert out is not None and "bg_2" in out

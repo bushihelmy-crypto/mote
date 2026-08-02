@@ -75,7 +75,7 @@ def _looks_like_diff(text: str) -> bool:
 
 def _complete_failed(
     name: str,
-    tool_use_id: str | None,
+    identity,
     text: str,
     full_ref: str | None,
     error: ErrorReport | None,
@@ -90,7 +90,7 @@ def _complete_failed(
         tool_name=name,
         ok=False,
         summary=detail,
-        tool_use_id=tool_use_id,
+        identity=identity,
         content_truncated=truncated or full_ref is not None,
         full_ref=full_ref,
         hidden_lines=hidden,
@@ -103,12 +103,12 @@ def _complete_failed(
 
 def _complete_tool(event: ToolCallFinishedEvent) -> ToolCallCompleted:
     name = event.tool_name
-    tool_use_id = event.tool_use_id
+    identity = event.identity
     response = event.tool_response
     text = response if isinstance(response, str) else ("" if response is None else str(response))
     full_ref = _extract_full_ref(text)
     if event.outcome != "succeeded":
-        return _complete_failed(name, tool_use_id, text, full_ref, event.error)
+        return _complete_failed(name, identity, text, full_ref, event.error)
     summary = _result_summary(name, event, text) or _first_nonempty_line(text)
     if not summary:
         summary = t(K.RESULT_NO_OUTPUT)
@@ -120,7 +120,7 @@ def _complete_tool(event: ToolCallFinishedEvent) -> ToolCallCompleted:
             tool_name=name,
             ok=True,
             summary=summary,
-            tool_use_id=tool_use_id,
+            identity=identity,
             result_kind=RESULT_KIND_DIFF,
             detail=detail,
             lexer="diff",
@@ -136,7 +136,7 @@ def _complete_tool(event: ToolCallFinishedEvent) -> ToolCallCompleted:
         tool_name=name,
         ok=True,
         summary=summary,
-        tool_use_id=tool_use_id,
+        identity=identity,
         result_kind=RESULT_KIND_PLAIN,
         detail=detail,
         content_truncated=(
@@ -148,7 +148,7 @@ def _complete_tool(event: ToolCallFinishedEvent) -> ToolCallCompleted:
 
 
 def _media_blocks(event: ToolCallFinishedEvent) -> list[MediaBlock]:
-    tool_use_id = event.tool_use_id
+    identity = event.identity
     blocks: list[MediaBlock] = []
     for media in event.media:
         kind = media.kind or "image"
@@ -161,16 +161,16 @@ def _media_blocks(event: ToolCallFinishedEvent) -> list[MediaBlock]:
                 mime=media.mime,
                 artifact=media.artifact,
                 alt=(os.path.basename(ref) if ref else "") or kind,
-                tool_use_id=tool_use_id,
+                identity=identity,
             )
         )
     return blocks
 
 
 def project_tool_finished(event: ToolCallFinishedEvent) -> list[ViewEvent]:
-    tool_use_id = event.tool_use_id
+    identity = event.identity
     output: list[ViewEvent] = [_complete_tool(event), *_media_blocks(event)]
-    output.extend(ArtifactBlock(artifact=artifact, tool_use_id=tool_use_id) for artifact in event.artifacts)
+    output.extend(ArtifactBlock(artifact=artifact, identity=identity) for artifact in event.artifacts)
     for change in event.file_changes:
         raw_path = change.path
         output.append(
@@ -178,7 +178,7 @@ def project_tool_finished(event: ToolCallFinishedEvent) -> list[ViewEvent]:
                 path=os.path.abspath(os.path.expanduser(str(raw_path))) if raw_path else "",
                 old=change.old,
                 new=change.new,
-                tool_use_id=tool_use_id,
+                identity=identity,
             )
         )
     return output

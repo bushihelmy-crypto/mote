@@ -22,9 +22,8 @@ Design (mirrors pydantic-ai's ModelProfile merge, adapted to mote):
   ``any(marker in model for marker in LIST)`` checks, but now composable (a model
   name matching several markers accumulates all their capabilities).
 
-``common`` is a leaf layer, so BOTH ``common/const/llm.py`` (whose ``supports_*``
-functions are now thin delegates) AND the ``router/llm/*`` providers can import
-this with no cycle.
+Contracts is a leaf layer, so model capability helpers and Product providers
+can import this authority without a cycle.
 
 Case: the old ``supports_vision`` was case-sensitive while the other three
 lower-cased. :func:`profile_for` normalises to ``.lower()`` for ALL facets — this
@@ -99,7 +98,7 @@ def merge_profile(base: ModelProfile, override: Optional[ModelProfile]) -> Model
 # "claude-opus-4-8" hits "opus" → vision, "claude" → pdf, and "opus-4" →
 # native-tool-search + web-search + thinking).
 #
-# Grouped to mirror the four former lists in common/const/llm.py plus the new
+# Grouped by canonical model capability families plus the new
 # thinking facet. Extend a row (or add one) as new capable models land; to fix a
 # per-model schema quirk, set ``json_schema_transformer=`` on the relevant row
 # (none needed today — the hook stays inert until a real quirk appears).
@@ -161,7 +160,7 @@ def profile_for(model: Optional[str]) -> ModelProfile:
     Folds every registry fragment whose marker is a substring of the lower-cased
     ``model`` over :data:`DEFAULT_PROFILE`. ``None`` / unknown model → the
     all-off :data:`DEFAULT_PROFILE`. THE single authority every capability check
-    delegates to (``common/const/llm.py``'s ``supports_*`` functions, the
+    delegates to (the canonical ``supports_*`` functions and the
     provider ``_cons_kwargs`` thinking gate, the tool-schema transformer lookup).
     """
     low = (model or "").lower()

@@ -60,7 +60,7 @@ from mote.runtime.models.gateway import LLMRouter
 from mote.runtime.output.graph_service import GraphOutputService
 
 if TYPE_CHECKING:
-    from mote.contracts.ports.artifact.store import ArtifactResolver, ArtifactStore, ReliableArtifactPublisher
+    from mote.contracts.ports.artifact.store import ArtifactLookupIndex, ArtifactResolver, ReliableArtifactPublisher
     from mote.contracts.ports.conversation.prompt_policy import PromptPolicy
     from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicy
     from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolResultPolicy
@@ -71,11 +71,11 @@ if TYPE_CHECKING:
     from mote.runtime.events.backends import SQLiteSubscriptionStateStore
     from mote.runtime.events.fabric import EventFabric
     from mote.runtime.fileops import FileOperations
-    from mote.runtime.interactive import RuntimeHost
     from mote.runtime.interactive.browser.profile import BrowserProfileStore
-    from mote.runtime.projections import SessionLiveProjection
+    from mote.runtime.interactive.host import RuntimeHost
     from mote.runtime.resources import ResourceRegistry
     from mote.runtime.session import SessionLog
+    from mote.runtime.session.projection import SessionLiveProjection
     from mote.runtime.session.subscribers import CheckpointSubscriber, TitleSubscriber
     from mote.runtime.session.workspace import SessionWorkspace
     from mote.runtime.tools.tool_executor import ToolExecutor
@@ -187,7 +187,7 @@ class RoleComponentAccessors(Generic[OutputT]):
         return self._graph.get(FILE_OPERATIONS)
 
     @property
-    def artifact_store(self) -> "ArtifactStore":
+    def artifact_store(self) -> "ArtifactLookupIndex":
         return self._graph.get(ARTIFACT_STORE)
 
     @property

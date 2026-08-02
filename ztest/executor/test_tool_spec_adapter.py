@@ -7,6 +7,7 @@ provider envelope. Note ``from __future__ import annotations`` stringizes
 annotations — ``build_json_schema`` resolves them via ``get_type_hints``, which
 these tests exercise.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -15,7 +16,12 @@ from typing import Optional, Union
 
 from pydantic import BaseModel
 
-from mote.kernel.tools.spec_adapter import _json_type, _unwrap_optional, build_json_schema, to_native_tool_specs
+from mote.kernel.tools.spec_adapter import (
+    _unwrap_optional,
+    annotation_to_json_schema,
+    build_json_schema,
+    to_native_tool_specs,
+)
 
 
 class Item(BaseModel):
@@ -46,25 +52,25 @@ class TestUnwrapOptional:
 
 class TestJsonType:
     def test_scalars(self):
-        assert _json_type(str) == {"type": "string"}
-        assert _json_type(int) == {"type": "integer"}
-        assert _json_type(float) == {"type": "number"}
-        assert _json_type(bool) == {"type": "boolean"}
+        assert annotation_to_json_schema(str) == {"type": "string"}
+        assert annotation_to_json_schema(int) == {"type": "integer"}
+        assert annotation_to_json_schema(float) == {"type": "number"}
+        assert annotation_to_json_schema(bool) == {"type": "boolean"}
 
     def test_list_with_item_type(self):
-        assert _json_type(list[str]) == {"type": "array", "items": {"type": "string"}}
+        assert annotation_to_json_schema(list[str]) == {"type": "array", "items": {"type": "string"}}
 
     def test_bare_dict_is_object(self):
-        assert _json_type(dict[str, int]) == {"type": "object"}
+        assert annotation_to_json_schema(dict[str, int]) == {"type": "object"}
 
     def test_unknown_falls_back_to_string(self):
-        assert _json_type(pathlib.Path) == {"type": "string"}
+        assert annotation_to_json_schema(pathlib.Path) == {"type": "string"}
 
     def test_empty_annotation_is_string(self):
-        assert _json_type(inspect.Parameter.empty) == {"type": "string"}
+        assert annotation_to_json_schema(inspect.Parameter.empty) == {"type": "string"}
 
     def test_pydantic_model_expands(self):
-        schema = _json_type(Item)
+        schema = annotation_to_json_schema(Item)
         assert schema["type"] == "object"
         assert set(schema["properties"]) == {"label", "qty"}
         assert schema["required"] == ["label"]

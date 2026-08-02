@@ -16,7 +16,7 @@ from mote.contracts.file import (
 )
 from mote.runtime.fileops import decode_text, editable_text
 from mote.runtime.fileops.hunks import Hunk, HunkApplyError, revert_hunk, slice_lines
-from mote.runtime.fileops.mutation import ArtifactRepository, ArtifactWriteScope, ArtifactWriteScopeState
+from mote.runtime.fileops.mutation import ArtifactWriteScope, ArtifactWriteScopeState, FileMutationArtifactRepository
 from mote.runtime.fileops.mutation_factory import MutationFactory
 from mote.runtime.fileops.resource_limits import ARTIFACT_WRITE_TTL_SECONDS
 from mote.runtime.fileops.review import ACCEPTED, PENDING, REJECTED, REJECTING, ReviewService
@@ -66,7 +66,7 @@ class HunkOps:
     def __init__(
         self,
         review: ReviewService,
-        blobs: ArtifactRepository,
+        blobs: FileMutationArtifactRepository,
         *,
         capture_snapshot: Callable[[str], tuple[FileSnapshot, bytes]],
         mutation_factory: MutationFactory,

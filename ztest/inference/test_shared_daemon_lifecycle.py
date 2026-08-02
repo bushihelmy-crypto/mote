@@ -2,6 +2,7 @@ import asyncio
 
 from mote.product.inference.backends.sqlite import SQLiteAttemptReceiptStore
 from mote.product.inference.daemon.lifecycle import SharedDaemonLifecycle
+from mote.runtime.inference.epochs import ExecutionEpochAuthority
 from mote.runtime.inference.generation import GatewayGenerationOwner
 from mote.ztest.inference.test_generation import _artifact
 
@@ -12,6 +13,7 @@ def test_shared_readiness_stays_closed_until_reconciled_generation_is_active(tmp
         lifecycle = SharedDaemonLifecycle(
             persistence=SQLiteAttemptReceiptStore(tmp_path / "authority.sqlite3"),
             generations=owner,
+            epochs=ExecutionEpochAuthority(),
             hard_min_free_bytes=0,
         )
         result = await lifecycle.start()
@@ -42,6 +44,7 @@ def test_shared_restart_restores_durable_active_generation_before_readiness(tmp_
         restarted = SharedDaemonLifecycle(
             persistence=SQLiteAttemptReceiptStore(path),
             generations=restarted_owner,
+            epochs=ExecutionEpochAuthority(),
             hard_min_free_bytes=0,
         )
         result = await restarted.start()
@@ -51,3 +54,4 @@ def test_shared_restart_restores_durable_active_generation_before_readiness(tmp_
     assert result.components["generation"] == "ready"
     assert lifecycle.readiness()[0] is True
     assert owner.active_generation_id == "generation-1"
+    assert lifecycle.readiness()[1]["admission_epoch"] == "2"

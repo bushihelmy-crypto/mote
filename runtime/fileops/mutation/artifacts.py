@@ -16,7 +16,7 @@ from mote.contracts.artifact import ArtifactContentRef
 from mote.contracts.content.identity import ContentIdentity
 from mote.contracts.file.errors import SnapshotDurabilityError
 from mote.contracts.file.identity import LockMode, LockSpec
-from mote.runtime.artifacts.repository import ArtifactRepository as ContentRepository
+from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
 from mote.runtime.fileops.locking import ARTIFACT_LOCK_LEVEL, HierarchicalLockManager
 from mote.runtime.fileops.mutation.artifact_catalog import (
     ArtifactLifecycleCatalog,
@@ -50,17 +50,17 @@ def _fsync_directory(path: Path) -> None:
         os.close(fd)
 
 
-class ArtifactRepository:
+class FileMutationArtifactRepository:
     """Combines lifecycle admission with verified immutable payload storage."""
 
     def __init__(
         self,
-        repository: ContentRepository,
+        repository: ContentAddressedArtifactStore,
         *,
         lifecycle_root: Path,
         hard_limit_bytes: int,
     ) -> None:
-        if type(repository) is not ContentRepository:
+        if type(repository) is not ContentAddressedArtifactStore:
             raise TypeError("FileOps artifacts require the shared Artifact repository")
         self.content_repository = repository
         self.root = repository.root
@@ -330,7 +330,7 @@ class ArtifactRepository:
 class ArtifactCapture(AbstractContextManager["ArtifactCapture"]):
     """One bounded writer owned by an explicit durable lifecycle stage."""
 
-    def __init__(self, repository: ArtifactRepository, stage: ArtifactStage) -> None:
+    def __init__(self, repository: FileMutationArtifactRepository, stage: ArtifactStage) -> None:
         self.repository = repository
         self.stage = stage
         self._stream: BinaryIO | None = None
@@ -419,7 +419,7 @@ class ArtifactCapture(AbstractContextManager["ArtifactCapture"]):
 class VerifiedArtifactStream(AbstractContextManager["VerifiedArtifactStream"]):
     """A single stable payload handle that verifies all bytes consumed through it."""
 
-    def __init__(self, repository: ArtifactRepository, artifact: ContentIdentity) -> None:
+    def __init__(self, repository: FileMutationArtifactRepository, artifact: ContentIdentity) -> None:
         self.repository = repository
         self.artifact = artifact
         self._stream: BinaryIO | None = None
@@ -535,13 +535,13 @@ class ArtifactWriteScope(AbstractContextManager["ArtifactWriteScope"]):
 
     def __init__(
         self,
-        repository: ArtifactRepository,
+        repository: FileMutationArtifactRepository,
         *,
         owner: str,
         maximum_bytes: int,
         ttl_seconds: float,
     ) -> None:
-        if type(repository) is not ArtifactRepository:
+        if type(repository) is not FileMutationArtifactRepository:
             raise TypeError("artifact write scope requires an artifact repository")
         if type(maximum_bytes) is not int or maximum_bytes < 0:
             raise ValueError("artifact write scope maximum must be non-negative")
@@ -659,7 +659,7 @@ class ArtifactWriteScope(AbstractContextManager["ArtifactWriteScope"]):
 
 __all__ = [
     "ArtifactCapture",
-    "ArtifactRepository",
+    "FileMutationArtifactRepository",
     "ArtifactWriteScope",
     "ArtifactWriteScopeState",
     "VerifiedArtifactStream",

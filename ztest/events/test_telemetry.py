@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TypeGuard
 
 import pytest
 
@@ -12,12 +11,7 @@ from mote.contracts.ports.events.telemetry import (
     TelemetryOverflow,
     TelemetrySubscriptionSpec,
 )
-from mote.runtime.events.telemetry import (
-    TelemetryBinding,
-    TelemetryManifest,
-    TelemetryRuntime,
-    TelemetryState,
-)
+from mote.runtime.events.telemetry import AllTelemetryBinding, TelemetryManifest, TelemetryRuntime, TelemetryState
 
 
 @dataclass(frozen=True)
@@ -32,8 +26,8 @@ def _binding(
     *,
     capacity: int = 4,
     overflow: TelemetryOverflow = TelemetryOverflow.DROP_NEWEST,
-) -> TelemetryBinding:
-    return TelemetryBinding(
+) -> AllTelemetryBinding:
+    return AllTelemetryBinding(
         TelemetrySubscriptionSpec(
             identity=TelemetryIdentity(identity),
             capacity=capacity,
@@ -41,10 +35,6 @@ def _binding(
         ),
         handler,
     )
-
-
-def _accepts_event(event: object) -> TypeGuard[_Event]:
-    return isinstance(event, _Event)
 
 
 class _Handler:
@@ -151,7 +141,7 @@ async def test_sync_emit_is_enqueued_and_processed_by_owner_task() -> None:
             4,
             TelemetryOverflow.DROP_NEWEST,
         ),
-        _accepts_event,
+        _Event,
         handler,
         handler,
     )
@@ -175,7 +165,7 @@ async def test_typed_binding_filters_both_paths_and_skips_missing_sync_handler()
             4,
             TelemetryOverflow.DROP_NEWEST,
         ),
-        _accepts_event,
+        _Event,
         handler,
     )
 
@@ -209,7 +199,8 @@ async def test_dynamic_subscription_handle_owns_unsubscribe_lifecycle() -> None:
     runtime = TelemetryRuntime(TelemetryManifest(()))
     runtime.start()
     handler = _Handler()
-    handle = await runtime.subscribe(_binding("mote.test.dynamic", handler))
+    binding = _binding("mote.test.dynamic", handler)
+    handle = await runtime.subscribe_all(binding.spec, binding.handler, binding.sync_handler)
     await runtime.emit(_Event(1))
     await runtime.drain()
 
@@ -225,7 +216,8 @@ async def test_dynamic_subscription_handle_owns_unsubscribe_lifecycle() -> None:
 async def test_subscription_can_be_registered_and_closed_before_start() -> None:
     handler = _Handler()
     runtime = TelemetryRuntime(TelemetryManifest(()))
-    handle = await runtime.subscribe(_binding("mote.test.prestart", handler))
+    binding = _binding("mote.test.prestart", handler)
+    handle = await runtime.subscribe_all(binding.spec, binding.handler, binding.sync_handler)
     assert len(runtime.snapshots()) == 1
 
     await handle.aclose()

@@ -3,10 +3,11 @@
 """Human-English display catalog.
 
 The English *human* wording (distinct from the model-facing English of
-``common/text/*``). Count-bearing entries use ICU ``plural`` so English gets its
+the model-facing prompt owners). Count-bearing entries use ICU ``plural`` so English gets its
 ``one``/``other`` inflection (``1 line`` vs ``2 lines``) that the Chinese catalog
 does not need — the same message id renders correctly in either language.
 """
+
 from __future__ import annotations
 
 from typing import Dict

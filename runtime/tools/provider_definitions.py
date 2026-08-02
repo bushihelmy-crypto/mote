@@ -37,6 +37,7 @@ class XmlToolDefinition(Generic[CapabilityT]):
     capability_factory: Callable[[], CapabilityT]
     capability_type: type
     schema_renderer: XmlSchemaRenderer[CapabilityT]
+    source_identity: str
     argument_decoder: ArgumentDecoder = _identity_arguments
     aliases: tuple[str, ...] = ()
     description: str = ""
@@ -78,6 +79,7 @@ class NativeToolDefinition(Generic[CapabilityT]):
     capability_factory: Callable[[], CapabilityT]
     capability_type: type
     schema_renderer: NativeSchemaRenderer[CapabilityT]
+    source_identity: str
     argument_decoder: ArgumentDecoder = _identity_arguments
     aliases: tuple[str, ...] = ()
     description: str = ""

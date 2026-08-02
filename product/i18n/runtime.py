@@ -13,6 +13,7 @@ up in the active locale's catalog (``code`` → ``language`` → :data:`BASE_LOC
 renders it with the ICU-subset formatter + the locale's CLDR plural rule, and —
 on a truly missing key — returns a visible ``⟦key⟧`` marker instead of crashing.
 """
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -28,8 +29,7 @@ DEFAULT_LOCALE = "zh"
 #: Ultimate catalog fallback so a missing translation still renders (complete).
 BASE_LOCALE = "en"
 
-# msg-id → pattern, keyed by locale code. Populated by ``register_catalog`` at
-# import (see ``common.i18n.catalog``).
+# msg-id → pattern, keyed by locale code and populated through register_catalog.
 _CATALOGS: Dict[str, Dict[str, str]] = {}
 
 _active: ContextVar[Locale] = ContextVar("mote_active_locale")

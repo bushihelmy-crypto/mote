@@ -23,6 +23,32 @@ class InlineTelemetry:
         self.handlers.append(binding.handler)
         return InlineTelemetryHandle(self, binding.handler)
 
+    async def subscribe_typed(
+        self,
+        _spec: object,
+        event_type: type,
+        handler: object,
+        sync_handler: object | None = None,
+    ) -> "InlineTelemetryHandle":
+        binding = _TypedInlineHandler(event_type, handler, sync_handler)
+        self.handlers.append(binding)
+        return InlineTelemetryHandle(self, binding)
+
+
+class _TypedInlineHandler:
+    def __init__(self, event_type: type, handler: object, sync_handler: object | None) -> None:
+        self._event_type = event_type
+        self._handler = handler
+        self._sync_handler = sync_handler
+
+    async def handle(self, event: object) -> None:
+        if type(event) is self._event_type:
+            await self._handler.handle(event)
+
+    def handle_sync(self, event: object) -> None:
+        if type(event) is self._event_type and self._sync_handler is not None:
+            self._sync_handler.handle_sync(event)
+
 
 class InlineTelemetryHandle:
     def __init__(self, telemetry: InlineTelemetry, handler: Any) -> None:

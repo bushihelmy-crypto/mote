@@ -4,7 +4,7 @@ import pytest
 
 from mote.contracts.model.topology import (
     DefaultRoute,
-    EndpointCapabilities,
+    EndpointCapabilityDeclaration,
     FailoverGroupTopology,
     ModelEndpointTopology,
     ModelTopology,
@@ -22,7 +22,7 @@ from mote.contracts.model.topology_codec import (
     topology_revision,
 )
 
-_CANONICAL = b'{"endpoints":[{"base_url":"https://api.example.com/v1","capabilities":{"context_tokens":128000,"supports_native_schema":false,"supports_native_tool_search":false,"supports_pdf":false,"supports_server_web_search":false,"supports_tools":true,"supports_vision":false},"credential_slots":["s"],"endpoint_id":"e","governance_domain":"default","model":"gpt","pricing_class":"default","provider":"openai","region":"global","transport":"openai"}],"failover_groups":[{"endpoint_ids":["e"],"group_id":"g","recovery_profile_id":"p"}],"recovery_profiles":[{"max_attempts_per_endpoint":1,"max_backoff_ms":0,"max_credential_rotations":0,"max_endpoint_switches":0,"max_request_transforms":0,"max_wire_attempts":1,"profile_id":"p","single_attempt_timeout_ms":500,"total_deadline_ms":1000}],"routes":[{"group_id":"g","route_id":{"kind":"default"}}],"schema":"mote.model-topology/v1"}'
+_CANONICAL = b'{"endpoints":[{"base_url":"https://api.example.com/v1","capabilities":{"context_tokens":128000,"supported_operations":["generate"],"supports_native_schema":false,"supports_native_tool_search":false,"supports_pdf":false,"supports_server_web_search":false,"supports_tools":true,"supports_vision":false},"credential_slots":["s"],"endpoint_id":"e","governance_domain":"default","model":"gpt","pricing_class":"default","provider":"openai","region":"global","transport":"openai"}],"failover_groups":[{"endpoint_ids":["e"],"group_id":"g","recovery_profile_id":"p"}],"recovery_profiles":[{"max_attempts_per_endpoint":1,"max_backoff_ms":0,"max_credential_rotations":0,"max_endpoint_switches":0,"max_request_transforms":0,"max_wire_attempts":1,"profile_id":"p","single_attempt_timeout_ms":500,"total_deadline_ms":1000}],"routes":[{"group_id":"g","route_id":{"kind":"default"}}],"schema":"mote.model-topology/v2"}'
 
 
 def _topology() -> ModelTopology:
@@ -34,7 +34,7 @@ def _topology() -> ModelTopology:
                 provider="openai",
                 model="gpt",
                 base_url="HTTPS://API.EXAMPLE.COM:443/v1/../v1",
-                capabilities=EndpointCapabilities(
+                capabilities=EndpointCapabilityDeclaration(
                     supports_tools=True,
                     supports_native_schema=False,
                     supports_server_web_search=False,
@@ -67,10 +67,10 @@ def _topology() -> ModelTopology:
     )
 
 
-def test_v1_golden_bytes_and_revision() -> None:
+def test_v2_golden_bytes_and_revision() -> None:
     topology = _topology()
     assert canonical_topology_bytes(topology) == _CANONICAL
-    assert topology_revision(topology) == "7a5366ec3516c76ccb76ca811ee03ee737191dea577146e073b6e83c40f8ba58"
+    assert topology_revision(topology) == "0efd25e730520205d0943a63251f5adc3805460e52d061b026e648e0de7f1750"
 
 
 def test_url_policy_is_stable_and_rejects_unicode() -> None:

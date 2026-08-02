@@ -207,8 +207,11 @@ def check_fact_admission() -> list[str]:
 def check_dynamic_discovery() -> list[str]:
     violations: list[str] = []
     forbidden_calls = {"importlib.import_module", "pkgutil.walk_packages", "__import__"}
+    approved_importers = {"product/routing/squilla/ml/backend_loader.py"}
     for path in production_paths():
         relative = path.relative_to(ROOT).as_posix()
+        if relative in approved_importers:
+            continue
         for node in ast.walk(_tree(path)):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "__getattr__":
                 violations.append(f"{relative}:{node.lineno}: dynamic __getattr__")

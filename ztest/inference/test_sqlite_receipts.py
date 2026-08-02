@@ -5,6 +5,13 @@ from datetime import datetime, timezone
 
 import pytest
 
+from mote.contracts.inference.execution_owner import (
+    ExecutionEpochBinding,
+    ExecutionId,
+    ExecutionOwnerRecord,
+    SharedExecutionVariant,
+)
+from mote.contracts.inference.identity import InferencePrincipal
 from mote.contracts.inference.persisted_event import PersistedLifecycleEvent
 from mote.contracts.inference.receipt import AttemptReceipt, ReceiptState
 from mote.product.inference.backends.sqlite import (
@@ -13,6 +20,44 @@ from mote.product.inference.backends.sqlite import (
     SQLiteBusyError,
     SQLiteIntegrityError,
 )
+
+
+def test_execution_owner_record_is_idempotent_conflict_safe_and_restart_readable(tmp_path):
+    async def scenario():
+        path = tmp_path / "authority.sqlite3"
+        store = SQLiteAttemptReceiptStore(path)
+        await store.initialize()
+        record = ExecutionOwnerRecord(
+            record_revision=1,
+            execution_id=ExecutionId("execution-1"),
+            variant=SharedExecutionVariant.FINITE,
+            principal=InferencePrincipal(
+                tenant_id="tenant",
+                project_id="project",
+                subject_id="subject",
+                policy_revision="policy",
+                delegation_digest="sha256:" + "a" * 64,
+            ),
+            application_scope="application",
+            credential_scope="credential",
+            generation_id="generation",
+            generation_artifact_digest="sha256:" + "b" * 64,
+            epoch=ExecutionEpochBinding(
+                backup_epoch=0,
+                admission_epoch=0,
+                permit_trust_revision=1,
+            ),
+        )
+        assert await store.put_owner_record(record) == record
+        assert await store.put_owner_record(record) == record
+        reopened = SQLiteAttemptReceiptStore(path)
+        await reopened.initialize()
+        assert await reopened.get_owner_record(ExecutionId("execution-1")) == record
+        with pytest.raises(ReceiptConflictError):
+            await reopened.put_owner_record(record.model_copy(update={"application_scope": "other"}))
+
+    asyncio.run(scenario())
+
 
 DIGEST = "sha256:" + "d" * 64
 

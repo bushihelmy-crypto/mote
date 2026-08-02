@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 from pydantic import Field, model_validator
 
+from mote.contracts.config.base import ConfigModel as YamlModel
 from mote.contracts.config.conversation.context import ContextConfig
 from mote.contracts.config.inference import InferenceConfig, PersistenceConfig
 from mote.contracts.config.model.routing import RouterConfig
-from mote.product.config.base import ConfigModel as YamlModel
+from mote.product.config.agents import AgentGovernanceConfig
 from mote.product.config.mcp import MCPConfig
 from mote.product.config.model.inputs import ExplicitModelsConfig, ProductModelsConfig, parse_product_models_config
 from mote.product.config.multimodal import MultimodalConfig
@@ -31,6 +32,8 @@ class Config(YamlModel):
     # Which models run: the default LLM, per-task overrides, routing switch and
     # the api-key helper.
     models: ProductModelsConfig
+
+    agents: AgentGovernanceConfig = Field(default_factory=AgentGovernanceConfig)
 
     inference: InferenceConfig = Field(
         default_factory=lambda: InferenceConfig(

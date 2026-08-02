@@ -16,9 +16,7 @@ FORBIDDEN_NAMES = {
     "declared_tool_catalog",
     "ToolRegistry",
 }
-APPROVED_DYNAMIC_PLUGIN_BOUNDARIES = {
-    "runtime/durable/plugins.py",
-}
+APPROVED_DYNAMIC_PLUGIN_BOUNDARIES: set[str] = set()
 
 
 def _migration_debt():

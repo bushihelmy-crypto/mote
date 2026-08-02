@@ -5,25 +5,28 @@
 These exercise the parts that need NO running Temporal server: the
 ``DurableBackend`` protocol conformance, the INLINE (outside-a-workflow) run_step
 path (records to the shared journal exactly like the JSONL tier), the
-``ActivityConfig``→``RetryPolicy`` mapping, and the process-local step-handler
-registry. The end-to-end workflow / activity-memoization behaviour (which needs a
+``ActivityConfig``→``RetryPolicy`` mapping, and the frozen typed activity
+catalog. The end-to-end workflow / activity-memoization behaviour (which needs a
 test server) lives in ``test_workflow.py``.
 
 All gated on ``temporalio`` being importable — the whole file skips when the
 ``[temporal]`` extra is absent, so the core test env (no temporalio) stays green.
 """
+
 from __future__ import annotations
 
 from datetime import timedelta
 
 import pytest
+from pydantic import ValidationError
 
 pytest.importorskip("temporalio")
 
 from mote.contracts.config.tool import ActivityConfig, TemporalConfig
+from mote.contracts.runtime.operation_ownership import EffectCapability
 from mote.runtime.durable import DurableBackend
-from mote.runtime.durable.temporal import TemporalBackend
-from mote.runtime.durable.temporal._activities import StepHandlerRegistry
+from mote.runtime.durable.temporal import TemporalActivityCatalog, TemporalBackend
+from mote.runtime.durable.temporal._activities import StepActivities, StepInput
 from mote.runtime.durable.temporal._backend import _activity_kwargs, _retry_policy
 from mote.runtime.ledger import COMPLETED, FAILED, KIND_THINK, KIND_TIMER, KIND_TOOL, RunJournal
 from mote.runtime.session.workspace import SessionWorkspace
@@ -169,34 +172,68 @@ def test_activity_kwargs_honours_explicit_timeout():
     assert kwargs["start_to_close_timeout"] == timedelta(seconds=30.0)
 
 
-def test_seam_config_dispatches_by_kind(tmp_path):
-    cfg = TemporalConfig(
-        think_activity=ActivityConfig(max_retry_attempts=1),
-        timer_activity=ActivityConfig(max_retry_attempts=2),
-        tool_activity=ActivityConfig(max_retry_attempts=3),
+# ---- Stable typed activity catalog ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_catalog_resolves_stable_handler_after_activation():
+    catalog = TemporalActivityCatalog()
+
+    async def handler(command: StepInput) -> str:
+        return command.payload.upper()
+
+    catalog.register("test.upper/v1", handler)
+    catalog.freeze()
+    activities = StepActivities(catalog)
+    result = await activities.run_step(
+        StepInput(
+            step_id="step-1",
+            handler_id="test.upper/v1",
+            payload="value",
+            kind=KIND_TOOL,
+            effect_id="effect-1",
+            effect_capability=EffectCapability.NO_EXTERNAL_EFFECT,
+        )
     )
-    backend = TemporalBackend(cfg, _journal(tmp_path))
-    assert backend._seam_config(KIND_THINK).max_retry_attempts == 1
-    assert backend._seam_config(KIND_TIMER).max_retry_attempts == 2
-    assert backend._seam_config(KIND_TOOL).max_retry_attempts == 3
-    # Unknown kind falls back to the tool policy (never crashes).
-    assert backend._seam_config("mystery").max_retry_attempts == 3
+    assert result == "VALUE"
 
 
-# ---- StepHandlerRegistry --------------------------------------------------
+def test_catalog_rejects_duplicates_and_registration_after_activation():
+    catalog = TemporalActivityCatalog()
+
+    async def handler(command: StepInput) -> str:
+        return command.payload
+
+    catalog.register("test.handler/v1", handler)
+    with pytest.raises(ValueError, match="duplicate"):
+        catalog.register("test.handler/v1", handler)
+    catalog.freeze()
+    with pytest.raises(RuntimeError, match="already activated"):
+        catalog.register("test.other/v1", handler)
 
 
-def test_registry_pop_returns_and_removes():
-    reg = StepHandlerRegistry()
-
-    async def h() -> str:
-        return "x"
-
-    reg.register("s1", h)
-    assert reg.pop("s1") is h
-    # Popped once -> gone (a completed step is served from history, not re-run).
-    assert reg.pop("s1") is None
+def test_catalog_unknown_handler_fails_closed():
+    catalog = TemporalActivityCatalog()
+    catalog.freeze()
+    with pytest.raises(RuntimeError, match="unknown Temporal activity handler"):
+        catalog.resolve("unknown/v1")
 
 
-def test_registry_pop_missing_is_none():
-    assert StepHandlerRegistry().pop("nope") is None
+@pytest.mark.asyncio
+async def test_step_input_rejects_extra_fields_and_unknown_schema():
+    values = {
+        "step_id": "step-1",
+        "handler_id": "test.handler/v1",
+        "payload": "value",
+        "kind": KIND_TOOL,
+        "effect_id": "effect-1",
+        "effect_capability": EffectCapability.NO_EXTERNAL_EFFECT,
+    }
+    with pytest.raises(ValidationError):
+        StepInput(**values, extra=True)
+    command = StepInput(**values, schema_version="future/v2")
+    catalog = TemporalActivityCatalog()
+    catalog.freeze()
+    activities = StepActivities(catalog)
+    with pytest.raises(ValueError, match="unsupported"):
+        await activities.run_step(command)

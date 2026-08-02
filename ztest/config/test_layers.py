@@ -6,6 +6,7 @@ Covers deep_merge (dict recurse / scalar override / list union+dedupe / type
 mismatch), credential stripping, and the layer stack's precedence ordering and
 provenance map.
 """
+
 from __future__ import annotations
 
 from mote.product.config.layers import CREDENTIAL_DENYLIST, ConfigLayer, ConfigLayerStack, deep_merge, strip_sensitive
@@ -63,17 +64,17 @@ def test_strip_sensitive_removes_credential_keys_recursively():
 
 def test_layer_stack_higher_precedence_wins_regardless_of_insert_order():
     stack = ConfigLayerStack()
-    # add out of order: PROJECT (high) first, USER (low) second
-    stack.add(ConfigLayer(ConfigSource.PROJECT, {"llm": {"model": "project"}}))
+    # add out of order: PROFILE (high) first, USER (low) second
+    stack.add(ConfigLayer(ConfigSource.PROFILE, {"llm": {"model": "profile"}}))
     stack.add(ConfigLayer(ConfigSource.USER, {"llm": {"model": "user", "temperature": 0.5}}))
     merged = stack.effective()
-    assert merged == {"llm": {"model": "project", "temperature": 0.5}}
+    assert merged == {"llm": {"model": "profile", "temperature": 0.5}}
 
 
 def test_layer_stack_provenance_tracks_source_per_leaf():
     stack = ConfigLayerStack()
     stack.add(ConfigLayer(ConfigSource.USER, {"llm": {"model": "user", "temperature": 0.5}}))
-    stack.add(ConfigLayer(ConfigSource.PROJECT, {"llm": {"model": "project"}}))
+    stack.add(ConfigLayer(ConfigSource.PROFILE, {"llm": {"model": "profile"}}))
     prov = stack.provenance()
-    assert prov["llm.model"] == "PROJECT"  # last writer wins
+    assert prov["llm.model"] == "PROFILE"  # last writer wins
     assert prov["llm.temperature"] == "USER"

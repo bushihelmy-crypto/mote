@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from mote.contracts.ports.code_intelligence.code_map import CodeMapQueryPort
+
 
 def is_public_interface(qualified_name: str) -> bool:
     """Return whether a symbol is a public, module-level interface."""
@@ -34,24 +36,24 @@ def diff_symbol_shapes(
     return changed_names, changed_symbols
 
 
-def fill_unread_from_index(neighborhoods: list, code_map, repo_index) -> None:
+def fill_unread_from_index(
+    neighborhoods: list,
+    code_map,
+    repo_index: CodeMapQueryPort,
+) -> None:
     """Populate unread dependency metadata from the persistent repo index."""
-    symbols_of = getattr(repo_index, "symbols_in", None)
-    module_summary_of = getattr(repo_index, "module_summary_of", None)
-    importers_of = getattr(repo_index, "importers", None)
-    if symbols_of is None or module_summary_of is None or importers_of is None:
-        return
-    references_of = getattr(repo_index, "references_to", None)
     for neighborhood in neighborhoods:
         if not neighborhood.imports_unread:
             continue
         try:
             symbols, summaries, used_by = code_map.resolve_unread_from_index(
                 neighborhood.imports_unread,
-                symbols_of=symbols_of,
-                module_summary_of=module_summary_of,
-                importers_of=importers_of,
-                references_of=references_of,
+                symbols_of=repo_index.symbols_in,
+                module_summary_of=repo_index.module_summary_of,
+                importers_of=repo_index.importers,
+                references_of=lambda path, symbol: [
+                    (reference.path, reference.line) for reference in repo_index.references_to(path, symbol)
+                ],
             )
             neighborhood.unread_symbols = symbols
             neighborhood.unread_module_summary = summaries

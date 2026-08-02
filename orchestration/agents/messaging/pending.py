@@ -54,6 +54,8 @@ class PendingDelivery:
     ``message`` carries an explicit :class:`DeliveryMode`.
     """
 
+    delivery_id: str = ""
+    target_generation: int = 0
     message: Optional[Message] = None
     communication: Optional[InterAgentCommunication] = None
     mode: DeliveryMode = DeliveryMode.TRIGGER_TURN

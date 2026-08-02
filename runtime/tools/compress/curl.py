@@ -85,7 +85,7 @@ _DROP_TAGS = (
 _HTML_START_RE = re.compile(r"^\s*(<!doctype\s+html|<html[\s>]|<head[\s>]|<body[\s>])", re.IGNORECASE)
 
 # Binary detection. The shell decoded the fetched bytes with ``errors="replace"``
-# (see common.aexecute), so genuine binary arrives as a stream peppered with the
+# so genuine binary arrives as a stream peppered with the
 # Unicode replacement char (``U+FFFD``); a raw NUL also never occurs in real text
 # output. Either signal, sampled over a bounded prefix, marks the output as an
 # undecodable binary blob rather than something worth showing the model.

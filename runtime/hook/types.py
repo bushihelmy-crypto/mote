@@ -2,7 +2,7 @@
 
 Kept free of any executor/roles/context import so it sits at the very bottom of
 the layering and can be imported from anywhere without a cycle. ``HookBehavior``
-aliases the canonical ``PermissionBehavior`` from ``common/schema`` (also a
+aliases the canonical ``PermissionBehavior`` from ``contracts/authorization`` (also a
 pure-data, executor-free module) so the allow/deny/ask Literal has a single
 source of truth. The executor seam (``ToolExecutor.run_command``) is the single
 place that folds a neutral :class:`HookOutcome` back into a real
@@ -59,6 +59,7 @@ def fold(outcomes: Iterable[HookOutcome]) -> HookOutcome:
             result.stop = True
             if outcome.stop_reason:
                 result.stop_reason = outcome.stop_reason
+        result.authorization_facts.extend(outcome.authorization_facts)
     return result
 
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mote.contracts.model.failover import AttemptBudget, EndpointCapabilities, EndpointDescriptor
-from mote.contracts.model.topology import ModelTopology, RouteId
+from mote.contracts.model.failover import AttemptBudget, EndpointDescriptor, ResolvedEndpointCapabilities
+from mote.contracts.model.topology import EndpointCapabilityDeclaration, ModelTopology, RouteId
 from mote.contracts.model.topology_codec import topology_revision
 
 
@@ -42,6 +42,22 @@ class CanonicalModelRuntimeSnapshot:
         )
 
 
+def resolve_endpoint_capabilities(
+    declaration: EndpointCapabilityDeclaration,
+) -> ResolvedEndpointCapabilities:
+    """Project deployment-time declarations into an immutable Runtime snapshot."""
+    return ResolvedEndpointCapabilities(
+        supported_operations=declaration.supported_operations,
+        supports_tools=declaration.supports_tools,
+        supports_native_schema=declaration.supports_native_schema,
+        supports_server_web_search=declaration.supports_server_web_search,
+        supports_vision=declaration.supports_vision,
+        supports_pdf=declaration.supports_pdf,
+        supports_native_tool_search=declaration.supports_native_tool_search,
+        context_tokens=declaration.context_tokens,
+    )
+
+
 def build_canonical_model_runtime_snapshot(
     topology: ModelTopology,
 ) -> CanonicalModelRuntimeSnapshot:
@@ -54,10 +70,7 @@ def build_canonical_model_runtime_snapshot(
             provider=endpoint.provider,
             model=endpoint.model,
             base_url_identity=endpoint.base_url,
-            capabilities=EndpointCapabilities(
-                **endpoint.capabilities.model_dump(exclude={"context_tokens"}),
-                context_tokens=endpoint.capabilities.context_tokens,
-            ),
+            capabilities=resolve_endpoint_capabilities(endpoint.capabilities),
             governance_domain=endpoint.governance_domain,
             region=endpoint.region,
             pricing_class=endpoint.pricing_class,
@@ -98,4 +111,5 @@ __all__ = [
     "CanonicalModelRuntimeSnapshot",
     "RuntimeFailoverGroup",
     "build_canonical_model_runtime_snapshot",
+    "resolve_endpoint_capabilities",
 ]

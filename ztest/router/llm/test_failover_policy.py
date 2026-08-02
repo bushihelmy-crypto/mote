@@ -6,7 +6,7 @@ from mote.contracts.model.failover import (
     QuotaObservation,
     RequestTransform,
 )
-from mote.runtime.errors import (
+from mote.contracts.model.provider_errors import (
     LLMAuthenticationError,
     LLMContentPolicyError,
     LLMInvalidRequestStateError,

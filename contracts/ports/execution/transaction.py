@@ -10,50 +10,50 @@ OutputT = TypeVar("OutputT")
 
 
 class HistoryProjection(Protocol):
-    messages: tuple[Message, ...]
-    fingerprint: str
+    @property
+    def messages(self) -> tuple[Message, ...]: ...
+
+    @property
+    def fingerprint(self) -> str: ...
 
 
 class ExecutionTransactionPort(Protocol):
-    def context(self, operation_id: str, *, attempt_id: str = "") -> ExecutionOperationContext:
-        ...
+    def context(self, operation_id: str, *, attempt_id: str = "") -> ExecutionOperationContext: ...
 
-    async def record_history(self, context: ExecutionOperationContext, history: HistoryProjection) -> MutationResult:
-        ...
+    async def record_history(
+        self, context: ExecutionOperationContext, history: HistoryProjection
+    ) -> MutationResult: ...
 
-    async def record_model_turn(self, context: ExecutionOperationContext, turn: HistoryProjection) -> MutationResult:
-        ...
+    async def record_model_turn(
+        self, context: ExecutionOperationContext, turn: HistoryProjection
+    ) -> MutationResult: ...
 
     async def record_tool_results(
         self,
         context: ExecutionOperationContext,
         results: tuple[HistoryProjection, ...],
-    ) -> MutationResult:
-        ...
+    ) -> MutationResult: ...
 
-    async def reject_output(self, context: ExecutionOperationContext, rejection: HistoryProjection) -> MutationResult:
-        ...
+    async def reject_output(
+        self, context: ExecutionOperationContext, rejection: HistoryProjection
+    ) -> MutationResult: ...
 
-    async def recover_frontier(self, run_id: str) -> ExecutionRecoveryFrontier:
-        ...
+    async def recover_frontier(self, run_id: str) -> ExecutionRecoveryFrontier: ...
 
 
 class OutputTransactionPort(Protocol[OutputT]):
-    def context(self, operation_id: str, *, attempt_id: str = "") -> ExecutionOperationContext:
-        ...
+    def context(self, operation_id: str, *, attempt_id: str = "") -> ExecutionOperationContext: ...
 
     async def stage_accepted_output(
         self,
         context: ExecutionOperationContext,
         output: AcceptedOutput[OutputT],
         history: HistoryProjection,
-    ) -> MutationResult:
-        ...
+    ) -> MutationResult: ...
 
     async def commit_terminal_output(
         self, context: ExecutionOperationContext, staged_output_id: str
-    ) -> CommittedOutput[OutputT] | MutationResult:
-        ...
+    ) -> CommittedOutput[OutputT] | MutationResult: ...
 
 
 class ExecutionOutputTransactionPort(ExecutionTransactionPort, OutputTransactionPort[OutputT], Protocol[OutputT]):

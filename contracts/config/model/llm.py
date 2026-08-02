@@ -8,8 +8,8 @@ from urllib.parse import urlparse
 
 from pydantic import field_validator, model_validator
 
+from mote.contracts.config.base import ConfigModel as YamlModel
 from mote.contracts.config.errors import MissingAPIKeyError
-from mote.contracts.config.model.base import ConfigModel as YamlModel
 from mote.contracts.config.model.oauth import OAuthProviderConfig
 from mote.contracts.model.constants import LLM_API_TIMEOUT
 
@@ -112,7 +112,7 @@ class LLMConfig(YamlModel):
         """Resolve a brand ``provider`` into base_url/api_type/oauth + env api_key.
 
         Uses the module-level provider catalog (co-located below) so there is no
-        ``common -> router`` import cycle. Explicit user values always win; an
+        cross-layer configuration import cycle. Explicit user values always win; an
         absent/placeholder ``api_key`` is filled from the brand's env vars when
         one is set.
         """
@@ -177,8 +177,8 @@ class LLMConfig(YamlModel):
 # OAuth provider preset.
 #
 # Co-located with :class:`LLMConfig` (rather than under ``router/``) so the
-# ``@model_validator`` above can apply presets without a ``common -> router``
-# import cycle. ``router.llm.provider_catalog`` re-exports these names.
+# ``@model_validator`` above can apply presets without a cross-layer import
+# cycle. This module is the authoritative preset owner.
 # ---------------------------------------------------------------------------
 
 

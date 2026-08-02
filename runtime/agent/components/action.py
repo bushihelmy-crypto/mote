@@ -1,18 +1,26 @@
 """Tool execution, command protocol, and background-action manifest."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, TypeVar
+from uuid import uuid4
 
 from mote.contracts.ports.task.operations import (
     BackgroundTaskBuildContext,
     BackgroundTaskService,
     BackgroundTaskServiceFactory,
 )
-from mote.contracts.task.models import SessionId
+from mote.contracts.ports.tool.deferred import DeferredResultProjectorFactory
+from mote.contracts.ports.tool.policy import ToolCallPolicyExtensionSpec
+from mote.contracts.session.identity import SessionId
+from mote.contracts.task.lifecycle import BackgroundTaskOwner
+from mote.contracts.workflow.execution import WorkflowNodeDispatchResult
 from mote.kernel.commands import make_command_channel
 from mote.runtime.agent.component_graph import BuildContext, ComponentSpec
 from mote.runtime.agent.component_keys import (
+    ARTIFACT_PUBLISHER,
     ARTIFACT_RESOLVER,
     BACKGROUND_POOL,
     BROWSER_PROFILE_STORE,
@@ -20,6 +28,7 @@ from mote.runtime.agent.component_keys import (
     EXECUTOR,
     GRAPH_OUTPUT_SERVICE,
     HOOK_MANAGER,
+    PERMISSION_ENGINE,
     SECRET_STORE,
     SESSION_FACT_COMMITTER,
     SKILL_MANAGER,
@@ -28,15 +37,18 @@ from mote.runtime.agent.component_keys import (
     TOOL_RESULT_POLICY,
     WORKSPACE_STORE,
 )
+from mote.runtime.config.mcp import MCPServerConfig
 from mote.runtime.interactive.browser.profile import BrowserProfileStore
 from mote.runtime.models.media_projection import build_media_materializer
 from mote.runtime.output.graph_service import GraphOutputService
 from mote.runtime.secrets.cipher import build_cipher
 from mote.runtime.session.workspace import SessionWorkspace
-from mote.runtime.tools.policy import build_tool_call_policy, build_tool_result_policy
+from mote.runtime.tools.policy import build_permission_engine, build_tool_call_policy, build_tool_result_policy
+from mote.runtime.tools.provider import AnyToolset
 from mote.runtime.tools.tool_executor import ToolExecutor
 
 AgentDepsT = TypeVar("AgentDepsT")
+_PROCESS_INSTANCE_ID = uuid4().hex
 
 
 async def _noop_async() -> None:
@@ -44,6 +56,19 @@ async def _noop_async() -> None:
 
 
 RoleBuildContext = BuildContext[Any, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ActionComponentInputs:
+    session_workspace_root: Path | None = None
+    secrets_root: Path | None = None
+    browser_profiles_root: Path | None = None
+    oauth_root: Path | None = None
+    toolsets: tuple[AnyToolset, ...] = ()
+    tool_policy_extensions: tuple[ToolCallPolicyExtensionSpec, ...] = ()
+    deferred_result_projector_factory: DeferredResultProjectorFactory | None = None
+    mcp_servers: tuple[MCPServerConfig, ...] = ()
+    background_task_pool_builder: BackgroundTaskServiceFactory | None = None
 
 
 def _missing_background_pool_builder(
@@ -55,8 +80,8 @@ def _missing_background_pool_builder(
     )
 
 
-def _build_workspace_store(ctx: RoleBuildContext) -> SessionWorkspace:
-    root = ctx.role.wiring.dependencies.session_workspace_root
+def _build_workspace_store(ctx: RoleBuildContext, inputs: ActionComponentInputs) -> SessionWorkspace:
+    root = inputs.session_workspace_root
     if root is None:
         raise ValueError("Agent composition requires a session workspace root")
     return SessionWorkspace(root)
@@ -72,6 +97,25 @@ class _AgentWake:
         self.callback()
 
 
+@dataclass(frozen=True, slots=True)
+class _RoleWorkflowNodeExecution:
+    role: RoleBuildContext
+
+    async def dispatch(self, tool_name: str, arguments: dict[str, object]) -> WorkflowNodeDispatchResult:
+        result = await self.role.role.dispatch_tool(tool_name, dict(arguments))
+        return WorkflowNodeDispatchResult(result.output, result.success, result.payload, result.error)
+
+    def allowed_tool_names(self) -> tuple[str, ...]:
+        role = self.role.role
+        return tuple(
+            sorted(
+                set(role.list_tool_names())
+                - set(role.list_graph_tool_names())
+                - set(role.list_graph_excluded_tool_names())
+            )
+        )
+
+
 def _build_background_pool(ctx: RoleBuildContext, builder: BackgroundTaskServiceFactory) -> BackgroundTaskService:
     role = ctx.role
     wake = ctx.state.pending_task_completion_wake
@@ -82,29 +126,39 @@ def _build_background_pool(ctx: RoleBuildContext, builder: BackgroundTaskService
             output_locations=ctx.dep(WORKSPACE_STORE),
             session_id=SessionId(role.state.session_id),
             result_registry=role._capabilities,
+            owner=BackgroundTaskOwner(
+                process_instance_id=_PROCESS_INSTANCE_ID,
+                agent_id=role.state.session_id,
+                incarnation_id=role.incarnation_id,
+            ),
         )
     )
 
 
 def action_component_specs(
     background_pool_builder: BackgroundTaskServiceFactory | None = None,
+    *,
+    inputs: ActionComponentInputs = ActionComponentInputs(),
 ) -> list[ComponentSpec[Any, Any, object]]:
-    background_pool_builder = background_pool_builder or _missing_background_pool_builder
+    background_pool_builder = (
+        inputs.background_task_pool_builder or background_pool_builder or _missing_background_pool_builder
+    )
     return [
         ComponentSpec(
             WORKSPACE_STORE,
-            _build_workspace_store,
+            lambda ctx: _build_workspace_store(ctx, inputs),
         ),
         ComponentSpec(
             BACKGROUND_POOL,
             lambda ctx: _build_background_pool(ctx, background_pool_builder),
         ),
-        ComponentSpec(TOOL_CALL_POLICY, _build_tool_call_policy),
+        ComponentSpec(PERMISSION_ENGINE, lambda ctx: _build_permission_engine(ctx, inputs)),
+        ComponentSpec(TOOL_CALL_POLICY, lambda ctx: _build_tool_call_policy(ctx, inputs)),
         ComponentSpec(TOOL_RESULT_POLICY, _build_tool_result_policy),
-        ComponentSpec(EXECUTOR, _build_executor),
+        ComponentSpec(EXECUTOR, lambda ctx: _build_executor(ctx, inputs)),
         ComponentSpec(COMMAND_CHANNEL, _build_command_channel),
         ComponentSpec(GRAPH_OUTPUT_SERVICE, _build_graph_output_service),
-        ComponentSpec(BROWSER_PROFILE_STORE, _build_browser_profile_store),
+        ComponentSpec(BROWSER_PROFILE_STORE, lambda ctx: _build_browser_profile_store(ctx, inputs)),
     ]
 
 
@@ -144,10 +198,10 @@ def _build_command_channel(ctx: RoleBuildContext):
     )
 
 
-def _build_browser_profile_store(ctx: RoleBuildContext) -> BrowserProfileStore:
+def _build_browser_profile_store(ctx: RoleBuildContext, inputs: ActionComponentInputs) -> BrowserProfileStore:
     secrets_cfg = ctx.role.config.secrets
-    secrets_root = ctx.role.wiring.dependencies.secrets_root
-    profiles_root = ctx.role.wiring.dependencies.browser_profiles_root
+    secrets_root = inputs.secrets_root
+    profiles_root = inputs.browser_profiles_root
     if secrets_root is None or profiles_root is None:
         raise ValueError("Agent composition requires secrets and browser profile roots")
     return BrowserProfileStore(
@@ -170,15 +224,25 @@ def _build_graph_output_service(ctx: RoleBuildContext) -> GraphOutputService:
     )
 
 
-def _build_tool_call_policy(ctx: RoleBuildContext):
+def _build_tool_call_policy(ctx: RoleBuildContext, inputs: ActionComponentInputs):
     role = ctx.role
-    toolsets = role.wiring.dependencies.toolsets
+    toolsets = inputs.toolsets
     return build_tool_call_policy(
         role.role_schema.permissions,
         role=role,
         hook_manager=ctx.dep(HOOK_MANAGER),
-        extensions=role.wiring.dependencies.tool_policy_extensions,
+        extensions=inputs.tool_policy_extensions,
         require_permission=any(toolset.requires_permission_gate for toolset in toolsets),
+        permission_engine=ctx.dep(PERMISSION_ENGINE),
+    )
+
+
+def _build_permission_engine(ctx: RoleBuildContext, inputs: ActionComponentInputs):
+    role = ctx.role
+    return build_permission_engine(
+        role.role_schema.permissions,
+        role=role,
+        require_permission=any(toolset.requires_permission_gate for toolset in inputs.toolsets),
     )
 
 
@@ -190,7 +254,7 @@ def _build_tool_result_policy(ctx: RoleBuildContext):
     )
 
 
-def _build_executor(ctx: RoleBuildContext) -> ToolExecutor[object]:
+def _build_executor(ctx: RoleBuildContext, inputs: ActionComponentInputs) -> ToolExecutor[object]:
     role = ctx.role
     all_tools = role.role_schema.mcps + role.role_schema.tools
     if ctx.dep(SKILL_MANAGER).enabled:
@@ -199,6 +263,16 @@ def _build_executor(ctx: RoleBuildContext) -> ToolExecutor[object]:
     if deferred_tools:
         all_tools = [*all_tools, "SearchTools"]
     tools_cfg = role.config.tools
+    projector_factory = inputs.deferred_result_projector_factory
+    deferred_projector = (
+        projector_factory(
+            ctx.dep(BACKGROUND_POOL),
+            ctx.dep(ARTIFACT_PUBLISHER),
+            _RoleWorkflowNodeExecution(ctx),
+        )
+        if projector_factory is not None
+        else None
+    )
     return ToolExecutor(
         session_id=role.state.session_id,
         tools=dedupe_tools(all_tools),
@@ -210,20 +284,21 @@ def _build_executor(ctx: RoleBuildContext) -> ToolExecutor[object]:
         durable_config=tools_cfg.durable,
         loop_guard_config=tools_cfg.loop_guard,
         telemetry=ctx.dep(TELEMETRY),
-        get_bg_pool=ctx.defer(BACKGROUND_POOL),
+        deferred_result_projector=deferred_projector,
         pipelines_enabled=role.config.context.bggraph.enabled,
         workspace_store=ctx.dep(WORKSPACE_STORE),
         deferred_tools=deferred_tools,
         get_revealed=lambda: role.state.revealed_tools,
-        toolsets=role.wiring.dependencies.toolsets,
+        toolsets=inputs.toolsets,
         command_protocol=role.role_schema.command_protocol,
-        mcp_servers=list(role.wiring.dependencies.mcp_servers),
-        oauth_root=role.wiring.dependencies.oauth_root,
+        mcp_servers=list(inputs.mcp_servers),
+        oauth_root=inputs.oauth_root,
     )
 
 
 __all__ = [
     "action_component_specs",
+    "ActionComponentInputs",
     "build_args_limiter",
     "dedupe_tools",
     "effective_deferred_tools",

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, cast
+from typing import cast
 from uuid import uuid4
 
 from mote.contracts.config.inference import DeploymentMode
+from mote.contracts.config.inference.models import ExactCacheConfig
 from mote.contracts.events.application import ApplicationReadinessFailed
+from mote.contracts.ports.model.gateway import ModelGateway
 from mote.contracts.runtime.application import (
     ReloadSequence,
     RuntimeGenerationId,
@@ -39,8 +42,12 @@ from mote.runtime.models.model_gateway import RuntimeModelGateway
 from mote.runtime.resilience.admission import ResourceAdmissionController
 
 
-def _exact_cache_decorator(exact_cache, identity, cache):
-    def decorate(gateway):
+def _exact_cache_decorator(
+    exact_cache: ExactCacheConfig,
+    identity: ExactCacheIdentity,
+    cache: MemoryExactInferenceCache,
+) -> Callable[[ModelGateway], ModelGateway]:
+    def decorate(gateway: ModelGateway) -> ModelGateway:
         return ExactCachedModelGateway(
             gateway,
             cache,
@@ -64,6 +71,28 @@ def _inference_revision(config) -> str:
         separators=(",", ":"),
     ).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def _reload_trust_projection(config: Config) -> tuple[frozenset[str], str]:
+    sensitive = {
+        "agents": config.agents.model_dump(mode="json"),
+        "tools": config.tools.model_dump(mode="json"),
+        "mcp": config.mcp.model_dump(mode="json"),
+    }
+    payload = json.dumps(sensitive, sort_keys=True, separators=(",", ":"))
+    capabilities: set[str] = set()
+
+    def collect(prefix: str, value: object) -> None:
+        if type(value) is bool:
+            if value:
+                capabilities.add(prefix)
+            return
+        if type(value) is dict:
+            for key, item in value.items():
+                collect(f"{prefix}.{key}" if prefix else str(key), item)
+
+    collect("", sensitive)
+    return frozenset(capabilities), hashlib.sha256(payload.encode()).hexdigest()
 
 
 async def build_application_candidate(
@@ -109,7 +138,7 @@ async def build_application_candidate(
                 admission_controller=admission_controller,
                 model_call_journal=model_call_journal,
             )
-            gateway_decorator: Callable | None = None
+            gateway_decorator: Callable[[ModelGateway], ModelGateway] | None = None
             exact_cache = config.inference.cache.exact
             semantic_cache = config.inference.cache.semantic
             principal = generation.principal
@@ -162,12 +191,15 @@ async def build_application_candidate(
             if cleanup_error is not None:
                 raise cleanup_error from primary
             raise
+    approved_capabilities, trust_revision = _reload_trust_projection(config)
     return ApplicationCompositionCandidate(
         source_revision=source_revision,
         reload_sequence=reload_sequence,
         model=handle,
         runtime_role_config=RuntimeRoleConfigView(response_language=config.models.response_language),
         product_config=config.model_dump(mode="python", exclude={"models"}),
+        approved_capabilities=approved_capabilities,
+        trust_revision=trust_revision,
     )
 
 

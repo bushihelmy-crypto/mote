@@ -7,7 +7,7 @@ running right now sits inside. Deep call sites — most importantly the
 :class:`~mote.runtime.tools.tool_executor.ToolExecutor` at its emit sites — *pull* the
 current scope at emit time and stamp it onto the event they fan out, exactly the
 way they already pull the ambient telemetry runtime from
-``common/events/context.py`` rather than threading it through every signature.
+``runtime/events/context.py`` rather than threading it through every signature.
 
 This keeps the governed chokepoints frozen: ``dispatch_tool`` / ``run_command``
 signatures never gain a ``scope`` argument, so the permission/hook/ledger seam is
@@ -62,7 +62,7 @@ def current_scope() -> ScopePath:
 def push_scope(ref: ScopeRef) -> Iterator[ScopePath]:
     """Push ``ref`` onto the lineage for the duration of the ``with`` block.
 
-    Mirrors ``bind_telemetry`` / ``set_progress_writer``: sets the extended path, yields
+    Mirrors ``bind_telemetry`` / ``set_progress_sink``: sets the extended path, yields
     it, and always ``reset``\\s the token in ``finally`` so an exception unwinds
     the scope cleanly (a raising node body pops its scope, never leaks it to a
     sibling).

@@ -63,6 +63,8 @@ from mote.contracts.file import (
 )
 from mote.contracts.model.capabilities import supports_pdf_input, supports_vision
 from mote.contracts.tool.effects import ToolEffect
+from mote.contracts.tool.errors import ToolError, ToolNotConfiguredError
+from mote.contracts.tool.result import json_tool_payload
 from mote.product.toolsets.builtin._paths import resolve_path, resolve_permission_path
 from mote.product.toolsets.builtin.read_adapters.byte import format_byte_view
 from mote.product.toolsets.builtin.read_adapters.image import ImageProcessingError, prepare_image
@@ -79,7 +81,6 @@ from mote.product.toolsets.constants import MAX_IMAGE_DIMENSION, MAX_MEDIA_SIZE_
 from mote.product.toolsets.prompts import FILE_UNCHANGED_STUB
 from mote.runtime.artifacts.media import publish_media_artifact
 from mote.runtime.context.markers import system_reminder
-from mote.runtime.errors import ToolError, ToolNotConfiguredError
 from mote.runtime.media.video import VIDEO_EXTENSIONS
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import (
@@ -569,7 +570,7 @@ class Read(BaseTool):
         return ToolResult(
             output=output,
             resource_path=full_path,
-            data=data,
+            payload=json_tool_payload(data),
         )
 
     async def _read_pdf_pages(
@@ -584,7 +585,7 @@ class Read(BaseTool):
             return ToolResult(
                 output=output,
                 resource_path=full_path,
-                data=data,
+                payload=json_tool_payload(data),
             )
 
         try:
@@ -626,7 +627,7 @@ class Read(BaseTool):
                 for page, artifact in zip(publishable_pages, artifacts, strict=True)
             ],
             resource_path=full_path,
-            data=data,
+            payload=json_tool_payload(data),
         )
 
     def _read_text_view(
@@ -651,7 +652,7 @@ class Read(BaseTool):
         return ToolResult(
             output=output,
             resource_path=full_path,
-            data=data,
+            payload=json_tool_payload(data),
         )
 
     async def _read_image(self, file_path, full_path, ext, raw, detail) -> ToolResult:
@@ -705,12 +706,14 @@ class Read(BaseTool):
                     artifact=artifact,
                 )
             ],
-            data={
-                "type": "image",
-                "size": size,
-                "detail": detail,
-                "sent_bytes": len(final_bytes),
-            },
+            payload=json_tool_payload(
+                {
+                    "type": "image",
+                    "size": size,
+                    "detail": detail,
+                    "sent_bytes": len(final_bytes),
+                }
+            ),
         )
 
     async def _read_video(self, file_path, raw, extension) -> ToolResult:
@@ -749,12 +752,14 @@ class Read(BaseTool):
         return ToolResult(
             output=video_summary(file_path, result, kept=len(media)),
             media=media,
-            data={
-                "type": "video",
-                "frames": len(media),
-                "engine": result.engine,
-                "has_transcript": bool(result.transcript),
-            },
+            payload=json_tool_payload(
+                {
+                    "type": "video",
+                    "frames": len(media),
+                    "engine": result.engine,
+                    "has_transcript": bool(result.transcript),
+                }
+            ),
         )
 
     async def _read_pdf(self, file_path, full_path, raw) -> ToolResult:
@@ -794,7 +799,7 @@ class Read(BaseTool):
                     artifact=artifact,
                 )
             ],
-            data={"type": "pdf", "size": size},
+            payload=json_tool_payload({"type": "pdf", "size": size}),
         )
 
     def _read_notebook(self, file_path, raw) -> str:

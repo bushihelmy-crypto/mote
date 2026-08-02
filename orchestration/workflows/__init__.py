@@ -23,8 +23,8 @@ from mote.orchestration.workflows.definition import (
     RunSnapshot,
     Succeeded,
     TimedOut,
-    WorkflowContinuation,
     WorkflowDefinition,
+    WorkflowDefinitionCompiler,
     WorkflowOutcome,
     WorkflowRun,
 )
@@ -32,12 +32,12 @@ from mote.orchestration.workflows.graph import WorkflowBuilder
 from mote.orchestration.workflows.types import (
     END,
     START,
-    BgStatus,
     GraphPause,
     GraphRunState,
     GraphState,
     NodeRecord,
     Stage,
+    WorkflowNodeStatus,
 )
 
 __all__ = [
@@ -45,7 +45,7 @@ __all__ = [
     "From",
     "WorkflowBuilder",
     "WorkflowDefinition",
-    "WorkflowContinuation",
+    "WorkflowDefinitionCompiler",
     "WorkflowRun",
     "WorkflowOutcome",
     "Succeeded",
@@ -60,7 +60,7 @@ __all__ = [
     "GraphRunState",
     "NodeRecord",
     "Stage",
-    "BgStatus",
+    "WorkflowNodeStatus",
     "GraphPause",
     "PauseReason",
     "START",

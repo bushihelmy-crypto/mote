@@ -4,7 +4,7 @@ Port of the relevant ``CodexErr`` variants used by the multi-agent control
 plane (``codex-rs/core/src/agent``). Rooted on :class:`MoteError` so
 control-plane failures carry a stable :class:`ErrorCode` and serialize via
 ``to_dict()`` like every other typed error. The custom ``__init__`` signatures
-(``max_agents`` / ``agent_id`` / ``agent_path`` / ``reference``) are preserved
+(``limit`` / ``agent_id`` / ``agent_path`` / ``reference``) are preserved
 because the control plane reads those attributes; each is also mirrored into
 ``context`` so it surfaces in ``to_dict()``.
 """
@@ -26,18 +26,17 @@ class AgentControlError(MoteError):
 class AgentLimitReached(AgentControlError):
     """Raised when no execution / residency slot is available.
 
-    Mirrors codex ``CodexErr::AgentLimitReached { max_threads }``.
+    The optional numeric limit is diagnostic only; typed receipts carry the
+    authoritative capacity dimension and disposition.
     """
 
     default_code: ClassVar[ErrorCode] = ErrorCode.AGENT_LIMIT_REACHED
 
-    def __init__(self, max_agents: Optional[int] = None, message: Optional[str] = None):
-        self.max_agents = max_agents
+    def __init__(self, limit: Optional[int] = None, message: Optional[str] = None):
+        self.limit = limit
         if message is None:
-            message = (
-                f"agent limit reached (max_agents={max_agents})" if max_agents is not None else "agent limit reached"
-            )
-        super().__init__(message, max_agents=max_agents)
+            message = f"Agent capacity reached (limit={limit})" if limit is not None else "Agent capacity reached"
+        super().__init__(message, limit=limit)
 
 
 class AgentNotFound(AgentControlError):

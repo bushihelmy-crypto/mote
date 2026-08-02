@@ -12,6 +12,7 @@ from mote.kernel.execution.run_context import RunContext, ToolContext
 from mote.kernel.tools.docstrings import description_body, first_line
 from mote.kernel.tools.spec_adapter import build_json_schema
 from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.definition_compiler import python_tool_source_identity
 from mote.runtime.tools.provider import NativeToolset, XmlToolset
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_convert import function_docstring_to_schema
@@ -23,8 +24,7 @@ DepsProjector = Callable[[AgentDepsT], ToolDepsT]
 
 
 class _FunctionInvocation(Protocol):
-    async def __call__(self, arguments: dict[str, Any]) -> Any:
-        ...
+    async def __call__(self, arguments: dict[str, Any]) -> Any: ...
 
 
 class _TypedFunctionInvocation(Generic[AgentDepsT, ToolDepsT]):
@@ -141,6 +141,7 @@ def _xml_function_definition(
         capability_factory=capability_type,
         capability_type=capability_type,
         schema_renderer=render,
+        source_identity=python_tool_source_identity(capability_type),
         description=description_body(docstring),
         summary=summary,
         search_text=summary,
@@ -169,6 +170,7 @@ def _native_function_definition(
         capability_factory=capability_type,
         capability_type=capability_type,
         schema_renderer=render,
+        source_identity=python_tool_source_identity(capability_type),
         description=description_body(docstring),
         summary=summary,
         search_text=summary,
@@ -197,7 +199,10 @@ class XmlFunctionToolset(XmlToolset[AgentDepsT], Generic[AgentDepsT]):
         *,
         project: DepsProjector[AgentDepsT, ToolDepsT],
         name: str | None = None,
-    ) -> Callable[[Callable[[ToolContext[ToolDepsT]], ToolReturnT]], Callable[[ToolContext[ToolDepsT]], ToolReturnT],]:
+    ) -> Callable[
+        [Callable[[ToolContext[ToolDepsT]], ToolReturnT]],
+        Callable[[ToolContext[ToolDepsT]], ToolReturnT],
+    ]:
         def register(
             function: Callable[[ToolContext[ToolDepsT]], ToolReturnT],
         ) -> Callable[[ToolContext[ToolDepsT]], ToolReturnT]:
@@ -231,7 +236,10 @@ class NativeFunctionToolset(NativeToolset[AgentDepsT], Generic[AgentDepsT]):
         *,
         project: DepsProjector[AgentDepsT, ToolDepsT],
         name: str | None = None,
-    ) -> Callable[[Callable[[ToolContext[ToolDepsT]], ToolReturnT]], Callable[[ToolContext[ToolDepsT]], ToolReturnT],]:
+    ) -> Callable[
+        [Callable[[ToolContext[ToolDepsT]], ToolReturnT]],
+        Callable[[ToolContext[ToolDepsT]], ToolReturnT],
+    ]:
         def register(
             function: Callable[[ToolContext[ToolDepsT]], ToolReturnT],
         ) -> Callable[[ToolContext[ToolDepsT]], ToolReturnT]:

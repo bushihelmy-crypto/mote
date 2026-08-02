@@ -10,7 +10,6 @@ MESSAGE_ROUTE_TO_SELF = "<self>"  # Add this tag to replace `ActionOutput`
 
 # Metadata defines
 AGENT = "agent"
-USE_ENCODED_MEDIA = "use_encoded_images"  # for compatibility, actually means "use_encoded_medida"
 IMAGES = "images"
 PDFS = "pdfs"
 # Native tool-use metadata keys (carried in Message.metadata, never in content).

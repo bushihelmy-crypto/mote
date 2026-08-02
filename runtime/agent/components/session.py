@@ -7,6 +7,8 @@ need to know how individual recorders are constructed.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 from uuid import uuid4
 
@@ -50,9 +52,9 @@ from mote.runtime.agent.component_keys import (
     WORKSPACE_STORE,
 )
 from mote.runtime.artifacts import (
-    ArtifactRepositoryBlobStore,
     ArtifactRepositoryBundle,
     ArtifactRepositoryLayout,
+    ContentAddressedArtifactBlobStore,
     DurableArtifactStore,
     ReliableArtifactPublisher,
     StoreArtifactResolver,
@@ -61,20 +63,20 @@ from mote.runtime.events.backends import SQLiteSubscriptionStateStore
 from mote.runtime.events.dispatcher import SubscriptionBinding, SubscriptionManifest
 from mote.runtime.events.fabric import EventFabric
 from mote.runtime.fileops import FileOperations
-from mote.runtime.interactive import ArtifactCheckpointPayloadStore
+from mote.runtime.interactive.checkpoint_store import ArtifactCheckpointPayloadStore
 from mote.runtime.models.model_calls import generate
 from mote.runtime.projections import (
-    SESSION_PROJECTION_SUBSCRIPTION,
     CanvasArtifactProjector,
     NotebookArtifactProjector,
     RuntimeProjectionReconciler,
     RuntimeProjectionRegistry,
-    SessionLiveProjection,
 )
 from mote.runtime.secrets.cipher import build_cipher
 from mote.runtime.session import (
+    SESSION_PROJECTION_SUBSCRIPTION,
     RuntimeCheckpointRecorder,
     SessionFactCommitter,
+    SessionLiveProjection,
     SessionLog,
     SessionRuntimeProjectionJournal,
 )
@@ -89,7 +91,12 @@ _SESSION_PROJECTION_MAILBOX_CAPACITY = 1024
 _LSP_SUBSCRIPTION = SubscriptionIdentity("mote.lsp.confirmed-file-versions.v1")
 
 
-def session_component_specs() -> list[ComponentSpec]:
+@dataclass(frozen=True, slots=True)
+class SessionComponentInputs:
+    secrets_root: Path | None
+
+
+def session_component_specs(inputs: SessionComponentInputs = SessionComponentInputs(None)) -> list[ComponentSpec]:
     """Return the complete session-owned portion of the Role component graph."""
     return [
         ComponentSpec(SESSION_LOG, _build_session_log),
@@ -105,7 +112,7 @@ def session_component_specs() -> list[ComponentSpec]:
         ComponentSpec(ARTIFACT_STORE, _build_artifact_store),
         ComponentSpec(ARTIFACT_RESOLVER, _build_artifact_resolver),
         ComponentSpec(ARTIFACT_PUBLISHER, _build_artifact_publisher),
-        ComponentSpec(CHECKPOINT_PAYLOAD_STORE, _build_checkpoint_payload_store),
+        ComponentSpec(CHECKPOINT_PAYLOAD_STORE, lambda ctx: _build_checkpoint_payload_store(ctx, inputs)),
         ComponentSpec(
             RUNTIME_PROJECTION_JOURNAL,
             _build_runtime_projection_journal,
@@ -227,7 +234,7 @@ def _build_file_operations(ctx) -> FileOperations:
     session_log.exists()
     role = ctx.role
     bundle = ctx.dep(ARTIFACT_REPOSITORY_BUNDLE)
-    return FileOperations(
+    operations = FileOperations(
         session_id=role.state.session_id,
         journal_path=session_log.path,
         get_project_root=lambda: role.state.project_root or role.get_cwd(),
@@ -238,6 +245,8 @@ def _build_file_operations(ctx) -> FileOperations:
         event_sink=committer.commit_event_from_thread,
         event_source=lambda: iter_file_operations_events(session_log.iter_events()),
     )
+    bundle.pins.register_source(f"fileops-cursors:{role.state.session_id}", operations)
+    return operations
 
 
 def _build_artifact_repository_bundle(ctx) -> ArtifactRepositoryBundle:
@@ -256,9 +265,9 @@ def _build_artifact_repository_bundle(ctx) -> ArtifactRepositoryBundle:
     )
 
 
-def _build_artifact_blob_store(ctx) -> ArtifactRepositoryBlobStore:
+def _build_artifact_blob_store(ctx) -> ContentAddressedArtifactBlobStore:
     bundle = ctx.dep(ARTIFACT_REPOSITORY_BUNDLE)
-    return ArtifactRepositoryBlobStore(bundle.repository)
+    return ContentAddressedArtifactBlobStore(bundle.repository)
 
 
 def _build_artifact_store(ctx) -> DurableArtifactStore:
@@ -274,8 +283,8 @@ def _build_artifact_resolver(ctx) -> StoreArtifactResolver:
     return StoreArtifactResolver(ctx.dep(ARTIFACT_STORE))
 
 
-def _build_checkpoint_payload_store(ctx) -> ArtifactCheckpointPayloadStore:
-    secrets_root = ctx.role.wiring.dependencies.secrets_root
+def _build_checkpoint_payload_store(ctx, inputs: SessionComponentInputs) -> ArtifactCheckpointPayloadStore:
+    secrets_root = inputs.secrets_root
     if secrets_root is None:
         raise ValueError("Agent composition requires a secrets root")
     return ArtifactCheckpointPayloadStore(

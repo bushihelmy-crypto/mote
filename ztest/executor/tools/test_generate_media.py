@@ -6,15 +6,17 @@ requested kind's provider via ``create_media_provider`` and calls their
 compact ``{kind: {...}}`` dict. All tests are offline — the provider factory is
 monkeypatched so no network or run_rollout import is needed.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 import pytest
 
+from mote.contracts.service import MediaGenerationPayload, MediaGenerationResult
+from mote.contracts.tool.errors import ToolNotConfiguredError
 from mote.contracts.tool.execution import ToolExecutionKind
 from mote.product.toolsets.builtin.generate_media.generate_media_tool import GenerateMedia, _compact
-from mote.runtime.errors import ToolNotConfiguredError
 
 
 class _FakeMultimodalCfg:
@@ -53,18 +55,15 @@ def _tool() -> GenerateMedia:
         "video": "videos",
     }
 
-    async def invoke_service(*, route_id, capability, operation_key, payload, semantics):
-        kind = capability.rsplit(".", 1)[-1]
+    async def invoke_service(payload, operation_key, semantics):
+        assert isinstance(payload, MediaGenerationPayload)
+        kind = payload.media_kind.value
         fake = _providers[to_plural[kind]]
-        outcome = await fake.generate([payload["item"]])
+        outcome = await fake.generate([payload.item.model_dump(exclude_none=True)])
         results = outcome.get("results") or []
         if results:
-            return results[0]
-        return {
-            "status": "success",
-            "filename": payload["item"].get("filename"),
-            "url": "",
-        }
+            return MediaGenerationResult.model_validate(results[0])
+        return MediaGenerationResult(filename=payload.item.filename, url="")
 
     tool = GenerateMedia(_multimodal)
     tool.invoke_service = invoke_service

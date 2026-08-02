@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tool-facing runtime knobs (network + browser fingerprint + execution policy)."""
+
 from __future__ import annotations
 
 from pydantic import Field
 
+from mote.contracts.config.base import ConfigModel as YamlModel
 from mote.contracts.config.tool import (
     DurableConfig,
     LoopGuardConfig,
@@ -12,7 +14,6 @@ from mote.contracts.config.tool import (
     ToolResultLimitConfig,
     ToolSearchConfig,
 )
-from mote.product.config.base import ConfigModel as YamlModel
 from mote.product.config.web_search import WebSearchConfig
 from mote.runtime.config.device import DeviceConfig
 

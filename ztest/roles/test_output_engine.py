@@ -93,7 +93,7 @@ async def test_text_candidate_is_decoded_and_accepted():
 
 @pytest.mark.asyncio
 async def test_commit_before_acceptance_is_a_typed_non_retryable_error():
-    from mote.runtime.errors import OutputCommitStateError
+    from mote.contracts.output.errors import OutputCommitStateError
 
     engine = OutputEngine(text_output_contract())
 
@@ -106,7 +106,7 @@ async def test_commit_before_acceptance_is_a_typed_non_retryable_error():
 
 @pytest.mark.asyncio
 async def test_stale_worker_cannot_commit_after_lease_takeover(tmp_path):
-    from mote.runtime.errors import OutputCommitFencedError
+    from mote.contracts.output.errors import OutputCommitFencedError
     from mote.runtime.session.run_lease import RunLeaseStore
 
     now = [100.0]
@@ -223,7 +223,7 @@ def test_restore_preserves_correction_budget():
 
 
 def test_restore_refuses_contract_or_schema_drift():
-    from mote.runtime.errors import OutputResumeContractMismatchError
+    from mote.contracts.output.errors import OutputResumeContractMismatchError
 
     contract = OutputContract(OutputContractId("test", "report", "1"), TypeAdapterOutputDecoder(Report))
 
@@ -261,7 +261,7 @@ def test_restore_decodes_accepted_value_without_revalidation():
 
 def test_restore_refuses_validator_version_drift():
     from mote.contracts.output import Accept, ValidationStage
-    from mote.runtime.errors import OutputResumeContractMismatchError
+    from mote.contracts.output.errors import OutputResumeContractMismatchError
 
     contract = OutputContract(
         OutputContractId("test", "report", "1"),
@@ -375,7 +375,7 @@ async def test_validator_reject_is_model_correction_not_exception():
 @pytest.mark.asyncio
 async def test_validator_retry_later_is_typed_operational_error():
     from mote.contracts.output import RetryLater, ValidationStage
-    from mote.runtime.errors import OutputValidatorUnavailableError
+    from mote.contracts.output.errors import OutputValidatorUnavailableError
 
     contract = OutputContract(
         OutputContractId("test", "report", "1"),

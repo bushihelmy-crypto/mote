@@ -19,7 +19,7 @@ import re
 from typing import List
 
 # Envelope detection/peeling is owned by the bottom-layer marker authority
-# (``common/text/markers.py``) — the same literal the turn-context bus writes on
+# — the same literal the turn-context bus writes on
 # the other side, so the two can never desync. This module keeps only the
 # CLI-specific *summarisation* (heading extraction, skill counting) below.
 from mote.runtime.context.markers import is_system_reminder as _is_system_reminder

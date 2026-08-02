@@ -1,83 +1,56 @@
 """Strongly typed client seam for Shared daemon runtime adapters."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator
-from typing import Protocol, TypeVar
+from typing import Protocol
 
 from mote.contracts.inference.shared import ProtocolNegotiationResult, SharedHandshake
+from mote.contracts.inference.wire_permit import WirePermit
+from mote.product.inference.daemon.messages import (
+    DaemonReadinessView,
+    ExecutionReceiptView,
+    GenerationStatusView,
+    LifecycleEventView,
+    SessionMessageCommand,
+    StartExecutionCommand,
+    StartExecutionReceipt,
+    TransferExecutionCommand,
+)
 from mote.product.inference.security.permit_issuer import ProductWirePermitIssuer
 
 
-class RpcEnvelope(Protocol):
-    ...
-
-
-class RpcStartResponse(Protocol):
-    execution_id: str
-    receipt_revision: int
-
-
-class RpcLifecycleEvent(Protocol):
-    execution_id: str
-    sequence: int
-    receipt_revision: int
-    event_type: str
-    payload: bytes
-
-
-class RpcReceipt(Protocol):
-    execution_id: str
-    revision: int
-    state: str
-
-
-class RpcGenerationStatus(Protocol):
-    generation_id: str
-    artifact_digest: str
-    state: str
-
-
-StartRequestT = TypeVar("StartRequestT", contravariant=True)
-TransferRequestT = TypeVar("TransferRequestT", contravariant=True)
-SessionMessageT = TypeVar("SessionMessageT", contravariant=True)
-
-
-class SharedRuntimeClient(Protocol[StartRequestT, TransferRequestT, SessionMessageT]):
-    def envelope(self, **fields: object) -> RpcEnvelope:
-        ...
-
-    def permit_issuer(self) -> ProductWirePermitIssuer:
-        ...
+class SharedRuntimeClient(Protocol):
+    def permit_issuer(self) -> ProductWirePermitIssuer: ...
 
     async def stage_generation(
         self, artifact: bytes, *, generation_id: str, artifact_digest: str
-    ) -> RpcGenerationStatus:
-        ...
+    ) -> GenerationStatusView: ...
 
-    async def start_unary(self, request: StartRequestT, *, timeout: float | None = None) -> RpcStartResponse:
-        ...
+    async def get_readiness(self, *, timeout: float | None = None) -> DaemonReadinessView: ...
 
-    async def start_durable_command(self, request: StartRequestT, *, timeout: float | None = None) -> RpcStartResponse:
-        ...
+    async def start_unary(
+        self, request: StartExecutionCommand, *, timeout: float | None = None
+    ) -> StartExecutionReceipt: ...
 
-    async def open_session(self, request: StartRequestT, *, timeout: float | None = None) -> RpcStartResponse:
-        ...
+    async def start_durable_command(
+        self, request: StartExecutionCommand, *, timeout: float | None = None
+    ) -> StartExecutionReceipt: ...
+
+    async def open_session(
+        self, request: StartExecutionCommand, *, timeout: float | None = None
+    ) -> StartExecutionReceipt: ...
 
     async def execute_transfer_part(
-        self, request: TransferRequestT, *, timeout: float | None = None
-    ) -> RpcStartResponse:
-        ...
+        self, request: TransferExecutionCommand, *, timeout: float | None = None
+    ) -> StartExecutionReceipt: ...
 
     async def authorize_wire(
         self,
         execution_id: str,
-        wire_permit: bytes,
+        permit: WirePermit,
         *,
         generation_id: str,
         timeout: float | None = None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     async def cancel(
         self,
@@ -86,11 +59,9 @@ class SharedRuntimeClient(Protocol[StartRequestT, TransferRequestT, SessionMessa
         *,
         generation_id: str,
         timeout: float | None = None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    def session(self, requests: AsyncIterator[SessionMessageT]) -> AsyncIterator[RpcLifecycleEvent]:
-        ...
+    def session(self, requests: AsyncIterator[SessionMessageCommand]) -> AsyncIterator[LifecycleEventView]: ...
 
     async def query_receipt(
         self,
@@ -98,8 +69,7 @@ class SharedRuntimeClient(Protocol[StartRequestT, TransferRequestT, SessionMessa
         *,
         generation_id: str,
         timeout: float | None = None,
-    ) -> RpcReceipt:
-        ...
+    ) -> ExecutionReceiptView: ...
 
     def resume_events(
         self,
@@ -109,27 +79,13 @@ class SharedRuntimeClient(Protocol[StartRequestT, TransferRequestT, SessionMessa
         after_sequence: int,
         receipt_revision: int,
         timeout: float | None = None,
-    ) -> AsyncIterator[RpcLifecycleEvent]:
-        ...
+    ) -> AsyncIterator[LifecycleEventView]: ...
 
-    async def close(self) -> None:
-        ...
+    async def close(self) -> None: ...
 
 
-class AuthenticatingSharedRuntimeClient(
-    SharedRuntimeClient[StartRequestT, TransferRequestT, SessionMessageT],
-    Protocol[StartRequestT, TransferRequestT, SessionMessageT],
-):
-    async def authenticate(self, handshake: SharedHandshake) -> ProtocolNegotiationResult:
-        ...
+class AuthenticatingSharedRuntimeClient(SharedRuntimeClient, Protocol):
+    async def authenticate(self, handshake: SharedHandshake) -> ProtocolNegotiationResult: ...
 
 
-__all__ = [
-    "AuthenticatingSharedRuntimeClient",
-    "RpcEnvelope",
-    "RpcGenerationStatus",
-    "RpcLifecycleEvent",
-    "RpcReceipt",
-    "RpcStartResponse",
-    "SharedRuntimeClient",
-]
+__all__ = ["AuthenticatingSharedRuntimeClient", "SharedRuntimeClient"]

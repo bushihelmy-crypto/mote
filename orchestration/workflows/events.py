@@ -4,95 +4,141 @@ from __future__ import annotations
 
 import contextvars
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, TypeAlias
+from typing import Literal, Protocol, TypeAlias
 
-from mote.runtime.events.progress_scope import (
-    ProgressWriter,
-    bind_progress_writer,
-    current_progress_writer,
-    reset_progress_writer,
+from mote.contracts.task.progress import (
+    ActivityProgressEvent,
+    ActivityProgressIdentity,
+    ProgressEventSink,
+    ProgressPhase,
 )
+from mote.contracts.workflow.identity import WorkflowDefinitionId
+from mote.orchestration.workflows.types import GraphRunState, GraphState, WorkflowNodeStatus
+from mote.runtime.events.progress_scope import bind_progress_sink, current_progress_sink, reset_progress_sink
 from mote.runtime.telemetry.logging import logger
 
 
 @dataclass(frozen=True, slots=True)
-class RunStarted:
-    type: Literal["run_started"] = "run_started"
+class ActivityRunStarted:
+    type: Literal["activity_run_started"] = "activity_run_started"
     schema_version: int = 1
-    run_id: str = ""
-    definition_id: str = ""
+    activity_run_id: str = ""
+    activity_definition_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
-class NodeStarted:
-    type: Literal["node_started"] = "node_started"
+class ActivityRunTerminal:
+    type: Literal["activity_run_terminal"] = "activity_run_terminal"
     schema_version: int = 1
-    run_id: str = ""
-    node_id: str = ""
-    attempt: int = 1
-
-
-@dataclass(frozen=True, slots=True)
-class NodeSucceeded:
-    type: Literal["node_succeeded"] = "node_succeeded"
-    schema_version: int = 1
-    run_id: str = ""
-    node_id: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class NodeFailed:
-    type: Literal["node_failed"] = "node_failed"
-    schema_version: int = 1
-    run_id: str = ""
-    node_id: str = ""
-    error_code: str = "workflow_node_failed"
-
-
-@dataclass(frozen=True, slots=True)
-class RunTerminal:
-    type: Literal["run_terminal"] = "run_terminal"
-    schema_version: int = 1
-    run_id: str = ""
+    activity_run_id: str = ""
     status: str = ""
 
 
-WorkflowEvent: TypeAlias = RunStarted | NodeStarted | NodeSucceeded | NodeFailed | RunTerminal
+WorkflowEvent: TypeAlias = ActivityRunStarted | ActivityRunTerminal
 
 
 class ProgressSink(Protocol):
-    async def emit(self, event: WorkflowEvent) -> None:
-        ...
+    async def emit(self, event: WorkflowEvent) -> None: ...
 
 
-def report_progress(stage: str, status: Any, detail: Any = None) -> None:
-    writer = current_progress_writer()
-    if writer is None:
+class WorkflowCheckpointSink(Protocol):
+    async def commit_checkpoint(
+        self,
+        state: GraphState,
+        run_state: GraphRunState,
+        frontier: tuple[str, ...],
+    ) -> None: ...
+
+
+_checkpoint_sink: contextvars.ContextVar[WorkflowCheckpointSink | None] = contextvars.ContextVar(
+    "mote_workflow_checkpoint_sink", default=None
+)
+
+
+def set_checkpoint_sink(
+    sink: WorkflowCheckpointSink | None,
+) -> contextvars.Token[WorkflowCheckpointSink | None]:
+    return _checkpoint_sink.set(sink)
+
+
+def reset_checkpoint_sink(
+    token: contextvars.Token[WorkflowCheckpointSink | None],
+) -> None:
+    _checkpoint_sink.reset(token)
+
+
+async def commit_workflow_checkpoint(
+    state: GraphState,
+    run_state: GraphRunState,
+    frontier: tuple[str, ...],
+) -> None:
+    sink = _checkpoint_sink.get()
+    if sink is not None:
+        await sink.commit_checkpoint(state, run_state, frontier)
+
+
+_PHASES = {
+    WorkflowNodeStatus.RUNNING: ProgressPhase.RUNNING,
+    WorkflowNodeStatus.SUCCESS: ProgressPhase.SUCCESS,
+    WorkflowNodeStatus.FAILED: ProgressPhase.FAILED,
+    WorkflowNodeStatus.CANCELLED: ProgressPhase.CANCELLED,
+    WorkflowNodeStatus.TIMEOUT: ProgressPhase.TIMEOUT,
+    WorkflowNodeStatus.SKIPPED: ProgressPhase.SKIPPED,
+    WorkflowNodeStatus.WAITING_FOR_ROUTE: ProgressPhase.WAITING_FOR_ROUTE,
+    WorkflowNodeStatus.STALLED: ProgressPhase.STALLED,
+}
+
+
+def report_progress(event: ActivityProgressEvent) -> None:
+    sink = current_progress_sink()
+    if sink is None:
         return
     try:
-        writer(stage, status, detail)
+        sink.emit(event)
     except Exception as exc:  # noqa: BLE001
         logger.debug(f"workflow progress sink failed: {exc}")
 
 
-def set_progress_writer(writer: ProgressWriter | None) -> contextvars.Token:
-    return bind_progress_writer(writer)
+def emit_workflow_progress(
+    graph,
+    run_state,
+    stage: str,
+    status: WorkflowNodeStatus,
+    detail: str | None = None,
+) -> None:
+    definition_id = graph._definition_id
+    if not isinstance(definition_id, WorkflowDefinitionId):
+        raise RuntimeError("workflow progress requires a canonical definition identity")
+    report_progress(
+        ActivityProgressEvent(
+            ActivityProgressIdentity(run_state.activity_execution_id, definition_id),
+            stage,
+            _PHASES[status],
+            detail,
+        )
+    )
 
 
-def _as_text(text: Any) -> str:
+def set_progress_sink(sink: ProgressEventSink | None) -> contextvars.Token:
+    return bind_progress_sink(sink)
+
+
+def _as_text(text: object) -> str:
     return str(text) if text is not None else ""
 
 
 __all__ = [
-    "NodeFailed",
-    "NodeStarted",
-    "NodeSucceeded",
+    "ActivityRunStarted",
+    "ActivityRunTerminal",
     "ProgressSink",
-    "ProgressWriter",
-    "RunStarted",
-    "RunTerminal",
+    "ProgressEventSink",
     "WorkflowEvent",
+    "WorkflowCheckpointSink",
+    "commit_workflow_checkpoint",
+    "reset_checkpoint_sink",
+    "emit_workflow_progress",
     "report_progress",
-    "reset_progress_writer",
-    "set_progress_writer",
+    "reset_progress_sink",
+    "set_progress_sink",
+    "set_checkpoint_sink",
 ]

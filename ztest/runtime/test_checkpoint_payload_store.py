@@ -8,8 +8,8 @@ from mote.contracts.artifact import ArtifactContentRef
 from mote.contracts.content import ContentIdentity
 from mote.contracts.runtime import CheckpointFidelity, RuntimeCheckpoint
 from mote.runtime.artifacts import DurableArtifactStore
-from mote.runtime.interactive import ArtifactCheckpointPayloadStore
 from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
+from mote.runtime.interactive.checkpoint_store import ArtifactCheckpointPayloadStore
 from mote.runtime.secrets.cipher import AesGcmCipher
 
 

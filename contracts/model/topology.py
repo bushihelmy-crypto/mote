@@ -7,6 +7,7 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mote.contracts.model.execution_policy import EndpointExecutionPolicy
+from mote.contracts.model.operations import ModelOperation
 
 
 class FrozenModel(BaseModel):
@@ -33,7 +34,11 @@ RouteId = Annotated[
 ]
 
 
-class EndpointCapabilities(FrozenModel):
+class EndpointCapabilityDeclaration(FrozenModel):
+    supported_operations: frozenset[ModelOperation] = Field(
+        default_factory=lambda: frozenset({ModelOperation.GENERATE}),
+        min_length=1,
+    )
     supports_tools: bool
     supports_native_schema: bool
     supports_server_web_search: bool
@@ -49,7 +54,7 @@ class ModelEndpointTopology(FrozenModel):
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
-    capabilities: EndpointCapabilities
+    capabilities: EndpointCapabilityDeclaration
     governance_domain: str = Field(min_length=1)
     region: str = Field(min_length=1)
     pricing_class: str = Field(min_length=1)
@@ -95,8 +100,8 @@ class RouteBinding(FrozenModel):
 
 
 class ModelTopology(FrozenModel):
-    schema_version: Literal["mote.model-topology/v1"] = Field(
-        default="mote.model-topology/v1",
+    schema_version: Literal["mote.model-topology/v2"] = Field(
+        default="mote.model-topology/v2",
         alias="schema",
     )
     endpoints: tuple[ModelEndpointTopology, ...] = Field(min_length=1)
@@ -131,7 +136,7 @@ class ModelTopology(FrozenModel):
 
 __all__ = [
     "DefaultRoute",
-    "EndpointCapabilities",
+    "EndpointCapabilityDeclaration",
     "FailoverGroupTopology",
     "ModelEndpointTopology",
     "ModelTopology",

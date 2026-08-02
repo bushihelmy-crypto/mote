@@ -17,8 +17,11 @@ import pytest
 from mote.contracts.conversation.fields import IMAGES
 from mote.product.agents.catalog import AgentCatalog
 from mote.product.agents.factory import CodingAgentFactory
+from mote.product.composition.agent_factory import build_product_agent
+from mote.product.composition.bootstrap import _build_application_context
 from mote.product.composition.container import ProductContainer
 from mote.product.entrypoints.cli import backend
+from mote.product.paths import default_runtime_paths
 from mote.runtime.agent import Role
 from mote.runtime.agent.role_schema import RoleSchema
 from mote.runtime.services import EngineServices
@@ -29,11 +32,12 @@ from mote.ztest.model_fakes import offline_config
 # --------------------------------------------------------------------------
 
 
-def test_bind_human_channel_sets_env():
-    role = SimpleNamespace(state=SimpleNamespace(env=None))
+def test_bind_human_channel_uses_explicit_binding():
+    bound = []
+    role = SimpleNamespace(bind_human_interaction=bound.append)
     channel = object()
     backend.bind_human_channel(role, channel)
-    assert role.state.env is channel
+    assert bound == [channel]
 
 
 def test_runtime_name_reads_role_schema():
@@ -166,8 +170,8 @@ async def test_rewind_files_runs_blocking_read_and_mutation_off_loop(monkeypatch
 # --------------------------------------------------------------------------
 
 
-def _context():
-    return backend.build_context(offline_config())
+def _context(config=None):
+    return _build_application_context(config or offline_config(), paths=default_runtime_paths())
 
 
 def _services():
@@ -175,12 +179,19 @@ def _services():
 
 
 def _build_role(**kwargs):
-    services = _services()
-    container = ProductContainer.standard(services.context.config)
+    config = offline_config()
+    services = EngineServices(context=_context(config))
+    container = ProductContainer.standard(config)
     kwargs.setdefault("agent_catalog", container.agents)
-    return backend.build_role(
+    cwd = kwargs.pop("cwd", None)
+    tools = kwargs.pop("tools", None)
+    return build_product_agent(
         services=services,
         agent_factory=container.agent_factory,
+        paths=container.paths,
+        source_policy=container.extension_sources,
+        cwd=Path(cwd) if cwd else None,
+        tools=tuple(tools) if tools else None,
         **kwargs,
     )
 

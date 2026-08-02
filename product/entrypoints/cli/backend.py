@@ -15,7 +15,7 @@ to the concrete types.
 
 Two axes are collapsed onto this seam:
 
-* **Bootstrap/construction** (``load_config`` / ``build_context`` / ``build_role``
+* **Bootstrap/construction** (``load_config`` / ``build_role``
   / ``build_control`` / ``wrap_runtime``) — the ``Config → Context → Role →
   Runtime → Control`` spine app.py used to own inline.
 * **Accessors** (``bind_human_channel`` / ``runtime_name`` / ``fork_role`` /
@@ -30,256 +30,72 @@ building a parallel type system.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import List, Optional
 
 from mote.contracts.conversation import UserMessage
 from mote.contracts.conversation.fields import IMAGES
-from mote.kernel.output import text_output_contract
 from mote.orchestration.agents.control import AgentControl
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime
-from mote.orchestration.agents.residency.store import ResidencyStore
-from mote.product.agents import CodingAgentFactory, RootAgentRequest
 from mote.product.agents.catalog import AgentCatalog
-from mote.product.agents.defaults import DEFAULT_DEFERRED_TOOLS, DEFAULT_TOOLS
-from mote.product.composition.service_gateway import builtin_service_gateway
-from mote.product.config.adapters.mcp import MCP_CONFIG_FILE_NAME, load_mcp_servers
-from mote.product.config.adapters.permissions import load_permission_rules
 from mote.product.config.loader import load_config as _load_config
-from mote.product.models.bootstrap import builtin_provider_registry
-from mote.product.paths import default_runtime_paths, mote_layered_files
+from mote.product.config.schema import Config
+from mote.product.interaction.human_channel import PortHumanChannel
+from mote.product.paths import RuntimePaths, default_runtime_paths
+from mote.product.session_hosting.composition import compose_resident_agent
 from mote.runtime.agent import Role
-from mote.runtime.agent.role_schema import RoleSchema
-from mote.runtime.agent.role_state import RoleState
-from mote.runtime.agent.wiring import AgentWiring
-from mote.runtime.file_watch.config import FileWatchConfig
-from mote.runtime.models.clients.context import Context
-from mote.runtime.models.composition_context import CurrentRuntimeModelGateway
+from mote.runtime.events.telemetry import TelemetryRuntime
 from mote.runtime.models.cost.report import format_total_cost
 from mote.runtime.models.ratelimit import format_rate_limits
 from mote.runtime.persistence.async_io import run_disk_io
-from mote.runtime.resilience.admission import ResourceAdmissionController
-from mote.runtime.resilience.failover.operator import LocalModelOperatorAuditStore, model_operator_audit_path
-from mote.runtime.service_gateway import LocalServiceCallJournal, service_call_journal_root
+from mote.runtime.session.checkpoint import CheckpointEntry
 from mote.runtime.session.checkpoint import list_checkpoints as _list_checkpoints
+from mote.runtime.session.listing import SessionInfo
 from mote.runtime.session.log import SessionLog
-from mote.runtime.vcs import find_git_root
+
+TextRole = Role[None, str]
 
 
 # ======================================================================
 # Bootstrap / construction
 # ======================================================================
-def load_config(model: Optional[str] = None, *, paths=None) -> Any:
+def load_config(model: str | None = None, *, paths: RuntimePaths | None = None) -> Config:
     """Load the engine config, optionally overriding the LLM model."""
     paths = paths or default_runtime_paths()
     return _load_config(
         programmatic=({"llm__model": model} if model else None),
         user_config_root=paths.user_config_root,
-        source_root=paths.user_config_root,
     )
 
 
-def build_context(
-    config: Any,
-    *,
-    providers: Any = None,
-    media_providers: Any = None,
-    search_backends: Any = None,
-    paths=None,
-) -> Any:
-    """Build the engine :class:`Context` (opaque handle to app.py)."""
-    paths = paths or default_runtime_paths()
-    providers = providers or builtin_provider_registry(oauth_root=paths.oauth_root)
-    context = Context(config=config)
-    model_operator = ResourceAdmissionController(
-        breaker_config=config.resilience.to_breaker_config(),
-        operator_audit=LocalModelOperatorAuditStore(model_operator_audit_path(paths.workspace_root)),
-    )
-    context.model_operator = model_operator
-    return context
-
-
-def configure_service_gateway(
-    context: Context,
-    config: Any,
-    *,
-    model_profile_gateway: Any,
-    media_providers: Any = None,
-    search_backends: Any = None,
-    paths=None,
-) -> None:
-    paths = paths or default_runtime_paths()
-    model_gateway = CurrentRuntimeModelGateway()
-    context.service_gateway = builtin_service_gateway(
-        config.multimodal,
-        config.tools.web_search,
-        model_gateway=model_gateway,
-        model_profile_gateway=model_profile_gateway,
-        media_providers=media_providers,
-        search_backends=search_backends,
-        admission_controller=context.model_operator,
-        service_call_journal=LocalServiceCallJournal(service_call_journal_root(paths.workspace_root)),
-    )
-
-
-def _apply_cwd(role: Any, cwd: Optional[str]) -> None:
-    """Point a freshly built role at *cwd* (git root becomes its project root)."""
-    if not cwd:
-        return
-    role.state.working_dir = cwd
-    role.state.original_working_dir = cwd
-    role.state.project_root = find_git_root(cwd) or cwd
-
-
-def _discover_mcps(cwd: Optional[str] = None) -> List[str]:
-    """Every MCP server declared in ``.mote/mcp.json`` (empty when unconfigured).
-
-    Mirrors the skill subsystem's "empty include list ⇒ load everything" default,
-    but resolved *here* (the top-level interactive role) rather than in the engine
-    so child agents — whose schema deliberately clears ``mcps`` (see
-    ``roles.capabilities``) — keep their MCP-less isolation. Discovery walks from
-    *cwd* up to the git root (plus ``~/.mote/mcp.json``); a missing / empty /
-    malformed file yields ``[]``, so MCP simply stays off until the user drops a
-    server block into the file (a change the file watcher then hot-reloads).
-    """
-    paths = default_runtime_paths()
-    files = mote_layered_files("mcp.json", Path(cwd) if cwd else None, user_config_root=paths.user_config_root)
-    return [s.name for s in load_mcp_servers(files)]
-
-
-def _cli_file_watch_roots(cwd: Optional[str]) -> list[str]:
-    """Anchor CLI hot reload to a config file, not the whole Git worktree."""
-    base = Path(cwd) if cwd else Path.cwd()
-    return [str(base / ".mote" / MCP_CONFIG_FILE_NAME)]
-
-
-def build_role(
-    *,
-    services: Any,
-    agent_factory: CodingAgentFactory,
-    agent_catalog: AgentCatalog,
-    name: str,
-    tools: Optional[List[str]] = None,
-    cwd: Optional[str] = None,
-    agent_type: Optional[str] = None,
-    session_id: Optional[str] = None,
-) -> Optional[Any]:
-    """Unified role factory (initial / new / resume / typed spawn).
-
-    ``agent_type`` empty → the generic ``Role`` path (explicit schema + state).
-    ``agent_type`` given → look it up in the Application's Agent catalog; an unknown
-    type returns ``None`` (the caller surfaces the failure), otherwise the agent
-    class self-configures its own schema/tools.
-
-    The generic path is the interactive top-level role, so it opts into the two
-    "watch the workspace" conveniences a human at a REPL expects: every MCP server
-    in ``mcp_config.json`` is loaded (its tools surface in the per-turn catalog),
-    and a file watcher hot-reloads MCP servers *and* skills when their config
-    files change mid-session. **Tools**, by contrast, follow RoleSchema's curated
-    default when no explicit ``tools`` are passed — so what the CLI reports (and
-    what the agent is actually wired with) is exactly the declared set, not the
-    full registered toolbox. Completion and messaging control verbs such as
-    End/Reply/Ask remain outside the curated surface; persistent Runtime tools
-    expose their own user-control handoff action. Typed agents self-configure
-    and are left untouched.
-
-    Markdown and Python Agent definitions were frozen into ``agent_catalog`` by
-    Product assembly, so typed spawn and the Agent tool observe the same version.
-    """
-    if agent_type:
-        root_agent_type = agent_catalog.agent_type(agent_type)
-        if root_agent_type is None:
-            return None
-        schema = RoleSchema(
-            tools=list(DEFAULT_TOOLS),
-            deferred_tools=list(DEFAULT_DEFERRED_TOOLS),
-        )
-        wiring = AgentWiring(
-            services=services,
-            dependencies=agent_factory.dependencies(
-                deps=None,
-                output_contract=text_output_contract(),
-                command_protocol=schema.command_protocol,
-            ),
-        )
-        role = agent_factory.root_builder(root_agent_type).build(
-            RootAgentRequest(
-                role_schema=schema,
-                state=RoleState(parent_session_id=None),
-                wiring=wiring,
-            )
-        )
-    else:
-        schema_kwargs: dict = {
-            "name": name,
-            "mcps": _discover_mcps(cwd),
-            "file_watch": FileWatchConfig(
-                enabled=True,
-                roots=_cli_file_watch_roots(cwd),
-                reload_mcp=True,
-                reload_skills=True,
-            ),
-        }
-        # An explicit --tools list wins; otherwise the field is left unset so the
-        # RoleSchema curated default (its declared tool surface) applies — the CLI
-        # then reports exactly that declared set, not the full registered toolbox.
-        if tools:
-            schema_kwargs["tools"] = list(tools)
-        paths = default_runtime_paths()
-        permissions = load_permission_rules(
-            mote_layered_files(
-                "settings.local.json",
-                Path(cwd) if cwd else None,
-                user_config_root=paths.user_config_root,
-            )
-        )
-        if permissions is not None:
-            schema_kwargs["permissions"] = permissions
-        schema = RoleSchema(**schema_kwargs)
-        state = RoleState(session_id=session_id) if session_id else RoleState()
-        wiring = AgentWiring(
-            services=services,
-            dependencies=agent_factory.dependencies(
-                deps=None,
-                output_contract=text_output_contract(),
-                command_protocol=schema.command_protocol,
-            ),
-        )
-        role = agent_factory.root_builder(Role).build(
-            RootAgentRequest(
-                name=name,
-                role_schema=schema,
-                state=state,
-                wiring=wiring,
-            )
-        )
-    _apply_cwd(role, cwd)
-    return role
-
-
-def build_control(role: Any) -> Tuple[Any, Any]:
+def build_control(role: TextRole) -> tuple[AgentControl, AgentRuntime[str]]:
     """Build the control plane, adopt *role* as the root, wire it into its context.
 
     Returns ``(control, root_runtime)``. The plane reference is bound to the
     Role, never the shared Engine Context, so concurrent sessions cannot
     overwrite each other's spawn authority.
     """
-    control = AgentControl(
-        session_id=role.session_id,
-        store=ResidencyStore(
-            base_dir=str(role.wiring.dependencies.session_workspace_root / ".agent_residency"),
-            sessions_base_dir=str(role.wiring.dependencies.session_workspace_root / ".agent_sessions"),
-            writer=role.context.disk_writer,
-        ),
+    projection = role.wiring.dependencies.component_projection
+    if projection is None:
+        raise RuntimeError("resident Agent requires a component projection")
+    workspace_root = projection.session_workspace_root()
+    services = role.wiring.services
+    if services is None or services.agent_budget is None:
+        raise RuntimeError("resident Agent requires canonical budget governance")
+    return compose_resident_agent(
+        role,
+        residency_dir=workspace_root / ".agent_residency",
+        sessions_dir=workspace_root / ".agent_sessions",
+        writer=role.context.disk_writer,
+        governance=role.config.agents,
+        budget=services.agent_budget,
+        workflow_governance=services.workflow_governance,
     )
-    runtime = wrap_runtime(role)
-    control.add_agent(runtime, root=True)
-    role.agent_control = control
-    return control, runtime
 
 
-def wrap_runtime(role: Any) -> Any:
+def wrap_runtime(role: TextRole) -> AgentRuntime[str]:
     """Wrap a role into a runtime for the control plane."""
     return AgentRuntime(role)
 
@@ -287,25 +103,25 @@ def wrap_runtime(role: Any) -> Any:
 # ======================================================================
 # Accessors (pure attribute operations — fakes satisfy them too)
 # ======================================================================
-def bind_human_channel(role: Any, channel: Any) -> None:
+def bind_human_channel(role: TextRole, channel: PortHumanChannel) -> None:
     """Point a role's environment at the CLI's human channel."""
-    role.state.env = channel
+    role.bind_human_interaction(channel)
 
 
-def role_session_id(role: Any) -> str:
+def role_session_id(role: TextRole) -> str:
     return role.session_id
 
 
-def role_telemetry(role: Any) -> Any:
-    return getattr(role, "telemetry", None)
+def role_telemetry(role: TextRole) -> TelemetryRuntime:
+    return role.telemetry
 
 
-def role_cleanup(role: Any) -> Any:
+def role_cleanup(role: TextRole) -> Callable[[], Awaitable[None]]:
     """Return the role's async cleanup callable, or ``None``."""
-    return getattr(role, "cleanup", None)
+    return role.cleanup
 
 
-async def clear_messages(role: Any) -> int:
+async def clear_messages(role: TextRole) -> int:
     """Clear the role's stored message history; return the pre-clear count.
 
     Awaits :meth:`ContextManager.clear`, which commits a
@@ -313,15 +129,13 @@ async def clear_messages(role: Any) -> int:
     projections and the live model context. History-derived signals then
     re-derive against the empty view.
     """
-    cm = getattr(role, "context_manager", None)
-    if cm is None:
-        return 0
+    cm = role.context_manager
     cleared = cm.count()
     await cm.clear()
     return cleared
 
 
-async def delete_react_units(role: Any, anchor_ids) -> int:
+async def delete_react_units(role: TextRole, anchor_ids: Sequence[str]) -> int:
     """Delete the react-units anchored at ``anchor_ids`` on the role's history.
 
     Delegates to :meth:`ContextManager.delete_react_units`, which rebuilds the
@@ -330,13 +144,11 @@ async def delete_react_units(role: Any, anchor_ids) -> int:
     projections. Returns the number of messages removed
     (``0`` when the role has no context manager or nothing matched).
     """
-    cm = getattr(role, "context_manager", None)
-    if cm is None:
-        return 0
+    cm = role.context_manager
     return await cm.delete_react_units(anchor_ids)
 
 
-def list_checkpoints(role: Any) -> list:
+def list_checkpoints(role: TextRole) -> list[CheckpointEntry]:
     """List the role's whole-tree checkpoints as ``[CheckpointEntry, ...]``.
 
     Reads the session's rollout log; each entry is a captured user-turn snapshot
@@ -364,11 +176,11 @@ class RewindResult:
     proceeds (and is itself reversible via the auto-saved "before rewind" point).
     """
 
-    target: Any
+    target: CheckpointEntry
     external: List[str]
 
 
-async def rewind_files(role: Any, index: int) -> Optional[RewindResult]:
+async def rewind_files(role: TextRole, index: int) -> RewindResult | None:
     """Roll the working tree back to checkpoint ``index``; return the outcome.
 
     Auto-captures the *current* tree state first (a checkpoint labelled "before
@@ -403,27 +215,24 @@ async def rewind_files(role: Any, index: int) -> Optional[RewindResult]:
     return RewindResult(target=target, external=list(result.external_paths))
 
 
-def runtime_name(runtime: Any) -> str:
+def runtime_name(runtime: AgentRuntime[str]) -> str:
     """The display name of a runtime's role (``?`` when unavailable)."""
-    return getattr(getattr(runtime.role, "role_schema", None), "name", "?")
+    return runtime.role.role_schema.name
 
 
-def runtime_role(runtime: Any) -> Any:
+def runtime_role(runtime: AgentRuntime[str]) -> TextRole:
     return runtime.role
 
 
-async def fork_role(role: Any) -> Optional[Any]:
+async def fork_role(role: TextRole) -> TextRole | None:
     """Fork a role's session into an independent sibling role, or ``None``."""
-    fork = getattr(role, "fork_session", None)
-    if fork is None:
-        return None
     try:
-        return await fork()
+        return await role.fork_session()
     except Exception:  # noqa: BLE001 — fork is best-effort
         return None
 
 
-def role_tool_count(role: Any) -> int:
+def role_tool_count(role: TextRole) -> int:
     """Return the built-in tool count for a role's schema.
 
     The data behind the CLI's startup "flag": how many built-in tools this role
@@ -435,12 +244,11 @@ def role_tool_count(role: Any) -> int:
     tools surface per-turn in the ``<system-reminder>`` catalog, so they are not
     part of the one-time startup load the badge reports.
     """
-    schema = getattr(role, "role_schema", None)
-    tools = getattr(schema, "tools", None) or []
+    tools = role.role_schema.tools
     return len(set(tools))
 
 
-def role_deferred_tool_count(role: Any) -> int:
+def role_deferred_tool_count(role: TextRole) -> int:
     """How many of the loaded tools are *deferred* (hidden until searched).
 
     A deferred tool is bound and dispatchable but its schema is withheld from the
@@ -452,17 +260,13 @@ def role_deferred_tool_count(role: Any) -> int:
     fully visible), so this reports ``0``. Missing schema / config degrades to
     ``0`` (a fake in tests without a ``deferred_tools`` field satisfies it too).
     """
-    config = getattr(role, "config", None)
-    tools_cfg = getattr(config, "tools", None)
-    search_cfg = getattr(tools_cfg, "tool_search", None)
-    if search_cfg is not None and not getattr(search_cfg, "enabled", True):
+    if not role.config.tools.tool_search.enabled:
         return 0
-    schema = getattr(role, "role_schema", None)
-    deferred = getattr(schema, "deferred_tools", None) or []
+    deferred = role.role_schema.deferred_tools
     return len(set(deferred))
 
 
-def usage_report(role: Any) -> str:
+def usage_report(role: TextRole) -> str:
     """The ``/usage`` block: session cost + provider rate-limit quota.
 
     Reads the two rolling trackers off the role's shared router
@@ -472,34 +276,37 @@ def usage_report(role: Any) -> str:
     (a bare fake in tests) degrades to a plain "unavailable" line rather than
     raising, keeping the command host-surface total.
     """
-    try:
-        context = role.context
-    except Exception:  # noqa: BLE001 — a role without a bound context degrades cleanly
-        return "Usage unavailable (no active context)."
+    context = role.context
     cost_block = format_total_cost(context.cost_manager)
     limit_block = format_rate_limits(context.rate_limit_tracker)
     return f"{cost_block}\n\n{limit_block}"
 
 
-def resume_role(role: Any) -> bool:
+def resume_role(role: TextRole) -> bool:
     """Resume a role's rollout. Returns whether a rollout was found."""
     return role.resume_session()
 
 
-def list_sessions(role: Any) -> list:
+def list_sessions(role: TextRole) -> list[SessionInfo]:
     """List resumable sessions for the role's session type."""
-    return type(role).list_sessions(base_dir=str(role.wiring.dependencies.session_workspace_root / ".agent_sessions"))
+    projection = role.wiring.dependencies.component_projection
+    if projection is None:
+        raise RuntimeError("resident Agent requires a component projection")
+    workspace_root = projection.session_workspace_root()
+    if workspace_root is None:
+        raise ValueError("Agent composition requires a session workspace root")
+    return type(role).list_sessions(base_dir=str(workspace_root / ".agent_sessions"))
 
 
-def turn_message(text: str, image_b64s: Optional[List[str]] = None) -> Any:
+def turn_message(text: str, image_b64s: list[str] | None = None) -> UserMessage:
     """Build the ``UserMessage`` for one turn, attaching any image payloads."""
     msg = UserMessage(content=text)
     if image_b64s:
-        msg.add_metadata(IMAGES, list(image_b64s))
+        msg.metadata[IMAGES] = list(image_b64s)
     return msg
 
 
-def list_agent_types(agent_catalog: AgentCatalog) -> List[Tuple[str, str]]:
+def list_agent_types(agent_catalog: AgentCatalog[str]) -> list[tuple[str, str]]:
     """List snapshotted agent types as ``[(name, description), ...]``.
 
     The product Agent declaration package may be empty
@@ -507,7 +314,7 @@ def list_agent_types(agent_catalog: AgentCatalog) -> List[Tuple[str, str]]:
     agents under ``.mote/agents`` appear alongside Python definitions because
     both were composed into this exact Application snapshot.
     """
-    out: List[Tuple[str, str]] = []
+    out: list[tuple[str, str]] = []
     for name, definition in agent_catalog.all_agents().items():
         out.append((name, definition.description))
     return out
@@ -515,8 +322,6 @@ def list_agent_types(agent_catalog: AgentCatalog) -> List[Tuple[str, str]]:
 
 __all__ = [
     "load_config",
-    "build_context",
-    "build_role",
     "build_control",
     "wrap_runtime",
     "bind_human_channel",

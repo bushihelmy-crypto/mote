@@ -1,4 +1,5 @@
 """Direct contract tests for the sealed ToolCall authorization pipeline."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,6 +7,7 @@ import asyncio
 import pytest
 
 from mote.contracts.authorization import PermissionDecision, PermissionFacts
+from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity, tool_arguments_digest
 from mote.contracts.tool.policy import ToolCallIntent
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.tools.permission.engine import PermissionEngine
@@ -13,6 +15,23 @@ from mote.runtime.tools.permission.rule_store import RuleStore
 from mote.runtime.tools.policy import DefaultToolCallPolicy
 
 pytestmark = pytest.mark.asyncio
+
+
+def _intent(name: str, arguments: dict | None = None) -> ToolCallIntent:
+    args = arguments or {}
+    return ToolCallIntent(
+        identity=ToolInvocationIdentity(
+            ToolInvocationId("policy-call"),
+            ToolAttemptOrdinal(1),
+            "definition",
+            1,
+            tool_arguments_digest(args),
+            "owner",
+            "run",
+        ),
+        tool_name=name,
+        arguments=args,
+    )
 
 
 def _facts(args: dict) -> PermissionFacts:
@@ -70,12 +89,13 @@ async def test_hook_rewrite_is_reclassified_before_permission():
     )
 
     decision = await policy.authorize(
-        ToolCallIntent("Bash", {"cmd": "dangerous-original-target"}),
+        _intent("Bash", {"cmd": "dangerous-original-target"}),
         _facts,
     )
 
     assert decision.allowed
     assert decision.arguments == {"cmd": "safe-final-target"}
+    assert decision.identity.arguments_digest == tool_arguments_digest({"cmd": "safe-final-target"})
     assert engine.targets == ["safe-final-target"]
 
 
@@ -91,7 +111,7 @@ async def test_hook_deny_short_circuits_permission():
         permission_engine=engine,
     )
 
-    decision = await policy.authorize(ToolCallIntent("Bash"), _facts)
+    decision = await policy.authorize(_intent("Bash"), _facts)
 
     assert not decision.allowed
     assert decision.reason == "organization policy"
@@ -111,7 +131,7 @@ async def test_permission_failure_is_fail_closed(engine, timeout, detail):
         timeout=timeout,
     )
 
-    decision = await policy.authorize(ToolCallIntent("Bash"), _facts)
+    decision = await policy.authorize(_intent("Bash"), _facts)
 
     assert not decision.allowed
     assert decision.trace[-1].disposition == "failed_closed"
@@ -123,7 +143,7 @@ async def test_permission_rewrite_is_reclassified_before_final_allow():
     policy = DefaultToolCallPolicy(permission_engine=engine)
 
     decision = await policy.authorize(
-        ToolCallIntent("Bash", {"cmd": "original-target"}),
+        _intent("Bash", {"cmd": "original-target"}),
         _facts,
     )
 
@@ -135,7 +155,7 @@ async def test_permission_rewrite_is_reclassified_before_final_allow():
 async def test_non_terminal_permission_decision_is_fail_closed():
     policy = DefaultToolCallPolicy(permission_engine=_AskEngine())
 
-    decision = await policy.authorize(ToolCallIntent("Bash"), _facts)
+    decision = await policy.authorize(_intent("Bash"), _facts)
 
     assert not decision.allowed
     assert decision.trace[-1].disposition == "failed_closed"
@@ -154,7 +174,7 @@ async def test_user_rejection_is_terminal():
     policy = DefaultToolCallPolicy(permission_engine=engine)
 
     decision = await policy.authorize(
-        ToolCallIntent("Bash", {"cmd": "deploy"}),
+        _intent("Bash", {"cmd": "deploy"}),
         _facts,
     )
 
@@ -172,7 +192,7 @@ async def test_trace_never_records_rewritten_argument_values():
     policy = DefaultToolCallPolicy(hook_manager=hook)
 
     decision = await policy.authorize(
-        ToolCallIntent("Deploy", {"token": "original", "cmd": "unsafe"}),
+        _intent("Deploy", {"token": "original", "cmd": "unsafe"}),
         _facts,
     )
 

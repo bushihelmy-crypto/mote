@@ -13,7 +13,7 @@ from mote.contracts.file.identity import FileSnapshot
 from mote.contracts.file.views import PdfPageView, PdfView, PdfViewMode, ReadCursorKind, ReadViewStatus
 from mote.runtime.fileops.capture import ManagedSnapshotCapture
 from mote.runtime.fileops.identity import path_token
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, FileMutationArtifactRepository
 from mote.runtime.fileops.read_cursors import OpenReadCursor, ReadCursorStore
 from mote.runtime.fileops.text_layout import text_layout
 
@@ -49,7 +49,7 @@ class PdfViewService:
     def __init__(
         self,
         *,
-        artifacts: ArtifactRepository,
+        artifacts: FileMutationArtifactRepository,
         capture: ManagedSnapshotCapture,
         cursors: ReadCursorStore,
     ) -> None:
@@ -264,7 +264,11 @@ class PdfViewService:
     @staticmethod
     def _text_adapter(
         required: Optional[str] = None,
-    ) -> tuple[str, Callable[[str], int], Callable[[str, tuple[int, ...]], tuple[str, ...]],]:
+    ) -> tuple[
+        str,
+        Callable[[str], int],
+        Callable[[str, tuple[int, ...]], tuple[str, ...]],
+    ]:
         if required in (None, "fitz") and (_fitz_page_count is not None and _fitz_extract_pages is not None):
             return "fitz", _fitz_page_count, _fitz_extract_pages
         if required in (None, "pypdf") and (_pypdf_page_count is not None and _pypdf_extract_pages is not None):

@@ -28,7 +28,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterator, Union
 
-from mote.contracts.task.models import SessionId
+from mote.contracts.session.identity import SessionId
 from mote.runtime.session.layout import SessionLayout
 
 PathLike = Union[str, Path]
@@ -84,6 +84,9 @@ class SessionWorkspace:
 
     def output_directory(self, session_id: SessionId) -> Path:
         return self.space(session_id, SessionSpace.TASK_OUTPUTS)
+
+    def tool_result_path(self, session_id: SessionId, result_id: str) -> Path:
+        return self.space(session_id, SessionSpace.TOOL_RESULTS) / f"{result_id}.txt"
 
     def space(self, session_id: str, kind: str | SessionSpace) -> Path:
         """The directory for one *kind* of artifact under *session_id*.

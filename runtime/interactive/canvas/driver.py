@@ -1,4 +1,5 @@
 """Managed vector Canvas driver with atomic operations and live snapshots."""
+
 from __future__ import annotations
 
 import json
@@ -34,7 +35,7 @@ from mote.contracts.surface import (
 from mote.runtime.interactive.canvas.export import CanvasExportService
 from mote.runtime.interactive.canvas.state import apply_canvas_operations
 from mote.runtime.interactive.canvas.svg import render_canvas_svg
-from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
+from mote.runtime.interactive.checkpoint_codec import CANVAS_CHECKPOINT_CODEC
 from mote.runtime.interactive.observation import SurfaceObservationHub
 
 
@@ -67,8 +68,7 @@ class CanvasRuntimeDriver:
         if self._started and not self._closed:
             raise RuntimeError("canvas runtime is already started")
         if checkpoint is not None:
-            payload = decode_inline_json(checkpoint, codec="canvas-document+json@1")
-            self._document = CanvasDocument.model_validate(payload)
+            self._document = CANVAS_CHECKPOINT_CODEC.decode(checkpoint)
         self._started = True
         self._closed = False
         return DriverStartResult(restored=checkpoint is not None)
@@ -81,9 +81,8 @@ class CanvasRuntimeDriver:
 
     async def checkpoint(self, reason: str) -> DriverCheckpoint:
         self._assert_open()
-        return encode_inline_json(
-            self._document.model_dump(mode="json"),
-            codec="canvas-document+json@1",
+        return CANVAS_CHECKPOINT_CODEC.encode(
+            self._document,
             fidelity=CheckpointFidelity.FULL,
         )
 

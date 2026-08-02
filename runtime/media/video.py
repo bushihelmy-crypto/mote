@@ -25,13 +25,16 @@ decomposition: no LLM, no network, deterministic, single-directional.
 
 from __future__ import annotations
 
-import asyncio
 import json
+import os
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
+
+from mote.runtime.process import ProcessDisposition, ProcessResult, run_fixed_argv
 
 # --- Recognised video containers (used by Read/curl/browser to recognise) ---
 VIDEO_EXTENSIONS = frozenset({"mp4", "mkv", "webm", "mov", "m4v", "avi", "flv", "wmv", "mpeg", "mpg", "ts"})
@@ -147,28 +150,15 @@ def _stamp(seconds: float) -> str:
 # --- Subprocess plumbing (async, PATH-guarded, timeout-bounded) ------------
 
 
-async def _run(argv: list[str], *, timeout: float) -> tuple[int, bytes, bytes]:
-    """Run *argv* to completion, returning ``(rc, stdout, stderr)``.
+async def _run(argv: list[str], *, timeout: float) -> ProcessResult:
+    """Run one media command through Runtime's canonical fixed-argv owner."""
 
-    Raises :class:`VideoError` on timeout or spawn failure. The binary is
-    checked by the caller (which raises the friendlier :class:`VideoUnavailable`
-    with an install hint) before we get here.
-    """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-    except OSError as e:
-        raise VideoError(f"failed to run {argv[0]}: {e}")
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+    result = await run_fixed_argv(argv, timeout=timeout)
+    if result.disposition is ProcessDisposition.TIMED_OUT:
         raise VideoError(f"{argv[0]} timed out after {int(timeout)}s")
-    return proc.returncode or 0, stdout, stderr
+    if result.disposition is not ProcessDisposition.EXITED:
+        raise VideoError(f"failed to run {argv[0]}: {result.disposition.value}")
+    return result
 
 
 def _require(tool: str, hint: str) -> None:
@@ -206,7 +196,7 @@ def _pick_subtitle(out_dir: Path, *, stem: str) -> "Path | None":
 async def _probe(video: Path) -> dict:
     """Probe duration / dimensions / audio via ffprobe (JSON)."""
     _require("ffprobe", _FFMPEG_HINT)
-    rc, stdout, stderr = await _run(
+    result = await _run(
         [
             "ffprobe",
             "-v",
@@ -219,9 +209,9 @@ async def _probe(video: Path) -> dict:
         ],
         timeout=_DEFAULT_TIMEOUT_S,
     )
-    if rc != 0:
-        raise VideoError(f"ffprobe failed: {stderr.decode(errors='replace').strip()}")
-    data = json.loads(stdout.decode(errors="replace") or "{}")
+    if result.exit_code != 0:
+        raise VideoError(f"ffprobe failed: {result.stderr}")
+    data = json.loads(result.stdout or "{}")
     streams = data.get("streams", [])
     fmt = data.get("format", {})
     vstream = next((s for s in streams if s.get("codec_type") == "video"), {})
@@ -374,10 +364,10 @@ async def _ffmpeg_frames(
         argv += ["-frames:v", str(max_frames)]
     argv += ["-q:v", "4", str(work / "frame_%04d.jpg")]
 
-    rc, _out, stderr = await _run(argv, timeout=_DEFAULT_TIMEOUT_S)
-    if rc != 0:
-        raise VideoError(f"ffmpeg frame extraction failed: {stderr.decode(errors='replace').strip()}")
-    err = stderr.decode(errors="replace")
+    result = await _run(argv, timeout=_DEFAULT_TIMEOUT_S)
+    if result.exit_code != 0:
+        raise VideoError(f"ffmpeg frame extraction failed: {result.stderr}")
+    err = result.stderr
     timestamps = [float(m.group(1)) for m in _SHOWINFO_TS_RE.finditer(err)]
     return sorted(work.glob("frame_*.jpg")), timestamps
 
@@ -408,11 +398,19 @@ async def _thumbs(paths: list[Path]) -> list[bytes]:
         f"scale={_DEDUP_THUMB}:{_DEDUP_THUMB},format=gray",
         "-f",
         "rawvideo",
-        "-",
     ]
-    rc, stdout, _err = await _run(argv, timeout=_DEFAULT_TIMEOUT_S)
-    if rc != 0:
-        return []
+    descriptor, raw_output = tempfile.mkstemp(prefix="mote-video-thumbs-", suffix=".raw", dir=paths[0].parent)
+    output = Path(raw_output)
+    try:
+        Path(raw_output).unlink()
+        argv.extend(["-y", raw_output])
+        result = await _run(argv, timeout=_DEFAULT_TIMEOUT_S)
+        if result.exit_code != 0:
+            return []
+        stdout = output.read_bytes()
+    finally:
+        os.close(descriptor)
+        output.unlink(missing_ok=True)
     chunk = _DEDUP_THUMB * _DEDUP_THUMB
     if len(stdout) != chunk * len(paths):
         return []

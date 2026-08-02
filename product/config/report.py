@@ -12,6 +12,7 @@ module top level (no lazy-import cycle).
   unknown keys (secrets redacted).
 - ``python -m mote.product.config.report`` — the CLI entry point.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -28,14 +29,12 @@ def format_report(
     *,
     profile: Optional[str] = None,
     user_config_root: Path | None = None,
-    source_root: Path | None = None,
 ) -> str:
     """Human-readable dump: layer stack + per-value provenance + unknown keys."""
     stack = build_layer_stack(
         cwd,
         profile=profile,
         user_config_root=user_config_root,
-        source_root=source_root,
     )
     merged = stack.effective()
     prov = stack.provenance()

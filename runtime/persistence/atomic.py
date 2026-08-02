@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional, Union
 
@@ -104,39 +105,71 @@ def append_line(path: PathLike, line: str, *, fsync: bool = True) -> None:
     atomic at the line level and leaves earlier lines intact on crash, and
     ``fsync`` (on by default here) makes the line durable before returning.
     """
-    write_bytes(path, (line + "\n").encode("utf-8"), append=True, fsync=fsync)
+    p = Path(path)
+    existed = p.exists()
+    write_bytes(p, (line + "\n").encode("utf-8"), append=True, fsync=fsync)
+    if fsync and not existed:
+        fsync_directory(p.parent)
 
 
-def atomic_write(path: PathLike, data: bytes, *, fsync: bool = True) -> None:
+def fsync_directory(path: PathLike) -> None:
+    """Durably commit directory-entry changes or raise ``OSError``.
+
+    Callers that promise crash durability must not treat failure to persist a
+    newly created or replaced filename as a successful commit.
+    """
+    dir_fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
+def atomic_write(
+    path: PathLike,
+    data: bytes,
+    *,
+    fsync: bool = True,
+    mode: int | None = None,
+) -> None:
     """Atomically replace *path* with *data* (tmp-write + ``os.replace``).
 
-    Writes to a per-pid temp file in the same directory, flushes (and, when
+    Writes to a unique temp file in the same directory, flushes (and, when
     ``fsync`` is set, fsyncs) it, then ``os.replace``-s it into place. A
     concurrent reader therefore sees either the old file or the complete new
     one — never a half-written file. With ``fsync`` the parent directory is also
-    fsynced (best-effort) so the rename itself survives a crash.
+    fsynced (best-effort) so the rename itself survives a crash. ``mode``
+    applies owner/security permissions before bytes are written and again after
+    replacement.
 
     This is the single home for the ``tmp + fsync + replace`` pattern previously
     duplicated across durable artifact and task stores.
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + f".tmp.{os.getpid()}")
-    with open(tmp, "wb") as f:
-        f.write(data)
-        f.flush()
-        if fsync:
-            os.fsync(f.fileno())
-    os.replace(tmp, p)
-    if fsync:
+    fd, raw_tmp = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=p.parent)
+    tmp = Path(raw_tmp)
+    try:
+        if mode is not None:
+            os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as f:
+            fd = -1
+            f.write(data)
+            f.flush()
+            if fsync:
+                os.fsync(f.fileno())
+        os.replace(tmp, p)
+        if mode is not None:
+            os.chmod(p, mode)
+    finally:
+        if fd >= 0:
+            os.close(fd)
         try:
-            dir_fd = os.open(str(p.parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            pass  # directory fsync is best-effort (e.g. unsupported on the FS)
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+    if fsync:
+        fsync_directory(p.parent)
 
 
 def write_capped(

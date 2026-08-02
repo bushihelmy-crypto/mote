@@ -27,6 +27,9 @@ from mote.product.toolsets.builtin.sleep import Sleep
 from mote.product.toolsets.builtin.terminal import Terminal
 from mote.product.toolsets.builtin.web_browser import WebBrowser
 from mote.product.toolsets.builtin.web_search import WebSearch
+from mote.product.workflows.cancel_run import CancelWorkflowRun
+from mote.product.workflows.run_graph.get_node_state import GetNodeState
+from mote.product.workflows.run_graph.resume_tasks import ResumeTasks
 from mote.product.workflows.run_graph.tool import RunGraph
 from mote.runtime.tools.provider import AnyToolset
 from mote.runtime.tools.tool_registry import NativeCatalogToolset, ToolCatalog, XmlCatalogToolset
@@ -45,6 +48,9 @@ _BUILTIN_TOOL_TYPES = (
     Read,
     ReplyToUser,
     RunGraph,
+    ResumeTasks,
+    GetNodeState,
+    CancelWorkflowRun,
     Search,
     SearchTools,
     Skill,
@@ -67,7 +73,7 @@ WORKSPACE_TOOLS = frozenset({"Read", "Edit", "Search"})
 EXECUTION_TOOLS = frozenset({"Bash", "Terminal", "Jupyter"})
 WEB_TOOLS = frozenset({"WebSearch", "WebBrowser", "DeviceUse"})
 HUMAN_TOOLS = frozenset({"Ask", "AskUserQuestion", "Reply", "End"})
-WORKFLOW_TOOLS = frozenset({"RunGraph"})
+WORKFLOW_TOOLS = frozenset({"RunGraph", "ResumeTasks", "GetNodeStates", "CancelWorkflowRun"})
 ORCHESTRATION_TOOLS = frozenset({"Agent", "CancelTasks", "Sleep"})
 EXTENSION_TOOLS = frozenset({"Skill", "SearchTools"})
 MEDIA_TOOLS = frozenset({"GenerateMedia"})
@@ -96,9 +102,8 @@ def builtin_toolsets(
     """Return the standard, mutually exclusive Product Toolsets.
 
     Every returned adapter reads the same immutable Application snapshot while
-    exposing a disjoint ownership view. `ResumeTasks` and `GetNodeStates` are deliberately absent:
-    their old source files remain only until the underlying pause/resume protocol
-    and persisted data are removed as one coherent migration.
+    exposing a disjoint ownership view. Durable Workflow inspection, resume and
+    cancellation resolve their current-Agent capability from the active turn.
     """
 
     resolved = CommandProtocol(protocol)

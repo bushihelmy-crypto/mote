@@ -5,8 +5,9 @@ from mote.contracts.inference.deadline import CrossProcessDeadline
 from mote.contracts.inference.executions import TransferPartRequest
 from mote.contracts.inference.identity import InferencePrincipal, TrustedSchedulingClass
 from mote.contracts.inference.transport import ProviderWireResult
-from mote.contracts.inference.wire_permit import WirePermit
+from mote.contracts.inference.wire_permit import ExecutionTaxonomy, WirePermit
 from mote.product.inference.backends.sqlite import SQLiteAttemptReceiptStore, SQLiteUsageLedger
+from mote.runtime.clock import SystemClock
 from mote.runtime.inference.governance import CredentialHealthAuthority, ProviderQuotaAuthority
 from mote.runtime.inference.transfer_runtime import EmbeddedArtifactTransferRuntime
 
@@ -101,7 +102,7 @@ def _permit(request):
     now = datetime.now(timezone.utc)
     return WirePermit(
         attempt_id=request.execution_id,
-        execution_taxonomy="artifact_transfer",
+        execution_taxonomy=ExecutionTaxonomy.ARTIFACT_TRANSFER,
         owner_journal_id=request.owner_journal_id,
         wire_unit=request.operation,
         generation_id=request.generation_id,
@@ -124,7 +125,7 @@ def test_transfer_runtime_executes_exactly_one_digest_bound_part(tmp_path):
     async def scenario():
         authority = SQLiteAttemptReceiptStore(tmp_path / "gateway.sqlite3")
         await authority.initialize()
-        ledger = SQLiteUsageLedger(authority)
+        ledger = SQLiteUsageLedger(authority, clock_source=SystemClock())
         await ledger.configure_budget("tenant", "project", 100)
         transport = _Transport()
         runtime = EmbeddedArtifactTransferRuntime(

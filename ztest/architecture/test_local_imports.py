@@ -1,4 +1,5 @@
 """Production imports are module-level architecture declarations."""
+
 from __future__ import annotations
 
 import ast
@@ -48,3 +49,17 @@ def test_all_production_imports_are_module_level() -> None:
         "cycles through layering, module extraction, or contracts/ports Protocols; "
         "do not hide them behind local imports:\n" + "\n".join(sorted(violations))
     )
+
+
+def test_nested_import_gate_rejects_a_negative_fixture() -> None:
+    tree = ast.parse("""
+def hidden_dependency():
+    import optional_backend
+    from package import adapter
+""")
+    collector = _NestedImportCollector("negative_fixture.py")
+    collector.visit(tree)
+    assert collector.violations == [
+        "negative_fixture.py:3: import optional_backend",
+        "negative_fixture.py:4: from package import ...",
+    ]

@@ -5,11 +5,9 @@ from __future__ import annotations
 from enum import StrEnum
 from ipaddress import ip_network
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-
-class _Config(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+from mote.contracts.config.base import ConfigModel
 
 
 class DeploymentMode(StrEnum):
@@ -34,7 +32,7 @@ class PluginIsolation(StrEnum):
     SUBPROCESS = "subprocess"
 
 
-class CapacityConfig(_Config):
+class CapacityConfig(ConfigModel):
     global_in_flight: int = Field(default=1000, ge=1)
     provider_in_flight: int = Field(default=100, ge=1)
     endpoint_in_flight: int = Field(default=100, ge=1)
@@ -51,7 +49,7 @@ class CapacityConfig(_Config):
         return self
 
 
-class DeadlineConfig(_Config):
+class DeadlineConfig(ConfigModel):
     default_seconds: float = Field(default=300.0, gt=0)
     clock_skew_guard_seconds: float = Field(default=2.0, ge=0)
     maximum_seconds: float = Field(default=3600.0, gt=0)
@@ -63,7 +61,7 @@ class DeadlineConfig(_Config):
         return self
 
 
-class PrivateNetworkPolicy(_Config):
+class PrivateNetworkPolicy(ConfigModel):
     allow_private_network: bool = False
     allowed_cidrs: tuple[str, ...] = ()
     allowed_dns_suffixes: tuple[str, ...] = ()
@@ -100,7 +98,7 @@ class PrivateNetworkPolicy(_Config):
         return self
 
 
-class PersistenceConfig(_Config):
+class PersistenceConfig(ConfigModel):
     backend: PersistenceBackend = PersistenceBackend.SQLITE
     dsn_secret_ref: str | None = Field(default=None, pattern=r"^env://[A-Za-z_][A-Za-z0-9_]*$")
     receipt_retention_days: int = Field(default=90, ge=1)
@@ -115,7 +113,7 @@ class PersistenceConfig(_Config):
         return self
 
 
-class SharedSQLiteConfig(_Config):
+class SharedSQLiteConfig(ConfigModel):
     wal_enabled: bool = True
     synchronous: str = Field(default="FULL", pattern=r"^FULL$")
     foreign_keys: bool = True
@@ -137,7 +135,7 @@ class SharedSQLiteConfig(_Config):
         return self
 
 
-class SharedProcessConfig(_Config):
+class SharedProcessConfig(ConfigModel):
     runtime_directory: str = Field(default="runtime/inference/shared", min_length=1)
     peer_credentials_required: bool = True
     session_credential_ttl_seconds: int = Field(default=300, ge=30, le=3600)
@@ -151,14 +149,14 @@ class SharedProcessConfig(_Config):
         return value
 
 
-class PluginConfig(_Config):
+class PluginConfig(ConfigModel):
     name: str = Field(min_length=1)
     isolation: PluginIsolation
     artifact_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     enabled: bool = True
 
 
-class CompatibilityConfig(_Config):
+class CompatibilityConfig(ConfigModel):
     inference_api_enabled: bool = True
     admin_api_enabled: bool = True
     realtime_enabled: bool = True
@@ -170,14 +168,14 @@ class CompatibilityConfig(_Config):
     max_precommit_seconds: float = Field(default=15.0, gt=0)
 
 
-class ExactCacheConfig(_Config):
+class ExactCacheConfig(ConfigModel):
     enabled: bool = False
     default_ttl_seconds: int = Field(default=300, ge=1, le=86400)
     maximum_entries: int = Field(default=1000, ge=1)
     sensitive_data_allowed: bool = False
 
 
-class SemanticCacheConfig(_Config):
+class SemanticCacheConfig(ConfigModel):
     enabled: bool = False
     backend: str | None = Field(default=None, pattern=r"^(redis|qdrant)$")
     threshold: float = Field(default=0.95, ge=0, le=1)
@@ -189,14 +187,14 @@ class SemanticCacheConfig(_Config):
         return self
 
 
-class InferenceCacheConfig(_Config):
+class InferenceCacheConfig(ConfigModel):
     exact: ExactCacheConfig = Field(default_factory=ExactCacheConfig)
     semantic: SemanticCacheConfig = Field(default_factory=SemanticCacheConfig)
     provider_prompt_cache_enabled: bool = True
     http_management_cache_enabled: bool = True
 
 
-class InferenceConfig(_Config):
+class InferenceConfig(ConfigModel):
     schema_version: int = Field(default=1, ge=1)
     deployment: DeploymentMode = DeploymentMode.EMBEDDED
     capacity: CapacityConfig = Field(default_factory=CapacityConfig)

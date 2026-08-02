@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING
 
 from mote.contracts.conversation import CauseBy
 from mote.orchestration.background_tasks.constants import STALL_CHECK_INTERVAL, STALL_TAIL_BYTES, STALL_THRESHOLD
-from mote.orchestration.background_tasks.model import BackgroundTaskNotification, BgStatus
+from mote.orchestration.background_tasks.model import BackgroundTaskNotification
+from mote.orchestration.background_tasks.status import BackgroundTaskStatus
 from mote.runtime.control.scheduling import PeriodicLoop
 
 if TYPE_CHECKING:
@@ -35,7 +36,14 @@ _PROMPT_PATTERNS = [
 
 _PROMPT_RE = re.compile("|".join(_PROMPT_PATTERNS))
 
-_TERMINAL_STATUSES = frozenset({BgStatus.SUCCESS, BgStatus.FAILED, BgStatus.CANCELLED, BgStatus.TIMEOUT})
+_TERMINAL_STATUSES = frozenset(
+    {
+        BackgroundTaskStatus.SUCCESS,
+        BackgroundTaskStatus.FAILED,
+        BackgroundTaskStatus.CANCELLED,
+        BackgroundTaskStatus.TIMEOUT,
+    }
+)
 
 
 def _matches_interactive_prompt(text: str) -> bool:

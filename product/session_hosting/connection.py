@@ -26,15 +26,22 @@ the consumer + port and own the socket; they lean on this to run turns.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from collections.abc import Iterable
+from contextvars import Token
+from types import TracebackType
+from typing import Optional
 from uuid import uuid4
 
+from mote.contracts.conversation import Message
 from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.contracts.ports.interaction.role import RoleHumanInteractionPort
 from mote.product.interaction.human_channel import PortHumanChannel
+from mote.product.interaction.ports import InputPort
 from mote.product.interaction.turn import TurnRunner, format_turn_error
-from mote.product.presentation.input_events import is_presentation_input
-from mote.product.presentation.projection.base import BaseProjector
+from mote.product.presentation.input_events import PRESENTATION_INPUT_TYPES
+from mote.product.presentation.projection.base import BaseProjector, PresentationConsumer
 from mote.product.presentation.projection.projector import ViewProjector
+from mote.product.session_hosting.registry import ResidentSession
 from mote.runtime.events.telemetry import TelemetryHandle
 from mote.runtime.telemetry.logging import logger
 
@@ -58,10 +65,10 @@ class ConnectionScope:
 
     def __init__(
         self,
-        session: Any,
+        session: ResidentSession[str],
         *,
-        consumers: Optional[List[Any]] = None,
-        port: Any = None,
+        consumers: Iterable[PresentationConsumer] | None = None,
+        port: InputPort | None = None,
         quiescent_poll_interval: float = 0.05,
     ) -> None:
         self._session = session
@@ -76,9 +83,9 @@ class ConnectionScope:
             self._projector,
             quiescent_poll_interval=quiescent_poll_interval,
         )
-        self._telemetry_handle: Optional[TelemetryHandle] = None
+        self._telemetry_handles: list[TelemetryHandle] = []
         self._telemetry_identity = TelemetryIdentity(f"mote.product.cli.connection_scope.{uuid4().hex}")
-        self._prev_env: Any = None
+        self._human_token: Token[RoleHumanInteractionPort | None] | None = None
         self._env_bound = False
 
     @property
@@ -96,7 +103,12 @@ class ConnectionScope:
         await self.open()
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         await self.aclose()
 
     async def open(self) -> None:
@@ -106,27 +118,30 @@ class ConnectionScope:
         restored on :meth:`aclose`, so overlapping scopes on the same role (rare,
         but possible for a resumed thread) don't clobber each other's channel.
         """
-        telemetry = getattr(self._role, "telemetry", None)
-        if telemetry is not None and self._telemetry_handle is None:
+        if not self._telemetry_handles:
             try:
-                self._telemetry_handle = await telemetry.subscribe_typed(
-                    TelemetrySubscriptionSpec(
-                        identity=self._telemetry_identity,
-                        capacity=4096,
-                        overflow=TelemetryOverflow.DROP_OLDEST,
-                    ),
-                    is_presentation_input,
-                    self._projector,
-                    self._projector,
-                )
+                for ordinal, event_type in enumerate(PRESENTATION_INPUT_TYPES):
+                    handle = await self._role.telemetry.subscribe_typed(
+                        TelemetrySubscriptionSpec(
+                            identity=TelemetryIdentity(f"{self._telemetry_identity}.{ordinal}"),
+                            capacity=4096,
+                            overflow=TelemetryOverflow.DROP_OLDEST,
+                        ),
+                        event_type,
+                        self._projector,
+                        self._projector,
+                    )
+                    self._telemetry_handles.append(handle)
             except Exception as exc:  # noqa: BLE001 — rendering is best-effort
+                for handle in self._telemetry_handles:
+                    await handle.aclose()
+                self._telemetry_handles.clear()
                 logger.warning(f"ConnectionScope: projector subscribe failed: {exc}")
         if self._port is not None:
-            self._prev_env = getattr(self._role.state, "env", None)
-            self._role.state.env = PortHumanChannel(self._port)
+            self._human_token = self._role.bind_human_interaction(PortHumanChannel(self._port))
             self._env_bound = True
 
-    async def run_turn(self, message: Any) -> None:
+    async def run_turn(self, message: Message) -> None:
         """Drive one turn: inject *message*, await quiescence, fan output out.
 
         *message* is a backend ``UserMessage`` (built by the transport via
@@ -145,32 +160,29 @@ class ConnectionScope:
         registry owns its lifecycle across turns. Only this scope's presentation
         edge is torn down.
         """
-        if self._telemetry_handle is not None:
+        for handle in self._telemetry_handles:
             try:
-                await self._telemetry_handle.aclose()
+                await handle.aclose()
             except Exception:  # noqa: BLE001
                 pass
-            self._telemetry_handle = None
+        self._telemetry_handles.clear()
         if self._env_bound:
             try:
-                self._role.state.env = self._prev_env
+                if self._human_token is not None:
+                    self._role.reset_human_interaction(self._human_token)
+                    self._human_token = None
             except Exception:  # noqa: BLE001
                 pass
             self._env_bound = False
-        for consumer in self._projector.consumers:
-            aclose = getattr(consumer, "aclose", None)
-            if aclose is not None:
-                try:
-                    await aclose()
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(f"ConnectionScope: consumer.aclose failed: {exc}")
+        try:
+            await self._projector.aclose()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"ConnectionScope: consumer close failed: {exc}")
         if self._port is not None:
-            aclose = getattr(self._port, "aclose", None)
-            if aclose is not None:
-                try:
-                    await aclose()
-                except Exception:  # noqa: BLE001
-                    pass
+            try:
+                await self._port.aclose()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 __all__ = ["ConnectionScope"]

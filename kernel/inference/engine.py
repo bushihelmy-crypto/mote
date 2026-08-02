@@ -9,19 +9,20 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Callable, Optional
 from uuid import uuid4
 
+from mote.contracts.events.output import OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
 from mote.contracts.model.inference import (
+    FinalizedGenerateRequest,
     FinalizedInferenceRequest,
     InferenceAttemptFence,
     InferenceResult,
     ResolvedInferenceTarget,
     TargetInvalidated,
 )
-from mote.contracts.model.invocation import ResponseMode
+from mote.contracts.model.invocation import CanonicalToolCall, ResponseMode
 from mote.contracts.ports.model.inference import ModelInferencePort
 from mote.kernel.inference.base import BaseInferenceEngine
 from mote.kernel.output.snapshots import OutputSnapshotAccumulator
 from mote.kernel.telemetry.context import current_trace_id
-from mote.kernel.telemetry.events import emit_event_sync
 
 if TYPE_CHECKING:
     from mote.contracts.ports.conversation.message_store import MessageStore
@@ -56,6 +57,7 @@ class InferenceEngine(BaseInferenceEngine):
         *,
         inference_port: ModelInferencePort,
         snapshot_scope: Callable[[OutputSnapshotAccumulator | None], Any],
+        output_observer: Callable[[OutputSnapshotEvent | OutputSnapshotInvalidatedEvent], None],
         reporter_factory: Callable[..., Any] | None = None,
     ):
         # No fixed LLM: the react loop resolves the per-request LLM via the
@@ -68,6 +70,7 @@ class InferenceEngine(BaseInferenceEngine):
         self._reporter_factory = reporter_factory or _NullThoughtReporter
         self._inference_port = inference_port
         self._snapshot_scope = snapshot_scope
+        self._output_observer = output_observer
         # The single output contract for one think round. Replaced wholesale by
         # each _run; callers read it through the `result` property.
         self.result: InferenceResult = InferenceResult()
@@ -146,7 +149,7 @@ class InferenceEngine(BaseInferenceEngine):
         # start() always assigns self.llm before creating this task, so it is
         # non-None here; capture it into a local to narrow away the Optional.
         content = ""
-        tool_calls: Optional[list[dict]] = None
+        tool_calls: tuple[CanonicalToolCall, ...] | None = None
         try:
             async with self._reporter_factory(enable_llm_stream=True) as reporter:
                 await reporter.async_report({"type": "react"})
@@ -155,7 +158,7 @@ class InferenceEngine(BaseInferenceEngine):
                     OutputSnapshotAccumulator(
                         run_id=output_run_id,
                         schema_fingerprint=schema_fingerprint,
-                        observer=emit_event_sync,
+                        observer=self._output_observer,
                     )
                     if is_native_schema
                     else None
@@ -170,18 +173,17 @@ class InferenceEngine(BaseInferenceEngine):
                         target,
                         FinalizedInferenceRequest(
                             model_call_id=model_call_id,
-                            payload={
-                                "messages": req,
-                                "model_call_id": model_call_id,
-                                "task": "interactive",
-                                "system_prompt": system_prompt,
-                                "tools": tool_specs,
-                                "output_schema": output_schema if is_native_schema else None,
-                                "response_mode": mode,
-                                "stream": True,
-                                "resume": resume,
-                                "trace_id": current_trace_id() or "",
-                            },
+                            payload=FinalizedGenerateRequest(
+                                messages=tuple(req),
+                                task="interactive",
+                                system_prompt=system_prompt,
+                                tools=tuple(tool_specs or ()),
+                                output_schema=output_schema if is_native_schema else None,
+                                response_mode=mode,
+                                stream=True,
+                                resume=resume,
+                                trace_id=current_trace_id() or "",
+                            ),
                             protocol_fingerprint=protocol_fingerprint,
                             vocabulary_fingerprint=vocabulary_fingerprint,
                             tool_projection_fingerprint=tool_projection_fingerprint,

@@ -1,17 +1,4 @@
-"""Temporal client / worker lifecycle for the Tier-2 durable backend.
-
-The bootstrap half of Part B: connect a Temporal ``Client`` (with mote's pydantic
-data converter so ``InferenceResult``/``Message``/``ToolResult`` serialize without a
-custom converter) and build a ``Worker`` that registers the backend's generic
-``run_step`` activity. Kept deliberately small and OPTIONAL — reached only when
-``DurableConfig.backend="temporal"``; the core never imports any of this.
-
-These helpers are thin wrappers over temporalio's own ``Client.connect`` /
-``Worker`` so a host application can drive them, while the default JSONL tier
-needs none of it. The backend's ``run_step`` also works INLINE without a running
-worker (see :class:`TemporalBackend`), so a worker is only required to get the
-distributed-durability + free-retry benefits of the Temporal tier.
-"""
+"""Optional Temporal client/worker mechanisms activated by Product composition."""
 
 from __future__ import annotations
 

@@ -18,14 +18,15 @@ core function works on both channels.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Optional
+from typing import ClassVar, Optional
 from urllib.parse import quote_plus
 
 from mote.contracts.model import WebSearchHit
-from mote.contracts.service import ServiceExecutionSemantics
+from mote.contracts.service import ServiceExecutionSemantics, WebSearchPayload, WebSearchResult
 from mote.contracts.service.errors import ServiceCallExhaustedError
 from mote.contracts.tool.effects import ToolEffect
-from mote.runtime.errors import ToolNotConfiguredError, ToolValidationError
+from mote.contracts.tool.errors import ToolNotConfiguredError, ToolValidationError
+from mote.product.config.web_search import WebSearchConfig
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import InvokeService
 from mote.runtime.tools.tool_result import ToolResult
@@ -42,7 +43,7 @@ def _unavailable_msg(query: str) -> str:
     return (
         "Server-side web search is unavailable: the model routed for the "
         "'web_search' task does not support provider-native web search. Configure "
-        "task:web_search route with a search-capable model (e.g. "
+        "models.tasks.web_search (task:web_search route) with a search-capable model (e.g. "
         "claude-haiku-4-5-20251001, or a gpt-4o/gpt-5 model on the OpenAI "
         "Responses API). In the meantime, use the WebBrowser tool to navigate to "
         f"a search engine (e.g. https://duckduckgo.com/?q={quote_plus(query)}) and "
@@ -85,7 +86,7 @@ class WebSearch(BaseTool):
 
     invoke_service: InvokeService
 
-    def __init__(self, config: object) -> None:
+    def __init__(self, config: WebSearchConfig) -> None:
         super().__init__()
         self._config = config
 
@@ -150,23 +151,23 @@ class WebSearch(BaseTool):
         limit = num_results if isinstance(num_results, int) and num_results > 0 else 8
         try:
             value = await self.invoke_service(
-                route_id="web.search",
-                capability="web.search",
-                operation_key="query",
-                payload={
-                    "query": query,
-                    "allowed_domains": list(allowed_domains or ()),
-                    "blocked_domains": list(blocked_domains or ()),
-                    "max_uses": 8,
-                },
-                semantics=ServiceExecutionSemantics.PURE,
+                WebSearchPayload(
+                    query=query,
+                    allowed_domains=tuple(allowed_domains or ()),
+                    blocked_domains=tuple(blocked_domains or ()),
+                    max_uses=8,
+                ),
+                "query",
+                ServiceExecutionSemantics.PURE,
             )
         except ServiceCallExhaustedError as exc:
-            if getattr(self._config, "backend", "provider") in {"", "provider"}:
+            if self._config.backend in {"", "provider"}:
                 raise ToolNotConfiguredError(_unavailable_msg(query)) from exc
             raise
 
-        hits = _decode_hits(value)
+        if not isinstance(value, WebSearchResult):
+            raise TypeError("web-search service returned a non-search response")
+        hits = [WebSearchHit(title=hit.title, url=hit.url, snippet=hit.snippet) for hit in value.hits]
 
         return ToolResult(output=self._format(query, hits[:limit]))
 
@@ -184,7 +185,7 @@ class WebSearch(BaseTool):
             parts.append("Links:")
             for hit in hits:
                 line = f"  - [{hit.title}]({hit.url})"
-                if getattr(hit, "snippet", ""):
+                if hit.snippet:
                     line += f": {hit.snippet}"
                 parts.append(line)
             parts.append("")
@@ -192,21 +193,3 @@ class WebSearch(BaseTool):
             parts.append(_MSG_NO_RESULTS)
             parts.append("")
         return ("\n".join(parts) + _REMINDER).strip()
-
-
-def _decode_hits(value: Any) -> list[WebSearchHit]:
-    if not isinstance(value, dict) or not isinstance(value.get("hits"), list):
-        raise TypeError("web-search service returned an invalid response")
-    hits: list[WebSearchHit] = []
-    for item in value["hits"]:
-        if not isinstance(item, dict):
-            raise TypeError("web-search service returned a non-object hit")
-        title = item.get("title")
-        url = item.get("url")
-        snippet = item.get("snippet", "")
-        if not isinstance(title, str) or not isinstance(url, str):
-            raise TypeError("web-search service returned an invalid hit")
-        if not isinstance(snippet, str):
-            raise TypeError("web-search service returned an invalid snippet")
-        hits.append(WebSearchHit(title=title, url=url, snippet=snippet))
-    return hits

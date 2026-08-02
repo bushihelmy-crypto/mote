@@ -42,32 +42,26 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from typing import Any, Awaitable, Callable, Dict, Optional, Set
+from collections.abc import Mapping
+from typing import Awaitable, Callable, Optional, Protocol, Set
 
 from mote.contracts.conversation import UserMessage
+from mote.contracts.session import SessionHostingError, SessionHostingErrorKind
 from mote.product.interfaces.acp.consumer import AcpConsumer
 from mote.product.interfaces.acp.port import DEFAULT_PERMISSION_TIMEOUT_S, AcpPort
+from mote.product.presentation.wire_types import WireMapping, WireObject, to_wire_json
 from mote.product.session_hosting import ConnectionScope, SessionRegistry
+from mote.product.session_hosting.registry import HostedAgent, HostedAgentOwner
+from mote.runtime.engine import EngineAgentRequest
 from mote.runtime.telemetry.logging import logger
-
-
-async def _fork_role(role: Any) -> Optional[Any]:
-    fork = getattr(role, "fork_session", None)
-    if fork is None:
-        return None
-    try:
-        return await fork()
-    except Exception:  # noqa: BLE001
-        return None
-
 
 # ── ACP protocol constants (verified against the v1 Rust schema) ────────────
 ACP_PROTOCOL_VERSION = 1  # integer per the schema (NOT a "1.0" string)
 
 
-def _rpc_error(error: dict) -> Exception:
-    code = error.get("code", "?") if isinstance(error, dict) else "?"
-    message = error.get("message", "") if isinstance(error, dict) else str(error)
+def _rpc_error(error: object) -> Exception:
+    code = error.get("code", "?") if isinstance(error, Mapping) else "?"
+    message = error.get("message", "") if isinstance(error, Mapping) else str(error)
     return RuntimeError(f"JSON-RPC error {code}: {message}")
 
 
@@ -93,7 +87,15 @@ ERR_INVALID_PARAMS = -32602
 ERR_INTERNAL = -32603
 
 #: An async handler for one inbound request: ``params -> result dict``.
-Handler = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
+JsonObject = WireObject
+RpcId = str | int | None
+Handler = Callable[[JsonObject], Awaitable[JsonObject]]
+
+
+class NdjsonWriter(Protocol):
+    def write(self, data: bytes) -> object: ...
+
+    async def drain(self) -> None: ...
 
 
 class JsonRpcError(Exception):
@@ -130,17 +132,17 @@ class _StdioEndpoint:
     def __init__(
         self,
         reader: asyncio.StreamReader,
-        writer: Any,
+        writer: NdjsonWriter,
         *,
-        handlers: Dict[str, Handler],
-        on_notification: Callable[[str, Dict[str, Any]], None],
+        handlers: dict[str, Handler],
+        on_notification: Callable[[str, JsonObject], None],
     ) -> None:
         self._reader = reader
         self._writer = writer
         self._handlers = handlers
         self._on_notification = on_notification
         self._next_id = 0
-        self._pending: Dict[int, asyncio.Future] = {}
+        self._pending: dict[int, asyncio.Future[WireMapping | None]] = {}
         self._write_lock = asyncio.Lock()
         self._closed = False
         # In-flight inbound request handlers. Each request is dispatched as its
@@ -153,7 +155,11 @@ class _StdioEndpoint:
     # ------------------------------------------------------------------
     # Outbound request half (the port's session/request_permission sender)
     # ------------------------------------------------------------------
-    async def request(self, method: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def request(
+        self,
+        method: str,
+        params: WireMapping,
+    ) -> WireMapping | None:
         """Send an id-bearing request to the client, await its reply (or None).
 
         Returns the reply's ``result`` on success, ``None`` on a closed link or
@@ -163,9 +169,9 @@ class _StdioEndpoint:
             return None
         self._next_id += 1
         req_id = self._next_id
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[WireMapping | None] = asyncio.get_running_loop().create_future()
         self._pending[req_id] = future
-        await self._write({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
+        await self._write({"jsonrpc": "2.0", "id": req_id, "method": method, "params": dict(params)})
         try:
             return await future
         except Exception as exc:  # noqa: BLE001 — an error reply / teardown → fail-safe None
@@ -201,15 +207,17 @@ class _StdioEndpoint:
                     task.cancel()
 
     @staticmethod
-    def _decode(line: bytes) -> Optional[Dict[str, Any]]:
+    def _decode(line: bytes) -> Optional[JsonObject]:
         try:
-            obj = json.loads(line.decode("utf-8"))
-            return obj if isinstance(obj, dict) else None
+            value = to_wire_json(json.loads(line.decode("utf-8")))
+            return value if isinstance(value, dict) else None
         except (ValueError, UnicodeDecodeError):
             return None  # skip a malformed line without killing the loop
 
-    async def _dispatch(self, message: Dict[str, Any]) -> None:
+    async def _dispatch(self, message: JsonObject) -> None:
         msg_id = message.get("id")
+        if not isinstance(msg_id, (str, int)) or isinstance(msg_id, bool):
+            msg_id = None
         method = message.get("method")
         # A reply to one of OUR outbound requests (id + result/error, no method).
         if method is None and msg_id is not None:
@@ -218,8 +226,7 @@ class _StdioEndpoint:
         if not isinstance(method, str):
             return
         params = message.get("params")
-        if not isinstance(params, dict):
-            params = {}
+        params = dict(params) if isinstance(params, Mapping) else {}
         # A notification (method, no id) — dispatch, never reply.
         if msg_id is None:
             try:
@@ -234,7 +241,7 @@ class _StdioEndpoint:
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
 
-    async def _handle_request(self, msg_id: Any, method: str, params: Dict[str, Any]) -> None:
+    async def _handle_request(self, msg_id: RpcId, method: str, params: JsonObject) -> None:
         handler = self._handlers.get(method)
         if handler is None:
             await self._reply_error(msg_id, ERR_METHOD_NOT_FOUND, f"method not found: {method}")
@@ -244,31 +251,37 @@ class _StdioEndpoint:
             await self._write({"jsonrpc": "2.0", "id": msg_id, "result": result})
         except JsonRpcError as exc:
             await self._reply_error(msg_id, exc.code, exc.message)
+        except SessionHostingError as exc:
+            code = -32004 if exc.kind is SessionHostingErrorKind.NOT_FOUND else -32009
+            await self._reply_error(msg_id, code, f"{exc.kind.value}: {exc}")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — a handler crash → INTERNAL, link survives
             logger.warning(f"AcpServer: handler {method!r} failed: {exc}")
             await self._reply_error(msg_id, ERR_INTERNAL, str(exc))
 
-    def _resolve(self, msg_id: Any, message: Dict[str, Any]) -> None:
+    def _resolve(self, msg_id: RpcId, message: JsonObject) -> None:
+        if not isinstance(msg_id, int) or isinstance(msg_id, bool):
+            return
         future = self._pending.get(msg_id)
         if future is None or future.done():
             return
         if "error" in message:
             future.set_exception(_rpc_error(message.get("error") or {}))
         else:
-            future.set_result(message.get("result"))
+            result = message.get("result")
+            future.set_result(result if isinstance(result, Mapping) else None)
 
     # ------------------------------------------------------------------
     # Wire writes
     # ------------------------------------------------------------------
-    async def notify(self, method: str, params: Dict[str, Any]) -> None:
+    async def notify(self, method: str, params: JsonObject) -> None:
         """Send a notification (no id, no reply) — the ``session/update`` path."""
         if self._closed:
             return
         await self._write({"jsonrpc": "2.0", "method": method, "params": params})
 
-    async def _reply_error(self, msg_id: Any, code: int, message: str) -> None:
+    async def _reply_error(self, msg_id: RpcId, code: int, message: str) -> None:
         await self._write(
             {
                 "jsonrpc": "2.0",
@@ -277,7 +290,7 @@ class _StdioEndpoint:
             }
         )
 
-    async def _write(self, message: Dict[str, Any]) -> None:
+    async def _write(self, message: JsonObject) -> None:
         """Serialize *message* as one NDJSON line and write it (lock-serialized)."""
         if self._closed:
             return
@@ -289,9 +302,7 @@ class _StdioEndpoint:
         async with self._write_lock:
             try:
                 self._writer.write(data)
-                drain = getattr(self._writer, "drain", None)
-                if drain is not None:
-                    await drain()
+                await self._writer.drain()
             except Exception as exc:  # noqa: BLE001 — dead pipe; read loop tears down
                 logger.debug(f"AcpServer: write to dead pipe failed: {exc}")
                 self._closed = True
@@ -327,9 +338,9 @@ class AcpServer:
     # ------------------------------------------------------------------
     # Wire binding
     # ------------------------------------------------------------------
-    def bind(self, reader: asyncio.StreamReader, writer: Any) -> _StdioEndpoint:
+    def bind(self, reader: asyncio.StreamReader, writer: NdjsonWriter) -> _StdioEndpoint:
         """Bind the stdio streams + build the endpoint (handlers + notifications)."""
-        handlers: Dict[str, Handler] = {
+        handlers: dict[str, Handler] = {
             M_INITIALIZE: self._on_initialize,
             M_SESSION_NEW: self._on_session_new,
             M_SESSION_LOAD: self._on_session_load,
@@ -339,7 +350,7 @@ class AcpServer:
         self._endpoint = _StdioEndpoint(reader, writer, handlers=handlers, on_notification=self._on_notification)
         return self._endpoint
 
-    async def serve(self, reader: asyncio.StreamReader, writer: Any) -> None:
+    async def serve(self, reader: asyncio.StreamReader, writer: NdjsonWriter) -> None:
         """Bind + run the read loop to completion (client closing stdin ends it)."""
         endpoint = self.bind(reader, writer)
         await endpoint.serve_forever()
@@ -348,7 +359,7 @@ class AcpServer:
     # ------------------------------------------------------------------
     # Request handlers
     # ------------------------------------------------------------------
-    async def _on_initialize(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _on_initialize(self, params: JsonObject) -> JsonObject:
         """Advertise the protocol version + this agent's capabilities.
 
         We accept whatever ``protocolVersion`` the client offers and answer with
@@ -370,7 +381,7 @@ class AcpServer:
             "agentInfo": {"name": "mote", "version": "1"},
         }
 
-    async def _on_session_new(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _on_session_new(self, params: JsonObject) -> JsonObject:
         """Mint a fresh resident session; return its ``sessionId``.
 
         A brand-new thread (no id passed to the registry) so a subsequent
@@ -378,21 +389,21 @@ class AcpServer:
         are accepted but not yet threaded (the shared engine's cwd governs) — a
         forward-compatible client tolerates the omission.
         """
-        session = await self._registry.get_or_create(None)
+        session = await self._registry.create_new()
         return {"sessionId": session.session_id}
 
-    async def _on_session_load(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _on_session_load(self, params: JsonObject) -> JsonObject:
         """Resume a persisted session by ``sessionId`` (resident across restarts).
 
-        ``get_or_create`` resumes the rollout when the id names one; an unknown
+        Session creation resumes the rollout when the id names one; an unknown
         id starts a fresh thread under that id. Returns an empty envelope (no
         modes/configOptions advertised).
         """
         session_id = self._session_id(params)
-        await self._registry.get_or_create(session_id)
+        await self._registry.load_existing(session_id)
         return {}
 
-    async def _on_session_fork(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _on_session_fork(self, params: JsonObject) -> JsonObject:
         """Branch a sibling session off ``sessionId`` at its current history.
 
         Ensures the source is resident, forks its role (independent afterwards),
@@ -401,17 +412,10 @@ class AcpServer:
         session if the engine can't fork (best-effort, matching ``fork_role``).
         """
         session_id = self._session_id(params)
-        source = await self._registry.get_or_create(session_id)
-        forked = await _fork_role(source.role)
-        if forked is None:
-            # Engine can't fork this role — degrade to a fresh session so the
-            # client still gets a usable id rather than an error.
-            fresh = await self._registry.get_or_create(None)
-            return {"sessionId": fresh.session_id}
-        resident = self._registry.adopt(forked)
+        resident = await self._registry.fork_existing(session_id)
         return {"sessionId": resident.session_id}
 
-    async def _on_session_prompt(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _on_session_prompt(self, params: JsonObject) -> JsonObject:
         """Drive ONE turn for ``sessionId``; return ``{stopReason}``.
 
         Opens a :class:`ConnectionScope` binding a fresh :class:`AcpConsumer`
@@ -423,19 +427,22 @@ class AcpServer:
         """
         session_id = self._session_id(params)
         text = self._prompt_text(params)
-        session = await self._registry.get_or_create(session_id)
+        session = await self._registry.get_resident_or_load(session_id)
         endpoint = self._endpoint
 
-        async def sink(update: Dict[str, Any]) -> None:
+        async def sink(update: WireMapping) -> None:
             # Wrap each mapper ``update`` in the ACP ``{sessionId, update}``
             # envelope + send as a ``session/update`` notification.
             if endpoint is not None:
                 await endpoint.notify(
                     M_SESSION_UPDATE,
-                    {"sessionId": session.session_id, "update": update},
+                    {"sessionId": session.session_id, "update": dict(update)},
                 )
 
-        async def request_permission(method: str, perm_params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        async def request_permission(
+            method: str,
+            perm_params: WireMapping,
+        ) -> WireMapping | None:
             if endpoint is None:
                 return None
             return await endpoint.request(method, perm_params)
@@ -458,8 +465,6 @@ class AcpServer:
         except asyncio.CancelledError:
             cancelled = True
             logger.info(f"AcpServer: prompt for {session.session_id[:8]} cancelled")
-        except Exception as exc:  # noqa: BLE001 — a turn failure still returns a stopReason
-            logger.warning(f"AcpServer: prompt for {session.session_id[:8]} failed: {exc}")
         finally:
             self._active_turns.discard(session.session_id)
         return {"stopReason": STOP_CANCELLED if cancelled else STOP_END_TURN}
@@ -467,7 +472,7 @@ class AcpServer:
     # ------------------------------------------------------------------
     # Notification handler
     # ------------------------------------------------------------------
-    def _on_notification(self, method: str, params: Dict[str, Any]) -> None:
+    def _on_notification(self, method: str, params: JsonObject) -> None:
         """Handle a client notification. Only ``session/cancel`` is actionable."""
         if method != M_SESSION_CANCEL:
             return
@@ -488,14 +493,14 @@ class AcpServer:
     # Param helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _session_id(params: Dict[str, Any]) -> str:
+    def _session_id(params: JsonObject) -> str:
         session_id = params.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise JsonRpcError(ERR_INVALID_PARAMS, "sessionId required")
         return session_id
 
     @staticmethod
-    def _prompt_text(params: Dict[str, Any]) -> str:
+    def _prompt_text(params: JsonObject) -> str:
         """Extract the turn's text from a ``prompt: [ContentBlock]`` array.
 
         ACP posts ``{sessionId, prompt:[ContentBlock,...]}``; each Text block is
@@ -516,12 +521,12 @@ class AcpServer:
         return "".join(parts)
 
 
-def serve(
-    role_factory: Callable[..., Any],
+async def serve(
+    role_factory: Callable[[EngineAgentRequest], HostedAgent[str]],
     *,
     name: str = "Assistant",
-    registry: Optional[SessionRegistry] = None,
-    engine: Any = None,
+    registry: SessionRegistry[str] | None = None,
+    engine: HostedAgentOwner[str] | None = None,
 ) -> None:
     """Blocking entrypoint: bind the ACP agent to stdio + run (``mote --serve acp``).
 
@@ -533,7 +538,7 @@ def serve(
     reg = registry if registry is not None else SessionRegistry(role_factory, name=name, engine=engine)
     server = AcpServer(reg, name=name)
     logger.info("ACP server on stdio (JSON-RPC over stdin/stdout)")
-    asyncio.run(_run_stdio(server))
+    await _run_stdio(server)
 
 
 async def _run_stdio(server: AcpServer) -> None:

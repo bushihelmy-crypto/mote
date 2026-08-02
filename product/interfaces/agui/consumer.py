@@ -20,12 +20,14 @@ deltas through untouched rather than buffering them into completed blocks.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional
+from collections.abc import Iterable, Mapping
+from typing import Optional
 
 from mote.product.interfaces.agui import wire as agui
 from mote.product.presentation.consumer import Sink, SinkConsumer
 from mote.product.presentation.events import Capabilities
 from mote.product.presentation.events.events import ViewEvent
+from mote.product.presentation.wire_types import WireMapping
 
 # A frontend that streams tokens, renders markdown, gates approvals, shows media.
 AGUI_CAPS = Capabilities(
@@ -59,10 +61,10 @@ class AguiConsumer(SinkConsumer):
     def wire_state(self) -> agui.AguiWireState:
         return self._state
 
-    def _fold(self, ev: ViewEvent) -> Iterable[Dict[str, Any]]:
+    def _fold(self, ev: ViewEvent) -> Iterable[WireMapping]:
         return agui.to_agui_events(ev, self._state)
 
-    async def emit_lifecycle(self, wire_event: Dict[str, Any]) -> None:
+    async def emit_lifecycle(self, wire_event: WireMapping) -> None:
         """Emit a transport-minted lifecycle frame (RUN_STARTED / RUN_FINISHED).
 
         The run lifecycle frames aren't folded from a ViewEvent — the server
@@ -72,7 +74,7 @@ class AguiConsumer(SinkConsumer):
         await self._emit(wire_event)
 
 
-def build_agui_consumer(config: Any = None) -> AguiConsumer:
+def build_agui_consumer(config: object = None) -> AguiConsumer:
     """Registry builder — a bare consumer (server rebinds thread/run/sink per turn).
 
     ``build_consumers`` constructs one at app-wire time with placeholder ids; the

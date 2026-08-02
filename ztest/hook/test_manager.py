@@ -1,23 +1,68 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for HookManager.fire: callbacks, command handlers, folding, isolation."""
+
 from __future__ import annotations
 
 import json
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
+from mote.contracts.tool.identity import (
+    ToolAttemptOrdinal,
+    ToolInvocationId,
+    ToolInvocationIdentity,
+    tool_arguments_digest,
+)
 from mote.runtime.config.hook import HookCommandHandler, HookConfig, HookMatcherGroup
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.hook.types import HookOutcome
+from mote.runtime.tools.permission.engine import PermissionEngine
+from mote.runtime.tools.permission.rule_store import RuleStore
+
+
+def _pre_tool(tool_name: str) -> dict:
+    arguments: dict[str, object] = {}
+    identity = ToolInvocationIdentity(
+        ToolInvocationId("hook-test"),
+        ToolAttemptOrdinal(1),
+        "hook-test-definition",
+        1,
+        tool_arguments_digest(arguments),
+        "hook-test-owner",
+        "hook-test-run",
+    )
+    return {"identity": identity, "tool_name": tool_name, "tool_input": arguments}
+
+
+class _Sandbox:
+    async def wrap_exec(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        extra_writable: list[str] | None = None,
+    ) -> tuple[list[str], dict[str, str]]:
+        return argv, dict(env or {})
+
+
+def _command_manager(config: HookConfig, **kwargs: object) -> HookManager:
+    return HookManager(
+        config,
+        command_sandbox=_Sandbox(),
+        permission_engine=PermissionEngine("bypass", RuleStore()),
+        **kwargs,
+    )
 
 
 @pytest.mark.asyncio
 async def test_no_handlers_returns_empty_fast_path():
     mgr = HookManager()
-    out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
+    out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     assert out.behavior is None
     assert mgr.enabled is False
 
@@ -39,7 +84,7 @@ async def test_callback_async_outcome():
         return HookOutcome(behavior="deny", system_message="blocked")
 
     mgr.register("PreToolUse", cb)
-    out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
+    out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     assert out.behavior == "deny"
     assert out.system_message == "blocked"
 
@@ -49,9 +94,9 @@ async def test_callback_matcher_filters():
     mgr = HookManager()
     mgr.register("PreToolUse", lambda hi: {"decision": "block"}, matcher="Write")
     # Tool name Bash does not match the Write matcher -> no handler runs.
-    out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
+    out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     assert out.behavior is None
-    out2 = await mgr.fire("PreToolUse", {"tool_name": "Write"})
+    out2 = await mgr.fire("PreToolUse", _pre_tool("Write"))
     assert out2.behavior == "deny"
 
 
@@ -64,7 +109,7 @@ async def test_failure_isolation():
 
     mgr.register("PreToolUse", boom)
     mgr.register("PreToolUse", lambda hi: {"additionalContext": "still here"})
-    out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
+    out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     # The throwing handler is skipped; the good one still contributes.
     assert out.additional_context == ["still here"]
 
@@ -74,7 +119,7 @@ async def test_fold_deny_wins_across_handlers():
     mgr = HookManager()
     mgr.register("PreToolUse", lambda hi: {"decision": "approve"})
     mgr.register("PreToolUse", lambda hi: {"decision": "block"})
-    out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
+    out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     assert out.behavior == "deny"
 
 
@@ -94,9 +139,17 @@ async def test_command_handler_json_stdout(tmp_path):
         "#!/usr/bin/env bash\nread -r line\n"
         'echo \'{"hookSpecificOutput": {"permissionDecision": "deny"}, "systemMessage": "no"}\'\n',
     )
-    cfg = HookConfig(events={"PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(command=f"bash {script}")])]})
-    mgr = HookManager(cfg, session_id="sid", get_cwd=lambda: str(tmp_path))
-    out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
+    cfg = HookConfig(
+        events={
+            "PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(id="json-block", argv=("/bin/bash", script))])]
+        }
+    )
+    mgr = _command_manager(
+        cfg,
+        session_id="sid",
+        get_cwd=lambda: str(Path.cwd()),
+    )
+    out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     assert out.behavior == "deny"
     assert out.system_message == "no"
 
@@ -108,9 +161,13 @@ async def test_command_handler_exit_2_blocks(tmp_path):
         "deny.sh",
         "#!/usr/bin/env bash\nread -r line\necho 'denied via exit' >&2\nexit 2\n",
     )
-    cfg = HookConfig(events={"PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(command=f"bash {script}")])]})
-    mgr = HookManager(cfg)
-    out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
+    cfg = HookConfig(
+        events={
+            "PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(id="exit-block", argv=("/bin/bash", script))])]
+        }
+    )
+    mgr = _command_manager(cfg)
+    out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     assert out.behavior == "deny"
     assert "denied via exit" in out.system_message
 
@@ -120,14 +177,20 @@ async def test_command_handler_receives_payload_on_stdin(tmp_path):
     # Echo back the toolName field read from stdin as additionalContext.
     script = _write_script(
         tmp_path,
-        "echo.sh",
-        "#!/usr/bin/env bash\nread -r line\n"
-        'name=$(python3 -c \'import sys,json; print(json.load(sys.stdin)["tool_name"])\' <<< "$line")\n'
-        'echo "{\\"additionalContext\\": \\"$name\\"}"\n',
+        "echo.py",
+        "import json, sys\n"
+        "payload = json.load(sys.stdin)\n"
+        "print(json.dumps({'additionalContext': payload['tool_name']}))\n",
     )
-    cfg = HookConfig(events={"PreToolUse": [HookMatcherGroup(handlers=[HookCommandHandler(command=f"bash {script}")])]})
-    mgr = HookManager(cfg)
-    out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
+    cfg = HookConfig(
+        events={
+            "PreToolUse": [
+                HookMatcherGroup(handlers=[HookCommandHandler(id="payload", argv=("/usr/bin/python3", script))])
+            ]
+        }
+    )
+    mgr = _command_manager(cfg)
+    out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     assert out.additional_context == ["Bash"]
 
 
@@ -140,10 +203,14 @@ async def test_command_handler_matcher_group_filters(tmp_path):
     )
     cfg = HookConfig(
         events={
-            "PreToolUse": [HookMatcherGroup(matcher="Write", handlers=[HookCommandHandler(command=f"bash {script}")])]
+            "PreToolUse": [
+                HookMatcherGroup(
+                    matcher="Write", handlers=[HookCommandHandler(id="matcher", argv=("/bin/bash", script))]
+                )
+            ]
         }
     )
     mgr = HookManager(cfg)
     # Bash does not match the Write group -> passthrough.
-    out = await mgr.fire("PreToolUse", {"tool_name": "Bash"})
+    out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     assert out.behavior is None

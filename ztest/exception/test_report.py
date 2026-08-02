@@ -6,20 +6,20 @@
 one record, and ``render_error_block`` is the single renderer producing the
 ``<error …>`` block every executor surface (tool / graph) shows the LLM.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from mote.contracts.foundation.errors.codes import ErrorCode, RecoveryAction
-from mote.runtime.errors import (
-    ErrorReport,
+from mote.contracts.foundation.errors.report import ErrorReport, render_error_block
+from mote.contracts.task.graph_errors import (
     GraphBatchFailureError,
     GraphNodeRetryExhaustedError,
     GraphParamTypeError,
     GraphRecursionError,
-    ToolError,
-    render_error_block,
 )
+from mote.contracts.tool.errors import ToolError
 
 
 class TestFromException:
@@ -60,12 +60,9 @@ class TestSerialization:
         rebuilt = ErrorReport.from_dict(report.as_dict())
         assert rebuilt == report
 
-    def test_from_dict_tolerates_missing_keys(self):
-        report = ErrorReport.from_dict({"message": "partial"})
-        assert report.message == "partial"
-        assert report.code == ErrorCode.UNKNOWN.value
-        assert report.recovery == RecoveryAction.ABORT.value
-        assert report.detail == {}
+    def test_from_dict_rejects_legacy_partial_shape(self):
+        with pytest.raises(ValueError, match="shape"):
+            ErrorReport.from_dict({"message": "partial"})
 
 
 class TestRenderErrorBlock:

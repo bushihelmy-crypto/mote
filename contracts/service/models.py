@@ -10,6 +10,7 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from mote.contracts.model.failover import AttemptBudget, FailureDisposition
+from mote.contracts.service.operations import HostedServicePayload, HostedServiceResult, capability_for_payload
 
 
 class _FrozenContract(BaseModel):
@@ -35,6 +36,7 @@ class ServiceAcceptance(StrEnum):
 class ServiceCallState(StrEnum):
     PLANNED = "planned"
     RUNNING = "running"
+    WAITING_REMOTE = "waiting_remote"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -46,7 +48,7 @@ class ServiceInvocation(_FrozenContract):
     service_call_id: str = Field(min_length=1)
     route_id: str = Field(min_length=1)
     capability: str = Field(min_length=1)
-    payload: dict[str, JsonValue] = Field(default_factory=dict)
+    payload: HostedServicePayload
     semantics: ServiceExecutionSemantics
     idempotency_key: str = Field(min_length=1)
     governance_domain: str = "default"
@@ -59,12 +61,15 @@ class ServiceInvocation(_FrozenContract):
     def _idempotency_contract(self) -> "ServiceInvocation":
         if not self.idempotency_key.strip():
             raise ValueError("service invocation requires a stable idempotency key")
+        expected_capability = capability_for_payload(self.payload)
+        if self.capability != expected_capability:
+            raise ValueError("service invocation capability does not match its payload")
         return self
 
 
 class ServiceResponse(_FrozenContract):
     schema_version: Literal[1] = 1
-    value: JsonValue = None
+    value: HostedServiceResult
     provider_request_id: str | None = None
     cost_usd: Decimal = Decimal("0")
 
@@ -150,6 +155,12 @@ class ResolvedServiceResponse(_FrozenContract):
     successful_attempt_id: str = Field(min_length=1)
 
 
+class ServiceResumeHandle(_FrozenContract):
+    schema_version: Literal[1] = 1
+    service_call_id: str = Field(min_length=1)
+    stream_revision: int = Field(ge=1)
+
+
 __all__ = [
     "ResolvedServiceResponse",
     "ServiceAcceptance",
@@ -165,4 +176,5 @@ __all__ = [
     "ServicePlan",
     "ServiceReceipt",
     "ServiceResponse",
+    "ServiceResumeHandle",
 ]

@@ -15,7 +15,7 @@ from mote.contracts.inference.governance import (
 from mote.contracts.inference.identity import InferencePrincipal, TrustedSchedulingClass
 from mote.contracts.inference.receipt import ReceiptState, validate_receipt_transition
 from mote.contracts.inference.transport import ProviderWireResult
-from mote.contracts.inference.wire_permit import WirePermit
+from mote.contracts.inference.wire_permit import ExecutionTaxonomy, WirePermit
 from mote.contracts.model.failover import EndpointDescriptor
 from mote.runtime.inference.governance import CredentialHealthAuthority, ProviderQuotaAuthority
 from mote.runtime.inference.runtime import EmbeddedInferenceRuntime
@@ -199,7 +199,7 @@ def _permit(request):
     now = datetime.now(timezone.utc)
     return WirePermit(
         attempt_id=request.attempt_id,
-        execution_taxonomy="unary_finite_attempt",
+        execution_taxonomy=ExecutionTaxonomy.UNARY_FINITE_ATTEMPT,
         owner_journal_id="journal",
         wire_unit="chat.complete",
         generation_id=request.generation_id,

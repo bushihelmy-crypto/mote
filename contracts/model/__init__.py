@@ -8,7 +8,6 @@ from mote.contracts.model.failover import (
     AttemptSummary,
     CredentialVerdict,
     DecisionKind,
-    EndpointCapabilities,
     EndpointDescriptor,
     ExternalCommitState,
     FailoverDecision,
@@ -26,6 +25,7 @@ from mote.contracts.model.failover import (
     QuotaObservation,
     ReconcileStrategy,
     RequestTransform,
+    ResolvedEndpointCapabilities,
     ResourceIdentity,
     Retryability,
     UsageObservation,
@@ -44,7 +44,6 @@ from mote.contracts.model.invocation import (
     ImageGenerationInput,
     ImageGenerationOutput,
     ModelInvocation,
-    ModelOperation,
     ModelQuotaObservation,
     ModelUsage,
     RequestRequirements,
@@ -68,7 +67,8 @@ from mote.contracts.model.model_journal import (
     ModelDecisionRecord,
     ModelWireAuthorizedRecord,
 )
-from mote.contracts.model.responses import LLMResponse, LLMToolCall, WebSearchHit
+from mote.contracts.model.operations import ModelOperation
+from mote.contracts.model.responses import LLMResponse, WebSearchHit
 from mote.contracts.model.routing import (
     CandidateScore,
     RecentRoutingDecision,
@@ -102,7 +102,6 @@ __all__ = [
     "DecisionKind",
     "EmbeddingInput",
     "EmbeddingOutput",
-    "EndpointCapabilities",
     "EndpointDescriptor",
     "ExternalCommitState",
     "FailoverDecision",
@@ -119,7 +118,6 @@ __all__ = [
     "ImageGenerationInput",
     "ImageGenerationOutput",
     "LLMResponse",
-    "LLMToolCall",
     "ModelInvocation",
     "ModelAttemptFinishedRecord",
     "ModelAttemptStartedRecord",
@@ -141,6 +139,7 @@ __all__ = [
     "ReconcileStrategy",
     "RequestRequirements",
     "RequestTransform",
+    "ResolvedEndpointCapabilities",
     "ResolvedModelResponse",
     "ResponseMode",
     "SpeechInput",

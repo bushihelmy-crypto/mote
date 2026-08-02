@@ -41,9 +41,10 @@ from mote.contracts.model.capabilities import supports_vision
 from mote.contracts.runtime import RuntimeAccessMode
 from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
 from mote.contracts.tool.effects import ToolEffect
+from mote.contracts.tool.errors import ToolError, ToolNotConfiguredError
+from mote.contracts.tool.result import json_tool_payload
 from mote.product.toolsets.builtin.runtime_action import handoff_permission, is_handoff_action, run_handoff_action
 from mote.runtime.artifacts.media import publish_media_artifact
-from mote.runtime.errors import ToolError, ToolNotConfiguredError
 from mote.runtime.interactive.device.backend import DeviceError, select_device_backend
 from mote.runtime.interactive.device.runtime import DeviceRuntimeDriver
 from mote.runtime.interactive.device.session import DeviceSession, Observation
@@ -368,7 +369,7 @@ class DeviceUse(BaseTool):
         return ToolResult(
             output="\n".join(lines),
             media=media,
-            data={"state_id": obs.state_id, "empty": obs.empty},
+            payload=json_tool_payload({"state_id": obs.state_id, "empty": obs.empty}),
         )
 
     def _point(

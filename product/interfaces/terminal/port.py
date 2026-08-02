@@ -30,6 +30,7 @@ import sys
 from typing import Any, Callable, Optional
 
 from mote.contracts.interaction import AskUserQuestionAnswer, AskUserQuestionAnswers
+from mote.contracts.interaction.handoff import HandoffStatus, HumanHandoffOutcome
 from mote.product.i18n import keys as K
 from mote.product.i18n import t
 from mote.product.interfaces.terminal.menu import (
@@ -123,6 +124,14 @@ class TerminalPort:
         # shows it (line-buffered ttys can't pre-fill editable text).
         self._restored_input: Optional[str] = None
         self._sigint_installed = False
+
+    def bind_driver_control(self, binding) -> None:
+        self._on_interrupt = binding.interrupt
+        self._is_turn_running = binding.turn_running
+        self._on_steer = binding.steer
+
+    async def open_handoff(self, request, handle, surface=None) -> HumanHandoffOutcome:
+        return HumanHandoffOutcome(status=HandoffStatus.UNAVAILABLE)
         self._idle_poll_interval = 0.1
 
     # ------------------------------------------------------------------
@@ -148,6 +157,9 @@ class TerminalPort:
             except Exception:  # noqa: BLE001 — teardown must never crash
                 pass
             self._sigint_installed = False
+
+    def take_turn_images(self) -> list[dict]:
+        return []
 
     async def _setup_stdin(self) -> None:
         if self._get_input_reader is not None:

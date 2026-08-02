@@ -19,8 +19,10 @@ from mote.contracts.surface import (
     SurfacePresentationMode,
 )
 from mote.runtime.artifacts import DurableArtifactStore
-from mote.runtime.interactive import ArtifactCheckpointPayloadStore, HandoffCoordinator, RuntimeHost
 from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
+from mote.runtime.interactive.checkpoint_store import ArtifactCheckpointPayloadStore
+from mote.runtime.interactive.handoff import HandoffCoordinator
+from mote.runtime.interactive.host import RuntimeHost
 from mote.runtime.secrets.cipher import AesGcmCipher
 from mote.runtime.session import SessionLog, SessionMetaEvent, SessionRuntimeProjectionJournal
 from mote.runtime.session.replay import replay
@@ -134,7 +136,7 @@ async def test_canvas_recovers_prepared_wal_after_crash_before_commit(tmp_path):
         ),
     )
     log = SessionLog("canvas-wal", base_dir=str(tmp_path))
-    log.commit_offline(SessionMetaEvent(session_id="canvas-wal"))
+    log.commit_offline(SessionMetaEvent("canvas-wal", "test.canvas", ()))
     operation_journal = SessionRuntimeOperationJournal(log)
     await operation_journal.prepare(intent)
     recovered_driver = CanvasRuntimeDriver()

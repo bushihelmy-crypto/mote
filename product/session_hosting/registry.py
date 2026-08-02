@@ -7,10 +7,10 @@ network process serves many threads/connections, each addressed by its
 ``session_id`` (AG-UI ``threadId`` / ACP session id). This registry keeps each
 one's ``{control, role}`` alive across turns (an AG-UI ``POST /run`` is one
 turn against a *persistent* server-side thread), minting new ones on demand from
-the shared :class:`~mote.product.entrypoints.cli.bootstrap.EngineBuild` so the construction path is
+the shared :func:`~mote.product.composition.bootstrap.activate_application` result so the construction path is
 byte-identical to the single-session host (§4 template — no parallel bootstrap).
 
-``get_or_create`` mints-or-returns; ``evict`` tears one down through the shared
+``create`` mints a hosted session; ``evict`` tears one down through the shared
 Runtime lifecycle protocol (``control.stop`` + ``Engine.release``/Role cleanup).
 Concurrency-safe under asyncio: creation
 is guarded by an :class:`asyncio.Lock` so two concurrent first-touches of the
@@ -20,42 +20,92 @@ same id share one session (never two controls for one thread).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from contextvars import Token
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Generic, Protocol, TypeVar
 
+from mote.contracts.agent import RunnableAgent
+from mote.contracts.ports.interaction.role import RoleHumanInteractionPort
+from mote.contracts.session import SessionHostingError, SessionHostingErrorKind
 from mote.orchestration.agents.control import AgentControl
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime
-from mote.orchestration.agents.residency.store import ResidencyStore
+from mote.product.config.schema import Config
+from mote.product.session_hosting.composition import compose_resident_agent
+from mote.runtime.agent.role_state import RoleState
+from mote.runtime.agent.wiring import AgentWiring
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleStack
 from mote.runtime.engine import EngineAgentRequest
+from mote.runtime.events.telemetry import TelemetryRuntime
+from mote.runtime.models.clients.context import Context
 from mote.runtime.telemetry.logging import logger
 
+OutputT = TypeVar("OutputT")
 
-def _build_control(role: Any) -> tuple[Any, Any]:
-    control = AgentControl(
-        session_id=role.session_id,
-        store=ResidencyStore(
-            base_dir=str(role.wiring.dependencies.session_workspace_root / ".agent_residency"),
-            sessions_base_dir=str(role.wiring.dependencies.session_workspace_root / ".agent_sessions"),
-            writer=role.context.disk_writer,
-        ),
+
+class HostedAgent(RunnableAgent[OutputT], Protocol[OutputT]):
+    """Product-owned capabilities required to host one resident Agent."""
+
+    wiring: AgentWiring[None, OutputT]
+    context: Context
+    config: Config
+
+    @property
+    def state(self) -> RoleState: ...
+
+    @property
+    def telemetry(self) -> TelemetryRuntime: ...
+
+    def resume_session(self) -> bool: ...
+
+    async def fork_session(self) -> "HostedAgent[OutputT]": ...
+
+    def bind_human_interaction(
+        self, interaction: RoleHumanInteractionPort
+    ) -> Token[RoleHumanInteractionPort | None]: ...
+
+    def reset_human_interaction(self, token: Token[RoleHumanInteractionPort | None]) -> None: ...
+
+
+class HostedAgentOwner(Protocol[OutputT]):
+    """Minimal Application lifecycle used by the session host."""
+
+    async def release(self, agent: HostedAgent[OutputT]) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+
+def _build_control(role: HostedAgent[OutputT]) -> tuple[AgentControl, AgentRuntime[OutputT]]:
+    projection = role.wiring.dependencies.component_projection
+    if projection is None:
+        raise RuntimeError("resident Agent requires a component projection")
+    workspace_root = projection.session_workspace_root()
+    services = role.wiring.services
+    if services is None or services.agent_budget is None:
+        raise RuntimeError("resident Agent requires canonical budget governance")
+    return compose_resident_agent(
+        role,
+        residency_dir=workspace_root / ".agent_residency",
+        sessions_dir=workspace_root / ".agent_sessions",
+        writer=role.context.disk_writer,
+        governance=role.config.agents,
+        budget=services.agent_budget,
+        workflow_governance=services.workflow_governance,
     )
-    runtime = AgentRuntime(role)
-    control.add_agent(runtime, root=True)
-    role.agent_control = control
-    return control, runtime
 
 
-def _resume_role(role: Any) -> bool:
+def _resume_role(role: HostedAgent[OutputT]) -> bool:
     return role.resume_session()
 
 
-def _role_cleanup(role: Any) -> Any:
-    return getattr(role, "cleanup", None)
+def _role_cleanup(role: HostedAgent[OutputT]) -> Callable[[], Awaitable[None]]:
+    """Typed lifecycle seam retained for deterministic fault injection."""
+
+    return role.cleanup
 
 
 @dataclass
-class ResidentSession:
+class ResidentSession(Generic[OutputT]):
     """One live session: its control plane, its root role, and that role's id.
 
     The unit :class:`SessionRegistry` keeps resident across turns. ``agent_id``
@@ -65,93 +115,111 @@ class ResidentSession:
     """
 
     session_id: str
-    control: Any
-    role: Any
+    control: AgentControl
+    role: HostedAgent[OutputT]
+    runtime: AgentRuntime[OutputT]
     agent_id: str
     lifecycle: LifecycleStack = field(default_factory=LifecycleStack, repr=False)
     lifecycle_prepared: bool = field(default=False, repr=False)
 
 
-class SessionRegistry:
+class SessionRegistry(Generic[OutputT]):
     """Mint + hold resident sessions by ``session_id``, sharing one engine.
 
-    Built from a ``role_factory`` (the :class:`~mote.product.entrypoints.cli.bootstrap.EngineBuild`
-    closure) so every session shares the one loaded ``config`` + engine
-    ``context``; each ``get_or_create`` builds a role (resuming its rollout when
+    Built from the canonical Product Application ``role_factory``
+    closure, so every session shares the one loaded ``config`` + engine
+    ``context``; each ``create`` builds a role (resuming its rollout when
     the id names a persisted session), wires a control plane via
     ``backend.build_control``, starts it, and caches it. Idempotent per id.
     """
 
     def __init__(
         self,
-        role_factory: Callable[..., Any],
+        role_factory: Callable[[EngineAgentRequest], HostedAgent[OutputT]],
         *,
         name: str = "Assistant",
-        engine: Any = None,
+        engine: HostedAgentOwner[OutputT] | None = None,
     ) -> None:
         self._role_factory = role_factory
         self._engine = engine
         self._name = name
-        self._sessions: Dict[str, ResidentSession] = {}
+        self._sessions: dict[str, ResidentSession[OutputT]] = {}
         self._lock = asyncio.Lock()
         self._closing = False
 
-    def get(self, session_id: str) -> Optional[ResidentSession]:
+    def get(self, session_id: str) -> ResidentSession[OutputT] | None:
         """Return the resident session for *session_id*, or ``None`` if absent."""
         return self._sessions.get(session_id)
 
     @property
-    def session_ids(self) -> list:
+    def session_ids(self) -> list[str]:
         return list(self._sessions.keys())
 
-    async def get_or_create(self, session_id: Optional[str] = None) -> ResidentSession:
-        """Return the resident session for *session_id*, minting it if absent.
-
-        A known id returns the live session (resident across turns). An unknown
-        id — or ``None`` (a brand-new thread) — builds a fresh role sharing the
-        engine, wires + starts its control plane, and caches it. When
-        *session_id* names a persisted rollout, the built role resumes it so the
-        thread continues where it left off. Concurrency-safe: two racing
-        first-touches of one id share the single session the lock lets through.
-        """
+    async def create_new(self) -> ResidentSession[OutputT]:
+        """Create a new empty Session; this is the only minting operation."""
         if self._closing:
             raise RuntimeError("SessionRegistry is closing and cannot create sessions")
-        if session_id is not None:
-            existing = self._sessions.get(session_id)
-            if existing is not None:
-                return existing
         async with self._lock:
             if self._closing:
                 raise RuntimeError("SessionRegistry is closing and cannot create sessions")
-            # Re-check under the lock: a concurrent caller may have created it
-            # while we awaited the lock (double-checked locking).
-            if session_id is not None:
-                existing = self._sessions.get(session_id)
-                if existing is not None:
-                    return existing
-            session = self._build(session_id)
+            session = self._build(None)
             self._sessions[session.session_id] = session
             return session
 
-    def _build(self, session_id: Optional[str]) -> ResidentSession:
+    def get_resident(self, session_id: str) -> ResidentSession[OutputT] | None:
+        return self._sessions.get(session_id)
+
+    async def load_existing(self, session_id: str) -> ResidentSession[OutputT]:
+        """Load a verified durable Session; never creates an empty substitute."""
+        existing = self._sessions.get(session_id)
+        if existing is not None:
+            return existing
+        async with self._lock:
+            existing = self._sessions.get(session_id)
+            if existing is not None:
+                return existing
+            role = self._role_factory(EngineAgentRequest(name=self._name, session_id=session_id))
+            try:
+                resumed = _resume_role(role)
+            except Exception as exc:
+                raise SessionHostingError(SessionHostingErrorKind.LOAD_FAILED, session_id, str(exc)) from exc
+            if not resumed:
+                raise SessionHostingError(
+                    SessionHostingErrorKind.NOT_FOUND, session_id, "durable session does not exist"
+                )
+            session = self._start(role)
+            self._sessions[session_id] = session
+            return session
+
+    async def get_resident_or_load(self, session_id: str) -> ResidentSession[OutputT]:
+        resident = self.get_resident(session_id)
+        return resident if resident is not None else await self.load_existing(session_id)
+
+    async def fork_existing(self, session_id: str) -> ResidentSession[OutputT]:
+        source = await self.get_resident_or_load(session_id)
+        try:
+            forked = await source.role.fork_session()
+        except NotImplementedError as exc:
+            raise SessionHostingError(SessionHostingErrorKind.FORK_UNSUPPORTED, session_id, str(exc)) from exc
+        except Exception as exc:
+            raise SessionHostingError(SessionHostingErrorKind.FORK_FAILED, session_id, str(exc)) from exc
+        if forked is None:
+            raise SessionHostingError(
+                SessionHostingErrorKind.FORK_UNSUPPORTED, session_id, "Agent does not support fork"
+            )
+        return self.adopt(forked)
+
+    def _build(self, session_id: str | None) -> ResidentSession[OutputT]:
         """Construct + start one resident session (role → control → start)."""
         role = self._role_factory(EngineAgentRequest(name=self._name, session_id=session_id))
         if role is None:  # pragma: no cover — factory only returns None on typed-agent miss
             raise ValueError(f"role_factory returned None for session_id={session_id!r}")
-        # Resume a persisted rollout when the id names one, so a returning thread
-        # continues its history rather than starting blank. Best-effort: a fresh
-        # id simply has no rollout (resume returns False) and starts clean.
-        if session_id is not None:
-            try:
-                _resume_role(role)
-            except Exception as exc:  # noqa: BLE001 — resume is best-effort
-                logger.warning(f"SessionRegistry: resume failed for {session_id[:8]}: {exc}")
         return self._start(role)
 
-    def adopt(self, role: Any) -> ResidentSession:
+    def adopt(self, role: HostedAgent[OutputT]) -> ResidentSession[OutputT]:
         """Register an ALREADY-built role as a resident session (the fork path).
 
-        Where ``get_or_create`` mints a role from the factory, ``adopt`` takes a
+        Where ``create`` mints a role from the factory, ``adopt`` takes a
         role produced elsewhere — e.g. ``backend.fork_role`` branching a sibling
         off a live session — wires + starts its control plane, and caches it
         under its own session id. Idempotent per id (a re-adopt of a resident
@@ -168,12 +236,18 @@ class SessionRegistry:
         return session
 
     @staticmethod
-    def _start(role: Any) -> ResidentSession:
+    def _start(role: HostedAgent[OutputT]) -> ResidentSession[OutputT]:
         """Wire + start a control plane over *role*, returning its resident session."""
-        control, _ = _build_control(role)
+        control, runtime = _build_control(role)
         control.start()
         agent_id = role.session_id
-        return ResidentSession(session_id=agent_id, control=control, role=role, agent_id=agent_id)
+        return ResidentSession(
+            session_id=agent_id,
+            control=control,
+            role=role,
+            runtime=runtime,
+            agent_id=agent_id,
+        )
 
     async def evict(self, session_id: str) -> bool:
         """Tear down + drop one resident session. Returns whether it existed.
@@ -213,23 +287,22 @@ class SessionRegistry:
         if self._engine is not None:
             await self._engine.aclose()
 
-    async def _teardown(self, session: ResidentSession) -> None:
+    async def _teardown(self, session: ResidentSession[OutputT]) -> None:
         if not session.lifecycle_prepared:
             session.lifecycle_prepared = True
             if self._engine is not None:
+                engine = self._engine
                 session.lifecycle.register_close(
                     "engine-agent",
-                    lambda: self._engine.release(session.role),
+                    lambda: engine.release(session.role),
                     phase=LifecyclePhase.CLOSE_RESOURCES,
                 )
             else:
-                cleanup = _role_cleanup(session.role)
-                if cleanup is not None:
-                    session.lifecycle.register_close(
-                        "role",
-                        cleanup,
-                        phase=LifecyclePhase.CLOSE_RESOURCES,
-                    )
+                session.lifecycle.register_close(
+                    "role",
+                    _role_cleanup(session.role),
+                    phase=LifecyclePhase.CLOSE_RESOURCES,
+                )
             session.lifecycle.register_close(
                 "control-plane",
                 session.control.stop,

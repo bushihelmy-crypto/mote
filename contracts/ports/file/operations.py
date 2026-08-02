@@ -21,14 +21,12 @@ class SnapshotReaderPort(Protocol):
         project_root: Optional[PathLike] = None,
         encoding: Optional[str] = None,
         fallback_encoding: Optional[str] = None,
-    ) -> FileSnapshot:
-        ...
+    ) -> FileSnapshot: ...
 
 
 @runtime_checkable
 class ArtifactStorePort(Protocol):
-    def read_bytes(self, ref: ContentIdentity) -> bytes:
-        ...
+    def read_bytes(self, ref: ContentIdentity) -> bytes: ...
 
 
 @runtime_checkable
@@ -39,8 +37,7 @@ class LockManagerPort(Protocol):
         *,
         timeout: Optional[float] = None,
         cancel: Optional[Event] = None,
-    ) -> ContextManager[None]:
-        ...
+    ) -> ContextManager[None]: ...
 
 
 @runtime_checkable
@@ -52,13 +49,23 @@ class AtomicPublisherPort(Protocol):
         *,
         metadata: ContentIdentity,
         expected: FileVersion,
-    ) -> None:
-        ...
+    ) -> None: ...
+
+
+@runtime_checkable
+class GeneratedTargetReservationPort(Protocol):
+    """Bounded process-incarnation ownership of exact generated-file targets."""
+
+    @property
+    def targets(self) -> tuple[str, ...]: ...
+
+    def release(self) -> None: ...
 
 
 __all__ = [
     "ArtifactStorePort",
     "AtomicPublisherPort",
+    "GeneratedTargetReservationPort",
     "LockManagerPort",
     "PathLike",
     "SnapshotReaderPort",

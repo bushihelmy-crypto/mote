@@ -3,12 +3,13 @@
 """OAuth provider configuration (pure data).
 
 Lives beside ``llm_config.py`` (not under ``router/``) so ``LLMConfig`` can
-reference ``OAuthProviderConfig`` without a ``common -> router`` import cycle.
+reference ``OAuthProviderConfig`` without a cross-layer import cycle.
 The OAuth runtime (clients, manager, storage) lives in ``mote.runtime.models.auth.oauth``.
 
 This is opt-in: a provider only authenticates with OAuth when ``LLMConfig.oauth``
 is set. When ``None``, the static ``api_key`` path is used unchanged.
 """
+
 from __future__ import annotations
 
 import copy
@@ -18,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import Field, model_validator
 
-from mote.contracts.config.model.base import ConfigModel as YamlModel
+from mote.contracts.config.base import ConfigModel as YamlModel
 
 
 class GrantType(str, Enum):
@@ -123,7 +124,7 @@ class OAuthProviderConfig(YamlModel):
         """Fill public endpoint metadata from a provider preset (user wins).
 
         Uses the module-level preset registry (co-located below) so there is no
-        ``common -> router`` import cycle.
+        cross-layer import cycle.
         """
         if not isinstance(values, dict) or not values.get("provider"):
             return values
@@ -151,8 +152,8 @@ class OAuthProviderConfig(YamlModel):
 # (config/env). The requirement is enforced at flow-time, not config-time.
 #
 # Co-located with :class:`OAuthProviderConfig` (rather than under ``router/``) so
-# the ``@model_validator`` above can apply presets without a ``common -> router``
-# import cycle. ``router.oauth.registry`` re-exports these names.
+# the ``@model_validator`` above can apply presets without a cross-layer import
+# cycle. This module is the authoritative preset owner.
 # ---------------------------------------------------------------------------
 
 # name -> preset of OAuthProviderConfig fields (NO client_id / client_secret).

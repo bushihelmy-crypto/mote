@@ -6,7 +6,7 @@ import base64
 import re
 from typing import Any
 
-from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.content.identity import ContentDigest, ContentIdentity
 from mote.contracts.file.identity import (
     AbsentVersion,
     EncodingDecision,
@@ -66,7 +66,7 @@ def path_from_dict(data: dict[str, Any]) -> PathToken:
 
 
 def blob_to_dict(ref: ContentIdentity | None) -> dict[str, Any] | None:
-    return None if ref is None else {"digest": ref.digest, "size": ref.size}
+    return None if ref is None else {"digest": str(ref.digest), "size": ref.size}
 
 
 def blob_from_dict(data: dict[str, Any] | None) -> ContentIdentity | None:
@@ -80,7 +80,7 @@ def blob_from_dict(data: dict[str, Any] | None) -> ContentIdentity | None:
         raise ValueError("blob reference digest is invalid")
     if type(size) is not int or not 0 <= size < (1 << 63):
         raise ValueError("blob reference size is invalid")
-    return ContentIdentity(digest=digest, size=size)
+    return ContentIdentity(digest=ContentDigest(digest), size=size)
 
 
 def version_to_dict(version: FileVersion) -> dict[str, Any]:
@@ -358,7 +358,7 @@ def _name_identity_from_dict(data: Any) -> NameIdentity:
 
 
 def search_row_to_dict(row: SearchRow) -> dict[str, Any]:
-    return {
+    payload = {
         "path": path_to_dict(row.path),
         "version": None if row.version is None else version_to_dict(row.version),
         "line_number": row.line_number,
@@ -367,43 +367,79 @@ def search_row_to_dict(row: SearchRow) -> dict[str, Any]:
         "occurrence_count": row.occurrence_count,
         "is_context": row.is_context,
     }
+    if search_row_from_dict(payload) != row:
+        raise ValueError("search row is not canonically encodable")
+    return payload
 
 
 def search_row_from_dict(data: dict[str, Any]) -> SearchRow:
-    raw_version = data.get("version")
+    keys = {
+        "path",
+        "version",
+        "line_number",
+        "text",
+        "matched_text",
+        "occurrence_count",
+        "is_context",
+    }
+    if type(data) is not dict or set(data) != keys:
+        raise ValueError("search row fields are not canonical")
+    raw_version = data["version"]
     version = None if raw_version is None else version_from_dict(raw_version)
     if version is not None and not isinstance(version, PresentVersion):
         raise ValueError("search row contains an absent version")
-    raw_line = data.get("line_number")
+    raw_line = data["line_number"]
+    if raw_line is not None and (type(raw_line) is not int or raw_line <= 0):
+        raise ValueError("search row line_number is invalid")
+    for field in ("text", "matched_text"):
+        if type(data[field]) is not str:
+            raise ValueError(f"search row {field} is invalid")
+    if type(data["occurrence_count"]) is not int or data["occurrence_count"] < 0:
+        raise ValueError("search row occurrence_count is invalid")
+    if type(data["is_context"]) is not bool:
+        raise ValueError("search row is_context is invalid")
     return SearchRow(
         path=path_from_dict(data["path"]),
         version=version,
-        line_number=None if raw_line is None else int(raw_line),
-        text=str(data.get("text", "")),
-        matched_text=str(data.get("matched_text", "")),
-        occurrence_count=int(data.get("occurrence_count", 0)),
-        is_context=bool(data.get("is_context", False)),
+        line_number=raw_line,
+        text=data["text"],
+        matched_text=data["matched_text"],
+        occurrence_count=data["occurrence_count"],
+        is_context=data["is_context"],
     )
 
 
 def search_skipped_to_dict(skipped: SearchSkippedFile) -> dict[str, Any]:
-    return {
+    payload = {
         "path": path_to_dict(skipped.path),
         "reason": skipped.reason.value,
         "detail": skipped.detail,
     }
+    if search_skipped_from_dict(payload) != skipped:
+        raise ValueError("search skipped record is not canonically encodable")
+    return payload
 
 
 def search_skipped_from_dict(data: dict[str, Any]) -> SearchSkippedFile:
+    if type(data) is not dict or set(data) != {"path", "reason", "detail"}:
+        raise ValueError("search skipped fields are not canonical")
+    if type(data["reason"]) is not str:
+        raise ValueError("search skipped reason is invalid")
+    if type(data["detail"]) is not str:
+        raise ValueError("search skipped detail is invalid")
+    try:
+        reason = SearchSkipReason(data["reason"])
+    except ValueError as error:
+        raise ValueError(f"unknown search skip reason: {data['reason']!r}") from error
     return SearchSkippedFile(
         path=path_from_dict(data["path"]),
-        reason=SearchSkipReason(str(data["reason"])),
-        detail=str(data.get("detail", "")),
+        reason=reason,
+        detail=data["detail"],
     )
 
 
 def search_summary_to_dict(summary: SearchSummary) -> dict[str, Any]:
-    return {
+    payload = {
         "discovered_files": summary.discovered_files,
         "scanned_files": summary.scanned_files,
         "matched_files": summary.matched_files,
@@ -412,6 +448,9 @@ def search_summary_to_dict(summary: SearchSummary) -> dict[str, Any]:
         "complete": summary.complete,
         "termination": summary.termination,
     }
+    if search_summary_from_dict(payload) != summary:
+        raise ValueError("search summary is not canonically encodable")
+    return payload
 
 
 def search_summary_from_dict(data: dict[str, Any]) -> SearchSummary:
@@ -435,8 +474,10 @@ def search_summary_from_dict(data: dict[str, Any]) -> SearchSummary:
     ):
         if type(data[field]) is not int or data[field] < 0:
             raise ValueError(f"search summary {field} is invalid")
-    if type(data["complete"]) is not bool or type(data["termination"]) is not str:
+    if type(data["complete"]) is not bool or data["termination"] not in {"", "timeout"}:
         raise ValueError("search summary completion fields are invalid")
+    if (data["complete"] and data["termination"]) or (not data["complete"] and not data["termination"]):
+        raise ValueError("search summary completion and termination are inconsistent")
     return SearchSummary(
         discovered_files=data["discovered_files"],
         scanned_files=data["scanned_files"],

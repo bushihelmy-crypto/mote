@@ -63,6 +63,7 @@ class _LocalRWLock:
         deadline: Optional[float],
         cancel: Optional[threading.Event],
         label: str,
+        reentrant: bool,
     ) -> _LocalToken:
         thread_id = threading.get_ident()
         with self._condition:
@@ -75,7 +76,7 @@ class _LocalRWLock:
                 self._readers[thread_id] = prior + 1
                 return _LocalToken(self, mode, first=prior == 0)
 
-            if self._writer == thread_id:
+            if self._writer == thread_id and reentrant:
                 self._writer_depth += 1
                 return _LocalToken(self, mode, first=False)
             if self._readers.get(thread_id, 0):
@@ -159,18 +160,27 @@ class _LockSetLease(AbstractContextManager[None]):
         specs: Sequence[LockSpec],
         timeout: Optional[float],
         cancel: Optional[threading.Event],
+        reentrant: bool,
     ) -> None:
         self._manager = manager
         self._specs = manager._normalize(specs)
         self._timeout = timeout
         self._cancel = cancel
+        self._reentrant = reentrant
         self._held: list[_HeldLock] = []
 
     def __enter__(self) -> None:
         deadline = None if self._timeout is None else time.monotonic() + max(0.0, self._timeout)
         try:
             for spec in self._specs:
-                self._held.append(self._manager._acquire_one(spec, deadline=deadline, cancel=self._cancel))
+                self._held.append(
+                    self._manager._acquire_one(
+                        spec,
+                        deadline=deadline,
+                        cancel=self._cancel,
+                        reentrant=self._reentrant,
+                    )
+                )
         except Exception:
             self._release_all()
             raise
@@ -221,8 +231,9 @@ class HierarchicalLockManager:
         *,
         timeout: Optional[float] = None,
         cancel: Optional[threading.Event] = None,
+        reentrant: bool = True,
     ) -> _LockSetLease:
-        return _LockSetLease(self, specs, timeout, cancel)
+        return _LockSetLease(self, specs, timeout, cancel, reentrant)
 
     def _acquire_one(
         self,
@@ -230,11 +241,18 @@ class HierarchicalLockManager:
         *,
         deadline: Optional[float],
         cancel: Optional[threading.Event],
+        reentrant: bool,
     ) -> _HeldLock:
         lock_path = self._lock_path(spec)
         registry_key = str(lock_path)
         local = _local_lock(registry_key)
-        token = local.acquire(spec.mode, deadline=deadline, cancel=cancel, label=spec.label or spec.key)
+        token = local.acquire(
+            spec.mode,
+            deadline=deadline,
+            cancel=cancel,
+            label=spec.label or spec.key,
+            reentrant=reentrant,
+        )
         if not token.first:
             return _HeldLock(token, None)
 

@@ -14,7 +14,20 @@ from uuid import uuid4
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from mote.contracts.config.inference import DeploymentMode, InferenceConfig
-from mote.contracts.inference.generation_artifact import GenerationArtifact
+from mote.contracts.inference.epochs import ExecutionEpochSnapshot
+from mote.contracts.inference.generation_artifact import (
+    CapabilityPricingSnapshot,
+    DeploymentKind,
+    GenerationActivationPolicy,
+    GenerationArtifact,
+    ModelGenerationBinding,
+    RuntimeBindingKind,
+    ServiceGenerationBinding,
+    SessionGenerationBinding,
+    TransferGenerationBinding,
+    VersionBinding,
+    compute_generation_artifact_digest,
+)
 from mote.contracts.inference.identity import InferencePrincipal, TrustedSchedulingClass
 from mote.contracts.inference.shared import SharedHandshake
 from mote.contracts.ports.inference.provider_transport import GenerateTransport
@@ -55,7 +68,9 @@ from mote.product.models.transports import (
 from mote.product.models.transports.artifact_io import ArtifactPublisher, ArtifactResolver
 from mote.product.models.transports.bedrock import AwsCredentials
 from mote.product.models.transports.connections.aiohttp import AioHttpConnectionPool, ConnectionConfig
+from mote.runtime.clock import SystemClock
 from mote.runtime.inference.command_runtime import EmbeddedServiceCommandRuntime
+from mote.runtime.inference.epochs import ExecutionEpochAuthority
 from mote.runtime.inference.generation import GatewayGenerationOwner
 from mote.runtime.inference.governance import CredentialHealthAuthority, ProviderQuotaAuthority
 from mote.runtime.inference.runtime import EmbeddedInferenceRuntime
@@ -64,7 +79,7 @@ from mote.runtime.inference.transfer_runtime import EmbeddedArtifactTransferRunt
 from mote.runtime.models.failover.planner import FailoverPlanner
 from mote.runtime.models.failover.runtime_state import ModelRuntimeGeneration
 from mote.runtime.models.failover.snapshot import build_canonical_model_runtime_snapshot
-from mote.runtime.models.generation_lifecycle import GenerationLifecycle
+from mote.runtime.models.generation_lifecycle import AsyncCloseAdapter, GenerationLifecycle
 from mote.runtime.models.inference_attempt_executor import InferenceAttemptExecutor
 
 
@@ -141,6 +156,7 @@ async def _build_shared_model_runtime_generation(
         negotiation = await initial_client.negotiate(shared.rpc_contract_versions)
         application_id, key_id, key = _shared_application_identity(state_root)
         snapshot = build_canonical_model_runtime_snapshot(compiled.topology)
+        epoch_authority = ExecutionEpochAuthority()
         now = datetime.now(timezone.utc)
         principal = InferencePrincipal(
             tenant_id="mote-application",
@@ -181,7 +197,7 @@ async def _build_shared_model_runtime_generation(
             policy_revision=principal.policy_revision,
             delegation_digest=principal.delegation_digest,
         )
-        client = ReconnectingSharedGrpcClient[object, object, object](
+        client = ReconnectingSharedGrpcClient(
             supervisor,
             authenticator,
             lambda socket_path: SharedGrpcClient(
@@ -195,12 +211,12 @@ async def _build_shared_model_runtime_generation(
         artifact_digest = "sha256:" + hashlib.sha256(f"{generation_id}\0{snapshot.revision}".encode()).hexdigest()
         artifact = _generation_artifact(
             generation_id,
-            artifact_digest,
             snapshot.revision,
             compiled,
             deployment="shared_process",
             activate_immediately=True,
         )
+        artifact_digest = artifact.artifact_digest
         status = await client.stage_generation(
             artifact.model_dump_json().encode(),
             generation_id=generation_id,
@@ -208,6 +224,13 @@ async def _build_shared_model_runtime_generation(
         )
         if status.generation_id != generation_id or status.artifact_digest != artifact_digest:
             raise RuntimeError("Shared daemon staged a different generation")
+        readiness = await client.get_readiness()
+        epoch_authority.replace(
+            ExecutionEpochSnapshot(
+                int(readiness.component("backup_epoch")),
+                int(readiness.component("admission_epoch")),
+            )
+        )
         runtime = SharedInferenceRuntime(client, owns_client=False)
         commands = SharedServiceCommandRuntime(client, owns_client=False)
         sessions = SharedSessionRuntime(client, owns_client=False)
@@ -218,9 +241,10 @@ async def _build_shared_model_runtime_generation(
                 commands,
                 sessions,
                 transfers,
-                client,
+                AsyncCloseAdapter(client.close),
                 *compiled.credential_bindings.handles.values(),
-            )
+            ),
+            drainables=(runtime, commands, sessions, transfers),
         )
         permit_issuer = client.permit_issuer()
         permit_audience = f"shared/{negotiation.socket_generation}/model/{principal.tenant_id}"
@@ -231,12 +255,13 @@ async def _build_shared_model_runtime_generation(
                 runtime,
                 permit_issuer,
                 permit_audience=permit_audience,
-                epoch_provider=lambda: (0, 0),
+                epoch_provider=epoch_authority.pair,
             ),
             command_runtime=commands,
             session_runtime=sessions,
             transfer_runtime=transfers,
             permit_issuer=permit_issuer,
+            epoch_source=epoch_authority,
             permit_audience=permit_audience,
             generation_id=generation_id,
             generation_artifact_digest=artifact_digest,
@@ -285,6 +310,7 @@ async def _build_embedded_model_runtime_generation(
     artifact_publisher: ArtifactPublisher | None,
 ) -> ModelRuntimeGeneration:
     snapshot = build_canonical_model_runtime_snapshot(compiled.topology)
+    epoch_authority = ExecutionEpochAuthority()
     planner = FailoverPlanner(snapshot)
     binding_resolver = ProductModelBindingResolver(compiled.credential_bindings)
     transports = await _build_transports(compiled, snapshot.endpoints, config, pool)
@@ -314,7 +340,7 @@ async def _build_embedded_model_runtime_generation(
     if config.persistence.shared_sqlite.quick_check_on_start:
         await receipts.verify_startup(hard_min_free_bytes=config.persistence.shared_sqlite.hard_disk_free_bytes)
     await receipts.reconcile_incomplete()
-    usage = SQLiteUsageLedger(receipts)
+    usage = SQLiteUsageLedger(receipts, clock_source=SystemClock())
     principal = InferencePrincipal(
         tenant_id="mote-application",
         project_id="model-runtime",
@@ -332,16 +358,19 @@ async def _build_embedded_model_runtime_generation(
     artifact_digest = "sha256:" + hashlib.sha256(f"{generation_id}\0{snapshot.revision}".encode()).hexdigest()
     artifact = _generation_artifact(
         generation_id,
-        artifact_digest,
         snapshot.revision,
         compiled,
         service_configured=bool(operation_transports),
         session_configured=bool(session_transports),
         transfer_configured=(bool(operation_transports) and artifact_resolver is not None),
     )
+    artifact_digest = artifact.artifact_digest
     generations = GatewayGenerationOwner()
+    await receipts.stage_generation(artifact)
+    await receipts.activate_generation(generation_id, artifact_digest)
     generations.stage(artifact)
     generations.activate(generation_id, artifact_digest)
+    epoch_authority.replace(await receipts.execution_epoch_snapshot())
 
     private_key = Ed25519PrivateKey.generate()
     issuer_key_id = f"embedded:{generation_id}"
@@ -368,7 +397,7 @@ async def _build_embedded_model_runtime_generation(
         transports=ProductFiniteTransportResolver(transports, finite_transports),
         generations=generations,
         permit_audience=audience,
-        epoch_provider=lambda: (0, 0),
+        epoch_provider=epoch_authority.pair,
         queue_capacity=capacity.queue_capacity,
         event_capacity=capacity.event_buffer_capacity,
         worker_count=min(capacity.global_in_flight, 64),
@@ -381,7 +410,7 @@ async def _build_embedded_model_runtime_generation(
         runtime,
         issuer,
         permit_audience=audience,
-        epoch_provider=lambda: (0, 0),
+        epoch_provider=epoch_authority.pair,
     )
     runtime_limits = {
         "queue_capacity": capacity.queue_capacity,
@@ -403,7 +432,7 @@ async def _build_embedded_model_runtime_generation(
             transports=operation_resolver,
             generations=generations,
             permit_audience=audience,
-            epoch_provider=lambda: (0, 0),
+            epoch_provider=epoch_authority.pair,
             clock_skew_guard_seconds=config.deadline.clock_skew_guard_seconds,
             **runtime_limits,
         )
@@ -423,7 +452,7 @@ async def _build_embedded_model_runtime_generation(
             transports=ProductSessionTransportResolver(session_transports),
             generations=generations,
             permit_audience=audience,
-            epoch_provider=lambda: (0, 0),
+            epoch_provider=epoch_authority.pair,
             **runtime_limits,
         )
         if session_transports
@@ -440,7 +469,7 @@ async def _build_embedded_model_runtime_generation(
             transports=operation_resolver,
             generations=generations,
             permit_audience=audience,
-            epoch_provider=lambda: (0, 0),
+            epoch_provider=epoch_authority.pair,
             clock_skew_guard_seconds=config.deadline.clock_skew_guard_seconds,
             **runtime_limits,
         )
@@ -455,7 +484,13 @@ async def _build_embedded_model_runtime_generation(
             *((transfer_runtime,) if transfer_runtime is not None else ()),
             pool,
             *compiled.credential_bindings.handles.values(),
-        )
+        ),
+        drainables=(
+            runtime,
+            *((command_runtime,) if command_runtime is not None else ()),
+            *((session_runtime,) if session_runtime is not None else ()),
+            *((transfer_runtime,) if transfer_runtime is not None else ()),
+        ),
     )
     return ModelRuntimeGeneration(
         planner=planner,
@@ -465,6 +500,7 @@ async def _build_embedded_model_runtime_generation(
         session_runtime=session_runtime,
         transfer_runtime=transfer_runtime,
         permit_issuer=issuer,
+        epoch_source=epoch_authority,
         permit_audience=audience,
         generation_id=generation_id,
         generation_artifact_digest=artifact_digest,
@@ -721,7 +757,6 @@ def _aws_credentials(
 
 def _generation_artifact(
     generation_id: str,
-    artifact_digest: str,
     topology_revision: str,
     compiled: CompiledModelGeneration,
     *,
@@ -731,46 +766,53 @@ def _generation_artifact(
     session_configured: bool = False,
     transfer_configured: bool = False,
 ) -> GenerationArtifact:
-    return GenerationArtifact(
+    def runtime_binding(configured: bool) -> RuntimeBindingKind:
+        if deployment == "shared_process":
+            return RuntimeBindingKind.SHARED_RPC
+        return RuntimeBindingKind.EMBEDDED if configured else RuntimeBindingKind.UNAVAILABLE
+
+    artifact = GenerationArtifact(
         generation_id=generation_id,
-        model_planner_and_bindings={"topology_revision": topology_revision},
-        service_planner_and_bindings={
-            "runtime": (
-                "shared_rpc" if deployment == "shared_process" else "embedded" if service_configured else "unavailable"
-            ),
-            "configured": deployment == "shared_process" or service_configured,
-        },
-        session_capability_and_bindings={
-            "runtime": (
-                "shared_rpc" if deployment == "shared_process" else "embedded" if session_configured else "unavailable"
-            ),
-            "configured": deployment == "shared_process" or session_configured,
-        },
-        transfer_capability_and_bindings={
-            "runtime": (
-                "shared_rpc" if deployment == "shared_process" else "embedded" if transfer_configured else "unavailable"
-            ),
-            "configured": deployment == "shared_process" or transfer_configured,
-        },
-        credential_versions={slot: handle.epoch.value for slot, handle in compiled.credential_bindings.handles.items()},
+        model_binding=ModelGenerationBinding(topology_revision=topology_revision),
+        service_binding=ServiceGenerationBinding(
+            runtime=runtime_binding(service_configured),
+            configured=deployment == "shared_process" or service_configured,
+        ),
+        session_binding=SessionGenerationBinding(
+            runtime=runtime_binding(session_configured),
+            configured=deployment == "shared_process" or session_configured,
+        ),
+        transfer_binding=TransferGenerationBinding(
+            runtime=runtime_binding(transfer_configured),
+            configured=deployment == "shared_process" or transfer_configured,
+        ),
+        credential_versions=tuple(
+            VersionBinding(identity=slot, revision=handle.epoch.value)
+            for slot, handle in sorted(compiled.credential_bindings.handles.items())
+        ),
         transport_registry_revision="product-transports-v1",
         client_profile_revision="canonical-v1",
         failure_policy_revision="failure-v2",
-        capability_catalog_pricing_snapshot={},
-        governance_cache_plugin_revisions={},
+        capability_pricing=CapabilityPricingSnapshot(
+            catalog_revision=topology_revision,
+            pricing_revision="pricing-v1",
+        ),
+        governance_plugins=(),
         required_wire_contract_range=(3, 2),
-        activation_policy={
-            "deployment": deployment,
-            "activate_immediately": activate_immediately,
-        },
+        activation_policy=GenerationActivationPolicy(
+            deployment=DeploymentKind(deployment),
+            activate_immediately=activate_immediately,
+        ),
         min_reader_version=2,
         min_writer_version=3,
-        persistence_schema_versions={"receipt": 1, "usage": 1},
+        persistence_schemas=(
+            VersionBinding(identity="receipt", revision="1"),
+            VersionBinding(identity="usage", revision="1"),
+        ),
         migration_set_digest="sha256:" + hashlib.sha256(b"embedded-v1").hexdigest(),
-        artifact_digest=artifact_digest,
-        signer_key_id="embedded-process",
-        signature="process-local-capability",
+        artifact_digest="sha256:" + "0" * 64,
     )
+    return artifact.model_copy(update={"artifact_digest": compute_generation_artifact_digest(artifact)})
 
 
 def _shared_application_identity(state_root: Path) -> tuple[str, str, bytes]:

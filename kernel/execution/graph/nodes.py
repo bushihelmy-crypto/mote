@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from collections.abc import Callable
+from typing import Generic, TypeVar
 
 from mote.contracts.conversation import AIMessage, CauseBy, MessagePriority
 from mote.contracts.model.turn import ModelTurn
 from mote.contracts.output.errors import OutputCorrectionExhaustedError
+from mote.contracts.ports.task.operations import BackgroundTaskService
+from mote.kernel.commands import CommandChannel
+from mote.kernel.execution.context import ExecutionContext
+from mote.kernel.execution.context_provider import BaseContextProvider
 from mote.kernel.execution.graph.core import EffectKind, End, NodeId, Transition
+from mote.kernel.execution.operations.action_execution import ActionExecutionService
+from mote.kernel.execution.operations.inference import InferenceService
+from mote.kernel.execution.operations.observation import ObservationService
+from mote.kernel.execution.operations.output import OutputOperation
 from mote.kernel.execution.result import ExecutionResult
 from mote.kernel.execution.state import CandidateSelection, ExecutionState, NoModelTurn
+from mote.kernel.inference.base import BaseInferenceEngine
 
 OutputT = TypeVar("OutputT")
 
@@ -24,7 +34,7 @@ class RestoreNode(ExecutionNode, Generic[OutputT]):
     effect_kind = EffectKind.LEDGERED
     allowed_targets = frozenset({NodeId.OBSERVE})
 
-    def __init__(self, outputs: Any) -> None:
+    def __init__(self, outputs: OutputOperation[OutputT]) -> None:
         self._outputs = outputs
 
     async def run(
@@ -40,7 +50,11 @@ class ObserveNode(ExecutionNode, Generic[OutputT]):
     effect_kind = EffectKind.LEDGERED
     allowed_targets = frozenset({NodeId.BUDGET})
 
-    def __init__(self, observation: Any, set_active: Any) -> None:
+    def __init__(
+        self,
+        observation: ObservationService,
+        set_active: Callable[[bool], None],
+    ) -> None:
         self._observation = observation
         self._set_active = set_active
 
@@ -63,7 +77,12 @@ class BudgetNode(ExecutionNode, Generic[OutputT]):
     effect_kind = EffectKind.PURE
     allowed_targets = frozenset({NodeId.THINK})
 
-    def __init__(self, context_provider: Any, context: Any, advance_turn: Any) -> None:
+    def __init__(
+        self,
+        context_provider: BaseContextProvider,
+        context: Callable[[], ExecutionContext],
+        advance_turn: Callable[[], int] | None,
+    ) -> None:
         self._context_provider = context_provider
         self._context = context
         self._advance_turn = advance_turn
@@ -90,7 +109,13 @@ class InferenceNode(ExecutionNode, Generic[OutputT]):
     effect_kind = EffectKind.REPLAYABLE
     allowed_targets = frozenset({NodeId.INTERPRET, NodeId.WAIT_BACKGROUND})
 
-    def __init__(self, inference: Any, current_channel: Any, inference_engine: Any, get_bg_pool: Any) -> None:
+    def __init__(
+        self,
+        inference: InferenceService,
+        current_channel: Callable[[], CommandChannel],
+        inference_engine: BaseInferenceEngine,
+        get_bg_pool: Callable[[], BackgroundTaskService | None],
+    ) -> None:
         self._inference = inference
         self._current_channel = current_channel
         self._inference_engine = inference_engine
@@ -114,7 +139,7 @@ class ActNode(ExecutionNode, Generic[OutputT]):
     effect_kind = EffectKind.EXTERNAL
     allowed_targets = frozenset({NodeId.OBSERVE})
 
-    def __init__(self, actions: Any) -> None:
+    def __init__(self, actions: ActionExecutionService) -> None:
         self._actions = actions
 
     async def run(
@@ -133,7 +158,7 @@ class ValidateOutputNode(ExecutionNode, Generic[OutputT]):
     effect_kind = EffectKind.LEDGERED
     allowed_targets = frozenset({NodeId.OBSERVE})
 
-    def __init__(self, outputs: Any) -> None:
+    def __init__(self, outputs: OutputOperation[OutputT]) -> None:
         self._outputs = outputs
 
     async def run(
@@ -165,7 +190,10 @@ class WaitBackgroundNode(ExecutionNode, Generic[OutputT]):
     effect_kind = EffectKind.WAITABLE
     allowed_targets = frozenset({NodeId.OBSERVE})
 
-    def __init__(self, get_bg_pool: Any) -> None:
+    def __init__(
+        self,
+        get_bg_pool: Callable[[], BackgroundTaskService | None],
+    ) -> None:
         self._get_bg_pool = get_bg_pool
 
     async def run(

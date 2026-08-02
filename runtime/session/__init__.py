@@ -32,6 +32,12 @@ from mote.runtime.session.history import SnapshotEntry, diff_snapshot, file_hist
 from mote.runtime.session.ids import new_session_id
 from mote.runtime.session.listing import SessionInfo, list_sessions
 from mote.runtime.session.log import SessionLog
+from mote.runtime.session.projection import (
+    SESSION_PROJECTION_SUBSCRIPTION,
+    SessionLiveProjection,
+    SessionProjectionState,
+    reduce_session_envelope,
+)
 from mote.runtime.session.recall import body_for_tool_call
 from mote.runtime.session.reconcile import ReconcileResult, reconcile_tool_calls
 from mote.runtime.session.run_lease import RunLeaseHandle, RunLeaseStore
@@ -41,6 +47,10 @@ from mote.runtime.session.subscribers import CheckpointSubscriber, TitleSubscrib
 
 __all__ = [
     "SessionLog",
+    "SESSION_PROJECTION_SUBSCRIPTION",
+    "SessionLiveProjection",
+    "SessionProjectionState",
+    "reduce_session_envelope",
     "SessionFactCommitter",
     "TitleSubscriber",
     "CheckpointSubscriber",

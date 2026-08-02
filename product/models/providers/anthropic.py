@@ -38,14 +38,15 @@ from mote.contracts.model import WebSearchHit
 from mote.contracts.model.capabilities import supports_web_search
 from mote.contracts.model.constants import USE_CONFIG_TIMEOUT
 from mote.contracts.model.profile import profile_for
+from mote.contracts.model.provider_errors import LLMEmptyResponseError, LLMTimeoutError
 from mote.kernel.inference.tokenization import count_message_tokens, count_string_tokens
-from mote.runtime.errors import LLMEmptyResponseError, LLMTimeoutError, classify_llm_error
 from mote.runtime.events.stream import log_llm_stream
 from mote.runtime.models.clients.base import BaseLLM
 from mote.runtime.models.clients.credentials import CredentialBindingMixin
 from mote.runtime.models.cost import CostTracker, TokenUsage
 from mote.runtime.models.media import parse_data_url, resolve_image_media_type
 from mote.runtime.models.ratelimit.capture import install_rate_limit_hook
+from mote.runtime.resilience.error_classification import classify_llm_error
 from mote.runtime.telemetry.logging import logger
 
 # Anthropic's ``thinking`` takes a concrete ``budget_tokens``, not an effort enum,

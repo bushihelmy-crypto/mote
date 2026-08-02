@@ -33,7 +33,7 @@ async def test_bound_session_log_routes_async_facts_through_fabric(tmp_path) -> 
     committer = SessionFactCommitter(log, fabric)
     log.bind_async_sink(committer.commit_event)
 
-    await log.append(SessionMetaEvent(session_id="session-1"))
+    await log.append(SessionMetaEvent(session_id="session-1", role_class="test.Role", toolset_manifest=()))
     with pytest.raises(RuntimeError, match="offline commit is forbidden"):
         log.commit_offline(MessageEvent(message=UserMessage(content="bypass")))
     await committer.commit_fact(MessageAppendedEvent(message=UserMessage(content="hello")))
@@ -54,7 +54,7 @@ async def test_synchronous_transaction_domain_commits_through_owner_loop(
     fabric = await _session_fabric(log)
     committer = SessionFactCommitter(log, fabric)
     log.bind_async_sink(committer.commit_event)
-    await log.append(SessionMetaEvent(session_id="session-1"))
+    await log.append(SessionMetaEvent(session_id="session-1", role_class="test.Role", toolset_manifest=()))
 
     result = await asyncio.to_thread(
         committer.commit_event_from_thread,

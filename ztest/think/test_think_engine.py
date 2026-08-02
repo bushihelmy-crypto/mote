@@ -6,6 +6,7 @@ Covers the two completion channels (XML text via ``aask`` vs native tool-use via
 ``aask_tool``), the async task lifecycle (``start`` / ``done`` / ``join``), and
 the ``BaseInferenceEngine`` contract.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -15,6 +16,7 @@ import pytest
 from mote.contracts.conversation import UserMessage
 from mote.contracts.conversation.fields import TOOL_CALLS
 from mote.contracts.model.inference import InferenceResult
+from mote.contracts.model.invocation import CanonicalToolDefinition
 from mote.kernel.inference.engine import InferenceEngine
 from mote.runtime.models.inference_port import RuntimeModelInferencePort
 from mote.runtime.models.output_snapshots import bind_output_snapshot_accumulator
@@ -28,6 +30,7 @@ def make_engine(*, memory=None, config=None) -> InferenceEngine:
         config=config or {},
         inference_port=RuntimeModelInferencePort(),
         snapshot_scope=bind_output_snapshot_accumulator,
+        output_observer=lambda _event: None,
     )
 
 
@@ -40,6 +43,7 @@ class TestConstruction:
             config=cfg,
             inference_port=RuntimeModelInferencePort(),
             snapshot_scope=bind_output_snapshot_accumulator,
+            output_observer=lambda _event: None,
         )
         assert engine.target is None
         assert engine.memory is mem
@@ -64,7 +68,7 @@ class TestXMLChannel:
         llm = FakeLLM(reply="my thought")
         engine = make_engine()
         await engine.start(
-            req=[{"role": "user", "content": "hi"}],
+            req=[UserMessage("hi")],
             system_prompt="sys",
             target=engine._inference_port.pin_route(llm.route),
             model_call_id="call",
@@ -80,7 +84,10 @@ class TestXMLChannel:
         llm = FakeLLM(reply="t")
         engine = make_engine()
         await engine.start(
-            req="REQ", system_prompt="SYS", target=engine._inference_port.pin_route(llm.route), model_call_id="call"
+            req=[UserMessage("REQ")],
+            system_prompt="SYS",
+            target=engine._inference_port.pin_route(llm.route),
+            model_call_id="call",
         )
         await engine.join()
         assert len(llm.aask_calls) == 1
@@ -93,7 +100,10 @@ class TestXMLChannel:
         llm = FakeLLM()
         engine = make_engine()
         await engine.start(
-            req="r", system_prompt="s", target=engine._inference_port.pin_route(llm.route), model_call_id="call"
+            req=[UserMessage("r")],
+            system_prompt="s",
+            target=engine._inference_port.pin_route(llm.route),
+            model_call_id="call",
         )
         assert engine.target.route_id == llm.route.route_id
         await engine.join()
@@ -105,7 +115,10 @@ class TestXMLChannel:
         llm = FakeLLM(reply="fresh thought")
         engine = make_engine(memory=mem)
         await engine.start(
-            req="r", system_prompt="s", target=engine._inference_port.pin_route(llm.route), model_call_id="call"
+            req=[UserMessage("r")],
+            system_prompt="s",
+            target=engine._inference_port.pin_route(llm.route),
+            model_call_id="call",
         )
         await engine.join()
         assert engine.result.content == "fresh thought"
@@ -118,11 +131,11 @@ class TestNativeChannel:
 
         llm = FakeLLM(tool_response=make_tool_response(content='{"count": 7}'))
         engine = make_engine()
-        specs = [{"name": "Read"}]
+        specs = (CanonicalToolDefinition(name="Read"),)
         schema = {"type": "object"}
 
         await engine.start(
-            req="REQ",
+            req=[UserMessage("REQ")],
             system_prompt="SYS",
             tool_specs=specs,
             target=engine._inference_port.pin_route(llm.route),
@@ -141,24 +154,27 @@ class TestNativeChannel:
         llm = FakeLLM(tool_response=resp)
         engine = make_engine()
         await engine.start(
-            req="r",
+            req=[UserMessage("r")],
             system_prompt="s",
-            tool_specs=[{"name": "Read"}],
+            tool_specs=(CanonicalToolDefinition(name="Read"),),
             target=engine._inference_port.pin_route(llm.route),
             model_call_id="call",
         )
         await engine.join()
         assert engine.result.content == "reading"
         assert engine.result.is_native is True
-        assert engine.result.tool_calls == [{"id": "call-1", "command_name": "Read", "args": {"path": "a.py"}}]
+        assert engine.result.tool_calls is not None
+        assert engine.result.tool_calls[0].id == "call-1"
+        assert engine.result.tool_calls[0].name == "Read"
+        assert engine.result.tool_calls[0].arguments == {"path": "a.py"}
 
     @pytest.mark.asyncio
     async def test_uses_aask_tool_with_specs(self):
         llm = FakeLLM(tool_response=make_tool_response(("1", "Glob", {})))
         engine = make_engine()
-        specs = [{"name": "Glob"}]
+        specs = (CanonicalToolDefinition(name="Glob"),)
         await engine.start(
-            req="REQ",
+            req=[UserMessage("REQ")],
             system_prompt="SYS",
             tool_specs=specs,
             target=engine._inference_port.pin_route(llm.route),
@@ -172,14 +188,13 @@ class TestNativeChannel:
 
     @pytest.mark.asyncio
     async def test_empty_content_becomes_empty_string(self):
-        # rsp.content is None -> normalized to "" but still native (tool_calls list).
+        # Empty canonical content remains valid when native tool calls are present.
         llm = FakeLLM(tool_response=make_tool_response(("1", "Bash", {"cmd": "ls"})))
-        llm._tool_response.content = None
         engine = make_engine()
         await engine.start(
-            req="r",
+            req=[UserMessage("r")],
             system_prompt="s",
-            tool_specs=[{"name": "Bash"}],
+            tool_specs=(CanonicalToolDefinition(name="Bash"),),
             target=engine._inference_port.pin_route(llm.route),
             model_call_id="call",
         )
@@ -193,14 +208,14 @@ class TestNativeChannel:
         llm = FakeLLM(tool_response=make_tool_response(content="just text"))
         engine = make_engine()
         await engine.start(
-            req="r",
+            req=[UserMessage("r")],
             system_prompt="s",
-            tool_specs=[{"name": "X"}],
+            tool_specs=(CanonicalToolDefinition(name="X"),),
             target=engine._inference_port.pin_route(llm.route),
             model_call_id="call",
         )
         await engine.join()
-        assert engine.result.tool_calls == []
+        assert engine.result.tool_calls == ()
         assert engine.result.is_native is True
 
     @pytest.mark.asyncio
@@ -210,14 +225,16 @@ class TestNativeChannel:
         llm = FakeLLM(tool_response=make_tool_response(("1", "Read", {"path": "a"})))
         engine = make_engine(memory=mem)
         await engine.start(
-            req="r",
+            req=[UserMessage("r")],
             system_prompt="s",
-            tool_specs=[{"name": "Read"}],
+            tool_specs=(CanonicalToolDefinition(name="Read"),),
             target=engine._inference_port.pin_route(llm.route),
             model_call_id="call",
         )
         await engine.join()
-        assert engine.result.tool_calls == [{"id": "1", "command_name": "Read", "args": {"path": "a"}}]
+        assert engine.result.tool_calls is not None
+        assert engine.result.tool_calls[0].name == "Read"
+        assert engine.result.tool_calls[0].arguments == {"path": "a"}
 
     @pytest.mark.asyncio
     async def test_sig_hist_ignores_messages_without_tool_calls(self):
@@ -227,15 +244,16 @@ class TestNativeChannel:
         llm = FakeLLM(tool_response=make_tool_response(("1", "Editor", {"path": "a"})))
         engine = make_engine(memory=mem)
         await engine.start(
-            req="r",
+            req=[UserMessage("r")],
             system_prompt="s",
-            tool_specs=[{"name": "Editor"}],
+            tool_specs=(CanonicalToolDefinition(name="Editor"),),
             target=engine._inference_port.pin_route(llm.route),
             model_call_id="call",
         )
         await engine.join()
         # Only 2 matching signatures (< 3) -> no override.
-        assert engine.result.tool_calls[0]["command_name"] == "Editor"
+        assert engine.result.tool_calls is not None
+        assert engine.result.tool_calls[0].name == "Editor"
 
 
 class TestTaskLifecycle:
@@ -245,7 +263,10 @@ class TestTaskLifecycle:
         llm = FakeLLM()
         engine = make_engine()
         await engine.start(
-            req="r", system_prompt="s", target=engine._inference_port.pin_route(llm.route), model_call_id="call"
+            req=[UserMessage("r")],
+            system_prompt="s",
+            target=engine._inference_port.pin_route(llm.route),
+            model_call_id="call",
         )
         assert engine.done is False
         await engine.join()
@@ -256,7 +277,10 @@ class TestTaskLifecycle:
         engine = make_engine()
         llm = FakeLLM()
         await engine.start(
-            req="r", system_prompt="s", target=engine._inference_port.pin_route(llm.route), model_call_id="call"
+            req=[UserMessage("r")],
+            system_prompt="s",
+            target=engine._inference_port.pin_route(llm.route),
+            model_call_id="call",
         )
         await engine.join()
         assert engine._task is None
@@ -273,13 +297,16 @@ class TestTaskLifecycle:
         engine = make_engine()
         first_llm = FakeLLM(reply="one")
         await engine.start(
-            req="r", system_prompt="s", target=engine._inference_port.pin_route(first_llm.route), model_call_id="call-1"
+            req=[UserMessage("r")],
+            system_prompt="s",
+            target=engine._inference_port.pin_route(first_llm.route),
+            model_call_id="call-1",
         )
         await engine.join()
         first = engine.result
         second_llm = FakeLLM(reply="two")
         await engine.start(
-            req="r",
+            req=[UserMessage("r")],
             system_prompt="s",
             target=engine._inference_port.pin_route(second_llm.route),
             model_call_id="call-2",
@@ -295,7 +322,10 @@ class TestReporter:
         engine = make_engine()
         llm = FakeLLM()
         await engine.start(
-            req="r", system_prompt="s", target=engine._inference_port.pin_route(llm.route), model_call_id="call"
+            req=[UserMessage("r")],
+            system_prompt="s",
+            target=engine._inference_port.pin_route(llm.route),
+            model_call_id="call",
         )
         await engine.join()
         assert FakeReporter.instances, "ThoughtReporter should be entered"

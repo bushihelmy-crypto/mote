@@ -84,13 +84,13 @@ class EmbeddedSessionRuntime:
         self._epoch_provider = epoch_provider
         self._message_timeout_seconds = message_timeout_seconds
         self._event_capacity = event_capacity
-        self._queue = FairAdmissionQueue(capacity=queue_capacity)
+        self._queue = FairAdmissionQueue[_SessionWork](capacity=queue_capacity)
         self._bulkheads = BulkheadController(
             global_limit=global_in_flight,
             provider_limit=provider_in_flight,
             endpoint_limit=endpoint_in_flight,
         )
-        self._dispatcher = Dispatcher(
+        self._dispatcher = Dispatcher[_SessionWork](
             queue=self._queue,
             bulkheads=self._bulkheads,
             identity_resolver=self._identity,
@@ -198,7 +198,11 @@ class EmbeddedSessionRuntime:
         )
         await completion
 
-    async def _dispatch(self, entry: QueueEntry, permit: BulkheadPermit) -> None:
+    async def _dispatch(
+        self,
+        entry: QueueEntry[_SessionWork],
+        permit: BulkheadPermit,
+    ) -> None:
         work = entry.payload
         if work.message is None:
             await work.execution.dispatch_open(local_deadline=entry.deadline)
@@ -217,7 +221,7 @@ class EmbeddedSessionRuntime:
             if work.completion is not None and not work.completion.done():
                 work.completion.set_result(None)
 
-    async def _dispatch_timeout(self, entry: QueueEntry) -> None:
+    async def _dispatch_timeout(self, entry: QueueEntry[_SessionWork]) -> None:
         work = entry.payload
         if work.message is None:
             await work.execution.fail_open("bulkhead deadline exceeded")
@@ -225,7 +229,7 @@ class EmbeddedSessionRuntime:
             work.completion.set_exception(TimeoutError("session message deadline exceeded"))
 
     @staticmethod
-    def _identity(entry: QueueEntry) -> BulkheadIdentity:
+    def _identity(entry: QueueEntry[_SessionWork]) -> BulkheadIdentity:
         transport = entry.payload.execution.transport
         return BulkheadIdentity(
             provider=transport.provider,

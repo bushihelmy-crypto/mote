@@ -10,15 +10,18 @@ call back through the executor chokepoint. These tests exercise the full stack
 scriptable fake tool table (``fake_tools``), so they double as living examples of
 every node kind and edge rule the tool description advertises.
 """
+
 from __future__ import annotations
 
 import pytest
 
+from mote.contracts.activity import ActivityKind, ActivityNodeKind, ActivityNodeStatus, ActivityOutcome
+from mote.contracts.events.task import ACTIVITY_COMPLETED, ACTIVITY_STARTED, TASK_PROGRESS
+from mote.contracts.tool.errors import ToolError
 from mote.product.workflows.run_graph.tool import RunGraph
-from mote.runtime.events import ACTIVITY_COMPLETED, ACTIVITY_STARTED, TASK_PROGRESS
 from mote.runtime.events.context import bind_telemetry
 from mote.runtime.tools.execution_context import bind_tool_call_id
-from mote.runtime.tools.tool_result import ToolError, ToolResult
+from mote.runtime.tools.tool_result import ToolResult
 from mote.ztest.telemetry import InlineTelemetry
 
 from .conftest import CapRole, bind, run
@@ -1505,16 +1508,17 @@ class TestActivityLineage:
         started = obs.of(ACTIVITY_STARTED)
         assert len(started) == 1
         ev = started[0]
-        assert ev.activity_kind == "graph"
+        assert ev.activity_kind is ActivityKind.GRAPH
         assert ev.label == "run_graph"
         assert ev.scope != ()  # the pushed graph scope
-        # Topology mirrors the declared spec: one node dict per spec node, with
+        # Topology mirrors the declared spec: one node DTO per spec node, with
         # the inferred dp→sum data-flow edge (dp is referenced by sum's args).
-        node_ids = {n["id"] for n in ev.topology["nodes"]}
+        assert ev.topology is not None
+        node_ids = {node.node_id for node in ev.topology.nodes}
         assert node_ids == {"dp", "sum"}
-        assert {n["kind"] for n in ev.topology["nodes"]} == {"tool"}
-        assert {(e["from"], e["to"]) for e in ev.topology["edges"]} == {("dp", "sum")}
-        assert all(e["guarded"] is False for e in ev.topology["edges"])
+        assert {node.kind for node in ev.topology.nodes} == {ActivityNodeKind.TOOL}
+        assert {(edge.from_node, edge.to_node) for edge in ev.topology.edges} == {("dp", "sum")}
+        assert all(edge.guarded is False for edge in ev.topology.edges)
 
     def test_emits_completed_node_states_matching_run_state(self, workspace):
         role = _role(double=_double, add=_add)
@@ -1542,12 +1546,12 @@ class TestActivityLineage:
         completed = obs.of(ACTIVITY_COMPLETED)
         assert len(completed) == 1
         ev = completed[0]
-        assert ev.outcome == "success"
-        by_id = {s["id"]: s for s in ev.node_states}
+        assert ev.outcome is ActivityOutcome.SUCCESS
+        by_id = {state.node_id: state for state in ev.node_states}
         assert set(by_id) == {"dp", "sum"}
         # A clean run leaves every node SUCCESS with no error text.
-        assert all(s["status"] == "success" for s in by_id.values())
-        assert all(s["error"] == "" for s in by_id.values())
+        assert all(state.status is ActivityNodeStatus.SUCCESS for state in by_id.values())
+        assert all(state.error == "" for state in by_id.values())
 
     def test_emits_per_node_progress_pings(self, workspace):
         role = _role(double=_double, add=_add)

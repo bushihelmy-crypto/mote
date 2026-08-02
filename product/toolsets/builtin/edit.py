@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import ClassVar
 
 from mote.contracts.file import CreateMutation, FileOperationError, ReplaceMutation, TransactionStatus
+from mote.contracts.tool.errors import ToolError
+from mote.contracts.tool.result import json_tool_payload
 from mote.product.toolsets.builtin._paths import resolve_path, resolve_permission_path
-from mote.runtime.errors import ToolError
 from mote.runtime.fileops.edit_plans import (
     AbsentEditPlanSource,
     EditPlanManifestError,
@@ -157,7 +158,7 @@ class Edit(BaseTool):
                     post_digest=change.post_digest,
                 )
             ],
-            data={"transaction_id": outcome.result.transaction_id},
+            payload=json_tool_payload({"transaction_id": outcome.result.transaction_id}),
         )
 
     @staticmethod

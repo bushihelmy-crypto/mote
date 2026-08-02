@@ -5,9 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import NewType, TypeAlias
 
-SessionId = NewType("SessionId", str)
+from mote.contracts.artifact import ArtifactRef
+
 TaskId = NewType("TaskId", str)
 CommandName = NewType("CommandName", str)
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class AttemptId:
+    value: int
+
+    def __post_init__(self) -> None:
+        if type(self.value) is not int or self.value < 1:
+            raise ValueError("AttemptId must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,21 +32,7 @@ class InlineTaskOutput:
 
 
 @dataclass(frozen=True, slots=True)
-class StoredTaskOutput:
-    locator: str
-
-    def __post_init__(self) -> None:
-        if not self.locator.startswith("task-output:"):
-            raise ValueError("stored task output requires an opaque task-output locator")
-
-
-@dataclass(frozen=True, slots=True)
 class TaskFailure:
-    message: str
-
-
-@dataclass(frozen=True, slots=True)
-class PauseReason:
     message: str
 
 
@@ -49,11 +45,11 @@ class CompletedInlineTaskResultPointer:
 
 
 @dataclass(frozen=True, slots=True)
-class CompletedStoredTaskResultPointer:
+class CompletedArtifactTaskResultPointer:
     task_id: TaskId
     command_name: CommandName
     summary: str
-    output: StoredTaskOutput
+    output: ArtifactRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,32 +60,18 @@ class FailedTaskResultPointer:
     error: TaskFailure
 
 
-@dataclass(frozen=True, slots=True)
-class PausedTaskResultPointer:
-    task_id: TaskId
-    command_name: CommandName
-    summary: str
-    reason: PauseReason
-
-
 TaskResultPointer: TypeAlias = (
-    CompletedInlineTaskResultPointer
-    | CompletedStoredTaskResultPointer
-    | FailedTaskResultPointer
-    | PausedTaskResultPointer
+    CompletedInlineTaskResultPointer | CompletedArtifactTaskResultPointer | FailedTaskResultPointer
 )
 
 
 __all__ = [
     "CommandName",
+    "AttemptId",
     "CompletedInlineTaskResultPointer",
-    "CompletedStoredTaskResultPointer",
+    "CompletedArtifactTaskResultPointer",
     "FailedTaskResultPointer",
     "InlineTaskOutput",
-    "PausedTaskResultPointer",
-    "PauseReason",
-    "SessionId",
-    "StoredTaskOutput",
     "TaskFailure",
     "TaskId",
     "TaskResultPointer",

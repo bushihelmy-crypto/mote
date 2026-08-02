@@ -8,12 +8,13 @@ on RoleState via the ``reveal_tools`` capability), and the result names them.
 These tests drive it through the same ``CapRole`` capability allowlist the real
 Role publishes, so binding + dispatch mirror production.
 """
+
 from __future__ import annotations
 
 import pytest
 
+from mote.contracts.tool.errors import ToolValidationError
 from mote.product.toolsets.builtin.search_tools import SearchTools
-from mote.runtime.errors import ToolValidationError
 
 from .conftest import CapRole, bind, run
 

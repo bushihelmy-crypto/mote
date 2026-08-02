@@ -7,14 +7,13 @@ task's disk output and surface to the LLM via the existing
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 
-from pydantic import BaseModel
-
-from mote.orchestration.workflows.events import _as_text, report_progress
-from mote.orchestration.workflows.types import END, BgStatus, GraphRunState
-from mote.runtime.errors import ErrorReport, render_error_block
+from mote.contracts.foundation.errors.report import ErrorReport, render_error_block
+from mote.contracts.workflow.identity import WorkflowDefinitionId, WorkflowRunId
+from mote.orchestration.workflows.events import _as_text, emit_workflow_progress
+from mote.orchestration.workflows.types import END, GraphRunState, WorkflowNodeStatus
 
 # ---------------------------------------------------------------------------
 # Per-node progress message templates
@@ -24,34 +23,22 @@ _MSG_RETRYING = "retrying ({attempt}/{auto_retries}): {error_type}: {error}"
 _MSG_FAILED = "{error_type}: {error}"
 _MSG_FAILED_WITH_RETRY = "{error_type}: {error} (retried {attempt}/{auto_retries}, all failed)"
 _MSG_COMPLETED_WITH_RETRY = "{result} (after {auto_retries} retry)"
-
-# --- task lifecycle messages ---
 _MSG_RESUMING = "Resuming from node '{from_node}'"
 _MSG_SKIPPING = "Skipping nodes [{skip_nodes}], continuing downstream{suffix}"
-_MSG_RESUMED = "Task {task_id} resumed"
-_MSG_MAX_RESTARTS = "max_restarts exceeded ({retry_count}/{max_restarts})"
-_MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
-_MSG_TASK_ALREADY_DONE = "Task {task_id} is already {status}, cannot resume."
-_MSG_NODE_NOT_RESUMABLE = (
-    "Node '{node_name}' is {node_status}, cannot resume. " "Only failed or not-yet-run nodes can be resumed."
-)
-_MSG_CANCEL_DONE = "Task {task_id} is already {status}, cannot cancel."
-_MSG_CANCELLED_REASON = "Cancelled: {reason}"
-_MSG_CANCEL_SUCCESS = (
-    "Task {task_id} ({command_name}) cancelled.\n"
-    "Completed nodes:\n{completed_nodes_text}\n"
-    "Reason: {reason}\n"
-    "Use resume_tasks(task_id='{task_id}', from_node='...') to resume."
-)
 
 # ---------------------------------------------------------------------------
 # Notification rendering templates
 # ---------------------------------------------------------------------------
 
-_FMT_NOTIFICATION_STARTED = '"{command}" task started (task_id: {task_id})\n' "stage-summary:\n{stage_summary}"
-_FMT_NOTIFICATION_SUCCESS = '"{command}" task success (task_id: {task_id})\n' "result: {result}"
+_FMT_NOTIFICATION_STARTED = (
+    '"{command}" Workflow started (run_id: {run_id}, definition_id: {definition_id})\n'
+    "stage-summary:\n{stage_summary}"
+)
+_FMT_NOTIFICATION_SUCCESS = (
+    '"{command}" Workflow succeeded (run_id: {run_id}, definition_id: {definition_id})\n' "result: {result}"
+)
 _FMT_NOTIFICATION_FAILED = (
-    '"{command}" task failed (task_id: {task_id})\n'
+    '"{command}" Workflow failed (run_id: {run_id}, definition_id: {definition_id})\n'
     "{error_block}"
     "DAG paused, all nodes finished.\n"
     "task params: {initial_params}\n"
@@ -62,7 +49,7 @@ _FMT_NOTIFICATION_FAILED = (
     "pending nodes:\n{pending_nodes_text}"
 )
 _FMT_NODE_NOTIFICATION = (
-    '"{command}" task node_{event} (task_id: {task_id})\n'
+    '"{command}" Workflow node_{event} (run_id: {run_id}, definition_id: {definition_id})\n'
     "{subject_label}:\n{subject_node_text}\n"
     "waiting_for_route nodes:\n{waiting_nodes_text}\n"
     "running nodes:\n{running_nodes_text}\n"
@@ -74,19 +61,19 @@ _FMT_NODE_NOTIFICATION = (
 # Trailing action hint for node_failed — driven by whether any node is still
 # running. No running node means the graph has stalled and a terminal failure
 # follows immediately, so a decision is needed now. Both variants point at the
-# diagnostic + recovery tools (task_id is ``(current)`` here; the progress
-# writer substitutes the real id before delivery).
+# diagnostic + recovery tools use the canonical run and definition identities.
 _HINT_NODE_FAILURE_RECOVERY = (
-    'Inspect with get_node_state(task_id="(current)") to see per-node status/inputs/outputs, '
-    'then resume_tasks(task_id="(current)", from_node=[...]) to re-run '
-    "(or skip_node=[...] to bypass, overrides={...} to change inputs)."
+    'Inspect with GetNodeStates(run_id="{run_id}", definition_id="{definition_id}") '
+    'to see per-node status/inputs/outputs, then ResumeTasks(run_id="{run_id}", '
+    'definition_id="{definition_id}", from_node=[...]) to re-run '
+    "(or skip_node=[...] to bypass, overrides={{...}} to change inputs)."
 )
 _HINT_NODE_FAILURE_STALLED = (
     "No runnable nodes remain — make a decision now or ask the user. " + _HINT_NODE_FAILURE_RECOVERY
 )
 _HINT_NODE_FAILURE_RUNNING = "Other nodes are still running — you may decide later. " + _HINT_NODE_FAILURE_RECOVERY
 _FMT_STALL_NOTIFICATION = (
-    '"{command}" task stalled (task_id: {task_id})\n'
+    '"{command}" Workflow stalled (run_id: {run_id}, definition_id: {definition_id})\n'
     "The graph ran out of runnable nodes but did not finish: one or more AND-join "
     "nodes are deadlocked (a required upstream can never arrive). A decision is "
     "needed now.\n"
@@ -102,12 +89,14 @@ _FMT_STALL_NODE_BLOCK = (
     "  - {node_name}\n" "    arrived sources: {arrived_text}\n" "    missing sources: {missing_text}"
 )
 _HINT_STALL = (
-    'Break the deadlock: resume_tasks(task_id="(current)", from_node=[<missing upstream(s)>]) to run them, '
+    'Break the deadlock: ResumeTasks(run_id="{run_id}", definition_id="{definition_id}", '
+    "from_node=[<missing upstream(s)>]) to run them, "
     "or skip_node=[<missing upstream(s)>] to bypass the join's wait (keeps partial results), "
-    'or ask the user. Inspect first with get_node_state(task_id="(current)").'
+    'or ask the user. Inspect first with GetNodeStates(run_id="{run_id}", '
+    'definition_id="{definition_id}").'
 )
 _FMT_LLM_ROUTE_NOTIFICATION = (
-    '"{command}" task waiting_for_route (task_id: {task_id})\n'
+    '"{command}" Workflow waiting_for_route (run_id: {run_id}, definition_id: {definition_id})\n'
     "stage-summary:\n{stage_summary}\n"
     "current node:\n"
     "  - {from_node}\n"
@@ -118,15 +107,17 @@ _FMT_LLM_ROUTE_NOTIFICATION = (
     "{action_hint}"
 )
 _FMT_LLM_ROUTE_OPTION = (
-    '  - resume_tasks(from_node="{target_node}")  → {route_key}\n'
+    '  - ResumeTasks(run_id="{run_id}", definition_id="{definition_id}", '
+    'from_node="{target_node}")  → {route_key}\n'
     "    description: {target_desc}\n"
     "    params:\n{target_params_text}"
 )
 # Route-pause hints. Each option above already shows its ``resume_tasks(...)``
 # call; add a pointer to get_node_state for inspecting produced state before
-# deciding (task_id is ``(current)`` — the writer substitutes the real id).
+# deciding.
 _HINT_INSPECT = (
-    'Call get_node_state(task_id="(current)") for per-node status, '
+    'Call GetNodeStates(run_id="{run_id}", definition_id="{definition_id}") '
+    "for per-node status, "
     "or fields=[...] to dump a produced value before choosing."
 )
 _HINT_OPTIONAL = "You may also do nothing (route to END requires no action). " + _HINT_INSPECT
@@ -250,13 +241,13 @@ def _render_completed_nodes(
             continue
         # Completion is authoritative on the run state — node results merge into
         # state *fields*, so there is no per-node value to gate on anymore.
-        if run_state.get(name).status != BgStatus.SUCCESS:
+        if run_state.get(name).status != WorkflowNodeStatus.SUCCESS:
             continue
         blocks.append(_FMT_BARE_NODE_BLOCK.format(node_name=name))
     return "\n".join(blocks) if blocks else "  (none)"
 
 
-def _render_status_nodes(graph: Any, run_state: GraphRunState, status: BgStatus) -> str:
+def _render_status_nodes(graph: Any, run_state: GraphRunState, status: WorkflowNodeStatus) -> str:
     """Render nodes whose run-state status equals *status* as bare name blocks.
 
     Used for the ``skipped`` and ``pending`` sections — these report node
@@ -322,17 +313,26 @@ def _render_running_nodes(running_names: list[str], graph: Any) -> str:
     return "\n".join(blocks) if blocks else "  (none)"
 
 
+def _workflow_identity(graph: Any, run_state: GraphRunState) -> tuple[WorkflowRunId, WorkflowDefinitionId]:
+    definition_id = graph._definition_id
+    if not isinstance(definition_id, WorkflowDefinitionId):
+        raise RuntimeError("Workflow notification requires a canonical definition identity")
+    return WorkflowRunId(run_state.activity_execution_id), definition_id
+
+
 # ---------------------------------------------------------------------------
 # Structured notification model
 # ---------------------------------------------------------------------------
 
 
-class TaskNotification(BaseModel):
-    """Structured task notification for LLM consumption / internal passing."""
+@dataclass(frozen=True, slots=True)
+class WorkflowNotification:
+    """Structured Workflow notification for LLM consumption."""
 
-    task_id: str
+    run_id: WorkflowRunId
+    definition_id: WorkflowDefinitionId
     command: str
-    status: BgStatus
+    status: WorkflowNodeStatus
     event: str  # "started" | "node_failed" | "terminal"
     result: Optional[str] = None
     initial_params: Optional[dict] = None
@@ -347,10 +347,11 @@ class TaskNotification(BaseModel):
     error_block: str = ""
 
     def to_text(self) -> str:
-        if self.status == BgStatus.FAILED:
+        if self.status == WorkflowNodeStatus.FAILED:
             return _FMT_NOTIFICATION_FAILED.format(
                 command=self.command,
-                task_id=self.task_id,
+                run_id=self.run_id,
+                definition_id=self.definition_id,
                 error_block=f"{self.error_block}\n" if self.error_block else "",
                 initial_params=self.initial_params or {},
                 failed_nodes_text=self.failed_nodes_text,
@@ -361,7 +362,8 @@ class TaskNotification(BaseModel):
             )
         return _FMT_NOTIFICATION_SUCCESS.format(
             command=self.command,
-            task_id=self.task_id,
+            run_id=self.run_id,
+            definition_id=self.definition_id,
             result=_as_text(self.result) if self.result else "",
         )
 
@@ -371,32 +373,38 @@ class TaskNotification(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def push_started_notification(graph: Any, task_id: str = "(current)") -> None:
+def push_started_notification(
+    graph: Any,
+    run_state: GraphRunState,
+) -> None:
+    run_id, definition_id = _workflow_identity(graph, run_state)
     text = _FMT_NOTIFICATION_STARTED.format(
         command=graph.command_name,
-        task_id=task_id,
+        run_id=run_id,
+        definition_id=definition_id,
         stage_summary=graph._build_stage_summary(),
     )
-    report_progress(END, BgStatus.RUNNING, text)
+    emit_workflow_progress(graph, run_state, END, WorkflowNodeStatus.RUNNING, text)
 
 
 def push_terminal_notification(
     graph: Any,
     state: Any,
-    status: BgStatus,
+    status: WorkflowNodeStatus,
     *,
     result: Any = None,
     error: Optional[BaseException] = None,
     initial_params: Optional[dict] = None,
     run_state: Optional[GraphRunState] = None,
-    task_id: str = "(current)",
 ) -> None:
     run_state = GraphRunState.ensure(graph, state, run_state)
+    run_id, definition_id = _workflow_identity(graph, run_state)
     failures = getattr(error, "failures", None) or []
     failed_names = {name for name, _ in failures}
     error_block = _render_terminal_error_block(error)
-    tn = TaskNotification(
-        task_id=task_id,
+    tn = WorkflowNotification(
+        run_id=run_id,
+        definition_id=definition_id,
         command=graph.command_name,
         status=status,
         event="terminal",
@@ -408,15 +416,15 @@ def push_terminal_notification(
         completed_nodes_text=_render_completed_nodes(graph, state, run_state, failed_names=failed_names),
         # The graph is never paused on an LLM route at terminal → no waiting node.
         waiting_nodes_text=_render_waiting_nodes(graph, set()),
-        skipped_nodes_text=_render_status_nodes(graph, run_state, BgStatus.SKIPPED),
-        pending_nodes_text=_render_status_nodes(graph, run_state, BgStatus.PENDING),
+        skipped_nodes_text=_render_status_nodes(graph, run_state, WorkflowNodeStatus.SKIPPED),
+        pending_nodes_text=_render_status_nodes(graph, run_state, WorkflowNodeStatus.PENDING),
     )
-    report_progress(END, status, tn.to_text())
+    emit_workflow_progress(graph, run_state, END, status, tn.to_text())
 
 
 def push_node_notification(
     node_name: str,
-    status: BgStatus,
+    status: WorkflowNodeStatus,
     state: Any,
     graph: Any,
     *,
@@ -424,14 +432,14 @@ def push_node_notification(
     running_names: list[str],
     run_state: Optional[GraphRunState] = None,
     exc: Optional[BaseException] = None,
-    task_id: str = "(current)",
 ) -> None:
     """Push a structured notification for any node terminal status change.
 
     Works for success, failure, cancellation — same graph-snapshot format.
     """
     run_state = GraphRunState.ensure(graph, state, run_state)
-    if status == BgStatus.FAILED and exc is not None:
+    run_id, definition_id = _workflow_identity(graph, run_state)
+    if status == WorkflowNodeStatus.FAILED and exc is not None:
         subject_label = "node fail"
         event = "failed"
         subject_text = _FMT_FAILED_NODE_BLOCK.format(
@@ -451,26 +459,35 @@ def push_node_notification(
             subject_text += _FMT_SELF_LOOP_LAP.format(lap=lap)
 
     action_hint = ""
-    if status == BgStatus.FAILED:
-        action_hint = _HINT_NODE_FAILURE_RUNNING if running_names else _HINT_NODE_FAILURE_STALLED
+    if status == WorkflowNodeStatus.FAILED:
+        action_hint = (_HINT_NODE_FAILURE_RUNNING if running_names else _HINT_NODE_FAILURE_STALLED).format(
+            run_id=run_id, definition_id=definition_id
+        )
 
     notification = _FMT_NODE_NOTIFICATION.format(
         command=graph.command_name,
-        task_id=task_id,
+        run_id=run_id,
+        definition_id=definition_id,
         event=event,
         subject_label=subject_label,
         subject_node_text=subject_text,
         completed_nodes_text=_render_completed_nodes(graph, state, run_state, completed),
         running_nodes_text=_render_running_nodes(running_names, graph),
         waiting_nodes_text=_render_waiting_nodes(graph, completed),
-        skipped_nodes_text=_render_status_nodes(graph, run_state, BgStatus.SKIPPED),
-        pending_nodes_text=_render_status_nodes(graph, run_state, BgStatus.PENDING),
+        skipped_nodes_text=_render_status_nodes(graph, run_state, WorkflowNodeStatus.SKIPPED),
+        pending_nodes_text=_render_status_nodes(graph, run_state, WorkflowNodeStatus.PENDING),
         action_hint=action_hint,
     )
-    report_progress(node_name, status, notification)
+    emit_workflow_progress(graph, run_state, node_name, status, notification)
 
 
-def push_llm_route_notification(llm_edge: Any, state: Any, graph: Any, task_id: str = "(current)") -> None:
+def push_llm_route_notification(
+    llm_edge: Any,
+    state: Any,
+    graph: Any,
+    run_state: GraphRunState,
+) -> None:
+    run_id, definition_id = _workflow_identity(graph, run_state)
     from_node_def = graph._nodes.get(llm_edge.from_node)
     from_node_desc = from_node_def.description if from_node_def else ""
     # Field/channel model: there is no per-node result slot, so surface a
@@ -486,6 +503,8 @@ def push_llm_route_notification(llm_edge: Any, state: Any, graph: Any, task_id: 
         target_desc = target_def.description if target_def else ""
         options.append(
             _FMT_LLM_ROUTE_OPTION.format(
+                run_id=run_id,
+                definition_id=definition_id,
                 target_node=target_node,
                 route_key=route_key,
                 target_desc=target_desc,
@@ -493,11 +512,12 @@ def push_llm_route_notification(llm_edge: Any, state: Any, graph: Any, task_id: 
             )
         )
     options_text = "\n".join(options) if options else "  (none)"
-    action_hint = _HINT_OPTIONAL if has_end else _HINT_REQUIRED
+    action_hint = (_HINT_OPTIONAL if has_end else _HINT_REQUIRED).format(run_id=run_id, definition_id=definition_id)
 
     notification = _FMT_LLM_ROUTE_NOTIFICATION.format(
         command=graph.command_name,
-        task_id=task_id,
+        run_id=run_id,
+        definition_id=definition_id,
         stage_summary=graph._build_stage_summary(),
         from_node=llm_edge.from_node,
         from_node_desc=from_node_desc,
@@ -506,7 +526,13 @@ def push_llm_route_notification(llm_edge: Any, state: Any, graph: Any, task_id: 
         options_text=options_text,
         action_hint=action_hint,
     )
-    report_progress(llm_edge.from_node, BgStatus.WAITING_FOR_ROUTE, notification)
+    emit_workflow_progress(
+        graph,
+        run_state,
+        llm_edge.from_node,
+        WorkflowNodeStatus.WAITING_FOR_ROUTE,
+        notification,
+    )
 
 
 def _render_stall_nodes(graph: Any, stalled_nodes: tuple[str, ...], completed: set) -> str:
@@ -544,7 +570,6 @@ def push_stall_notification(
     *,
     completed: set,
     run_state: Optional[GraphRunState] = None,
-    task_id: str = "(current)",
 ) -> None:
     """Push a decision notification when the frontier drains on a deadlocked join.
 
@@ -554,13 +579,21 @@ def push_stall_notification(
     model can resume/skip them directly.
     """
     run_state = GraphRunState.ensure(graph, state, run_state)
+    run_id, definition_id = _workflow_identity(graph, run_state)
     notification = _FMT_STALL_NOTIFICATION.format(
         command=graph.command_name,
-        task_id=task_id,
+        run_id=run_id,
+        definition_id=definition_id,
         stalled_nodes_text=_render_stall_nodes(graph, stalled_nodes, completed),
         completed_nodes_text=_render_completed_nodes(graph, state, run_state, completed),
-        skipped_nodes_text=_render_status_nodes(graph, run_state, BgStatus.SKIPPED),
-        pending_nodes_text=_render_status_nodes(graph, run_state, BgStatus.PENDING),
-        action_hint=_HINT_STALL,
+        skipped_nodes_text=_render_status_nodes(graph, run_state, WorkflowNodeStatus.SKIPPED),
+        pending_nodes_text=_render_status_nodes(graph, run_state, WorkflowNodeStatus.PENDING),
+        action_hint=_HINT_STALL.format(run_id=run_id, definition_id=definition_id),
     )
-    report_progress(END, BgStatus.STALLED, notification)
+    emit_workflow_progress(
+        graph,
+        run_state,
+        END,
+        WorkflowNodeStatus.STALLED,
+        notification,
+    )

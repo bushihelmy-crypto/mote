@@ -26,11 +26,24 @@ input contract is platform-agnostic by construction.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Protocol, runtime_checkable
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional, Protocol, runtime_checkable
+
+from mote.contracts.events.envelope import JsonValue
 
 if TYPE_CHECKING:  # avoid a runtime import cycle (view.events → common) — types only
-    from mote.contracts.interaction import AskUserQuestionAnswers, AskUserQuestionInput
-    from mote.product.presentation.events.events import ApprovalDecision, ApprovalRequested
+    from mote.contracts.interaction import ApprovalRequest, AskUserQuestionAnswers, AskUserQuestionInput
+    from mote.contracts.interaction.handoff import DriverHandoffHandle, HandoffRequest, HumanHandoffOutcome
+    from mote.contracts.surface import LiveSurfaceSession
+    from mote.product.presentation.events.events import ApprovalDecision
+
+
+@dataclass(frozen=True)
+class DriverControlBinding:
+    interrupt: Callable[[], object]
+    turn_running: Callable[[], bool]
+    steer: Callable[[str], object]
 
 
 @runtime_checkable
@@ -42,7 +55,24 @@ class InputPort(Protocol):
     request); ports stay agnostic to its shape.
     """
 
-    async def ask(self, ctx: Any, question: str) -> str:
+    def bind_driver_control(self, binding: DriverControlBinding) -> None: ...
+
+    async def start(self) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+    def take_turn_images(self) -> list[Mapping[str, JsonValue]]: ...
+
+    def request_exit(self) -> None: ...
+
+    async def open_handoff(
+        self,
+        request: "HandoffRequest",
+        handle: "DriverHandoffHandle",
+        surface: "LiveSurfaceSession | None" = None,
+    ) -> "HumanHandoffOutcome": ...
+
+    async def ask(self, ctx: object, question: str) -> str:
         """Route a free-text question to a human and return their answer.
 
         Pure free-text only. All option / multi-select logic lives in
@@ -50,7 +80,7 @@ class InputPort(Protocol):
         """
         ...
 
-    async def ask_questions(self, ctx: Any, questions: "AskUserQuestionInput") -> "AskUserQuestionAnswers":
+    async def ask_questions(self, ctx: object, questions: "AskUserQuestionInput") -> "AskUserQuestionAnswers":
         """Structured multiple-choice round-trip; mirrors ``decide_approval``.
 
         The structured sibling of ``ask``: the display side (``QuestionAsked``)
@@ -62,7 +92,7 @@ class InputPort(Protocol):
         """
         ...
 
-    async def decide_approval(self, ctx: Any, request: "ApprovalRequested") -> "ApprovalDecision":
+    async def decide_approval(self, ctx: object, request: "ApprovalRequest") -> "ApprovalDecision":
         """Route a gated action to a human and return their structured decision.
 
         The inbound counterpart of the ``ApprovalRequested`` ViewEvent: the display
@@ -73,11 +103,11 @@ class InputPort(Protocol):
         """
         ...
 
-    def signal_interrupt(self, ctx: Any) -> None:
+    def signal_interrupt(self, ctx: object) -> None:
         """Cancel the in-flight turn (Ctrl+C / explicit cancel)."""
         ...
 
-    def submit_steer(self, ctx: Any, text: str) -> None:
+    def submit_steer(self, ctx: object, text: str) -> None:
         """Queue *steering* input to fold into the **next** turn (§5.3).
 
         Turn-level steering, NOT a mid-turn interrupt: the text is captured now
@@ -101,6 +131,8 @@ class InteractivePort(InputPort, Protocol):
         """Return the next turn's input, or ``None`` when input is exhausted."""
         ...
 
+    def stage_restore(self, text: str) -> None: ...
+
 
 @runtime_checkable
 class BroadcastPort(InputPort, Protocol):
@@ -111,7 +143,7 @@ class BroadcastPort(InputPort, Protocol):
     being polled.
     """
 
-    def subscribe(self, on_message: Callable[[Any], Awaitable[None]]) -> None:
+    def subscribe(self, on_message: Callable[[object], Awaitable[None]]) -> None:
         """Register the callback invoked once per inbound message."""
         ...
 
@@ -125,9 +157,9 @@ class ProtocolPort(InputPort, Protocol):
     result. Semantically near broadcast (one request → one turn).
     """
 
-    def serve(self, on_request: Callable[[Any], Awaitable[Any]]) -> None:
+    def serve(self, on_request: Callable[[object], Awaitable[object]]) -> None:
         """Register the request handler the transport feeds decoded RPCs into."""
         ...
 
 
-__all__ = ["InputPort", "InteractivePort", "BroadcastPort", "ProtocolPort"]
+__all__ = ["DriverControlBinding", "InputPort", "InteractivePort", "BroadcastPort", "ProtocolPort"]

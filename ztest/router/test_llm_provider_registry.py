@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for mote.router.llm.llm_provider_registry (provider lookup + registration)."""
+
 from __future__ import annotations
 
 import pytest
 
+from mote.product.models.errors import ProviderNotFoundError
 from mote.product.models.registry import LLMProviderRegistry
-from mote.runtime.errors import ProviderNotFoundError
 
 
 class TestLLMProviderRegistry:

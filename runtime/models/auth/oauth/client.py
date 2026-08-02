@@ -5,6 +5,7 @@
 Synchronous on purpose: provider construction and Product-controlled refresh-slot
 activation are sync seams, and refreshes are infrequent.
 """
+
 from __future__ import annotations
 
 import os

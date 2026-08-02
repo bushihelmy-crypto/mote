@@ -1,286 +1,277 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""Tests for ResidencyStore — materialize/rehydrate evicted agents."""
+from __future__ import annotations
 
-import types
+import json
+from pathlib import Path
+from typing import Mapping
 
 import pytest
 
-from mote.contracts.conversation.messages import UserMessage
-from mote.contracts.conversation.queue import MessageQueue
+from mote.contracts.agent import ContextPolicy, SpawnContext
+from mote.contracts.content import ContentDigest
+from mote.contracts.conversation import Message, MessageQueue, UserMessage
+from mote.contracts.events.envelope import JsonValue, freeze_json, thaw_json
+from mote.contracts.runtime.errors import LeaseFencedError
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime
 from mote.orchestration.agents.messaging.mailbox import Mailbox
-from mote.orchestration.agents.residency.store import ResidencyRecord, ResidencyStore, _strip_history
-from mote.runtime.agent.base import BaseRole
+from mote.orchestration.agents.residency.model import ResidencyIdentity
+from mote.orchestration.agents.residency.store import ResidencyStore, ResidencyStoreError
+from mote.runtime.control.leases import InMemoryLeaseCoordinator
 from mote.runtime.session import SessionLog
 from mote.runtime.session.events import MessageEvent, SessionMetaEvent
 
+DIGEST = ContentDigest("a" * 64)
 
-class FakeRole:
-    """Duck-typed Role for store round-trips.
 
-    Mirrors the real RoleState shape closely enough to exercise history
-    stripping/refilling: ``state.context.messages`` is a real list.
-    """
-
-    def __init__(self, session_id="sess-1", payload=None, messages=None):
+class FakeResidentAgent:
+    def __init__(self, session_id: str, *, payload: str = "state") -> None:
         self._session_id = session_id
-        self.state = types.SimpleNamespace(
-            msg_buffer=MessageQueue(),
-            context=types.SimpleNamespace(messages=list(messages or [])),
-        )
-        self.payload = payload or {}
+        self.payload = payload
+        self.messages: list[Message] = []
+        self.state = type("State", (), {})()
+        self.state.msg_buffer = MessageQueue()
 
     @property
-    def session_id(self):
+    def session_id(self) -> str:
         return self._session_id
 
-    def dump(self):
-        return {
-            "session_id": self._session_id,
-            "payload": self.payload,
-            "state": {
-                "context": {"messages": [m.dump() for m in self.state.context.messages]},
-            },
-        }
+    @property
+    def residency_definition_id(self) -> str:
+        return "fake.agent.v1"
+
+    @property
+    def residency_config_digest(self) -> ContentDigest:
+        return DIGEST
+
+    def export_residency_state(self, *, session_history_is_durable: bool) -> Mapping[str, JsonValue]:
+        if not session_history_is_durable:
+            raise ValueError("fake requires durable Session history")
+        frozen = freeze_json({"payload": self.payload, "messages": []})
+        assert isinstance(frozen, Mapping)
+        return frozen
+
+    def restore_residency_message_buffer(self, snapshot: JsonValue) -> None:
+        self.state.msg_buffer = MessageQueue.load(json.dumps(thaw_json(snapshot)))
+
+    def restore_residency_history(self, messages: tuple[Message, ...], session_meta: Mapping[str, object]) -> None:
+        if session_meta["session_id"] != self.session_id:
+            raise ValueError("Session identity mismatch")
+        self.messages[:] = messages
+
+    async def run(self, with_message: Message | None = None):
+        return None
+
+    async def cleanup(self) -> None:
+        return None
+
+    def build_child_spawn_context(self, *, parent_id: str | None, agent_path: str) -> SpawnContext:
+        return SpawnContext(parent_id=parent_id, agent_path=agent_path)
+
+    def provision_spawned_child(self, child, policy: ContextPolicy) -> None:
+        return None
+
+    def provision_unparented_spawn(self, spawn_context: SpawnContext) -> None:
+        return None
+
+    def spawn_cost_attribution(self):
+        raise NotImplementedError
+
+    def bind_agent_control(self, control) -> None:
+        return None
 
 
-class ValidatingFakeRole(FakeRole, BaseRole):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.validated_meta = None
+class FakeFactory:
+    definition_id = "fake.agent.v1"
+    config_digest = DIGEST
 
-    def validate_resume_identity(self, meta):
-        self.validated_meta = dict(meta)
-
-
-def make_role_loader():
-    """A role_loader that rebuilds a FakeRole from its dump."""
-
-    def loader(role_dump):
-        state = role_dump.get("state", {})
-        context = state.get("context", {})
-        from mote.contracts.conversation import Message
-
-        messages = [Message.load(m) for m in context.get("messages", [])]
-        return FakeRole(
-            session_id=role_dump.get("session_id", "sess-1"),
-            payload=role_dump.get("payload", {}),
-            messages=[m for m in messages if m is not None],
-        )
-
-    return loader
+    def build(self, state: Mapping[str, JsonValue]) -> FakeResidentAgent:
+        if set(state) != {"payload", "messages"}:
+            raise ValueError("fake state fields are not canonical")
+        payload = state["payload"]
+        if type(payload) is not str:
+            raise ValueError("fake payload is invalid")
+        return FakeResidentAgent("agent-1", payload=payload)
 
 
-def seed_rollout(sessions_dir, session_id, contents):
-    """Create a rollout.jsonl with session_meta + the given message contents."""
-    log = SessionLog(session_id, base_dir=str(sessions_dir))
-    log.commit_offline(
-        SessionMetaEvent(
-            session_id=session_id,
-            role_class="FakeRole",
-            toolset_manifest=(),
-        )
+def _identity(*, root_agent_id: str = "root-1", incarnation_generation: int = 1) -> ResidencyIdentity:
+    return ResidencyIdentity(
+        logical_agent_id="agent-1",
+        root_agent_id=root_agent_id,
+        parent_agent_id="root-1",
+        agent_path="/root/worker",
+        nickname="worker",
+        definition_id="fake.agent.v1",
+        config_digest=DIGEST,
+        incarnation_generation=incarnation_generation,
     )
-    for text in contents:
-        log.commit_offline(MessageEvent(message=UserMessage(text)))
-    return log
 
 
-def test_record_json_round_trip():
-    rec = ResidencyRecord(
-        role_dump={"a": 1},
-        mailbox_dump=[{"m": 2}],
-        msg_buffer_dump="[]",
-    )
-    again = ResidencyRecord.from_json(rec.to_json())
-    assert again.role_dump == {"a": 1}
-    assert again.mailbox_dump == [{"m": 2}]
-    assert again.msg_buffer_dump == "[]"
+def _seed_session(path: Path, *, messages: tuple[str, ...] = ("durable",)) -> None:
+    log = SessionLog("agent-1", base_dir=str(path))
+    log.commit_offline(SessionMetaEvent("agent-1", "fake.agent.v1", ()))
+    for message in messages:
+        log.commit_offline(MessageEvent(message=UserMessage(message)))
 
 
-def test_record_from_json_tolerates_missing_keys():
-    rec = ResidencyRecord.from_json("{}")
-    assert rec.role_dump == {}
-    assert rec.mailbox_dump == []
-    assert rec.msg_buffer_dump == "[]"
-
-
-def test_has_and_read_missing(tmp_path):
-    store = ResidencyStore(base_dir=str(tmp_path), sessions_base_dir=str(tmp_path / "sessions"))
-    assert not store.has("nope")
-    assert store.read_record("nope") is None
-    assert store.rehydrate("nope", role_loader=make_role_loader()) is None
-
-
-@pytest.mark.asyncio
-async def test_materialize_writes_record(tmp_path):
-    store = ResidencyStore(base_dir=str(tmp_path), sessions_base_dir=str(tmp_path / "sessions"))
-    role = FakeRole(session_id="abc", payload={"k": "v"})
-    role.state.msg_buffer.push(UserMessage("buffered"))
-    mailbox = Mailbox()
-    mailbox.enqueue(UserMessage("mail"))
-    rt = AgentRuntime(role, mailbox)
-
-    rec = await store.materialize(rt)
-    assert store.has("abc")
-    # No rollout for this session, so history is not stripped.
-    assert rec.role_dump["session_id"] == "abc"
-    assert rec.role_dump["payload"] == {"k": "v"}
-    assert rec.mailbox_dump  # non-empty
-    assert "buffered" in rec.msg_buffer_dump
-
-    read_back = store.read_record("abc")
-    assert read_back.role_dump == rec.role_dump
-
-
-@pytest.mark.asyncio
-async def test_rehydrate_restores_buffer_and_mailbox(tmp_path):
-    store = ResidencyStore(base_dir=str(tmp_path), sessions_base_dir=str(tmp_path / "sessions"))
-    role = FakeRole(session_id="abc", payload={"k": "v"})
-    role.state.msg_buffer.push(UserMessage("buffered"))
-    mailbox = Mailbox()
-    mailbox.enqueue(UserMessage("mail"))
-    rt = AgentRuntime(role, mailbox)
-    await store.materialize(rt)
-
-    restored = store.rehydrate("abc", role_loader=make_role_loader())
-    assert isinstance(restored, AgentRuntime)
-    assert restored.session_id == "abc"
-    assert restored.role.payload == {"k": "v"}
-    # msg_buffer restored (excluded from RoleState serialization)
-    assert not restored.msg_buffer.empty()
-    buffered = restored.msg_buffer.pop()
-    assert buffered.content == "buffered"
-    # mailbox restored
-    assert not restored.mailbox.empty()
-
-
-@pytest.mark.asyncio
-async def test_forget_deletes_record(tmp_path):
-    store = ResidencyStore(base_dir=str(tmp_path), sessions_base_dir=str(tmp_path / "sessions"))
-    role = FakeRole(session_id="abc")
-    rt = AgentRuntime(role)
-    await store.materialize(rt)
-    assert store.has("abc")
-    store.forget("abc")
-    assert not store.has("abc")
-    store.forget("abc")  # idempotent / safe on missing
-
-
-@pytest.mark.asyncio
-async def test_materialize_empty_buffer_and_mailbox(tmp_path):
-    store = ResidencyStore(base_dir=str(tmp_path), sessions_base_dir=str(tmp_path / "sessions"))
-    rt = AgentRuntime(FakeRole(session_id="empty"))
-    rec = await store.materialize(rt)
-    assert rec.msg_buffer_dump == "[]"
-    assert rec.mailbox_dump == []
-    restored = store.rehydrate("empty", role_loader=make_role_loader())
-    assert restored.msg_buffer.empty()
-    assert restored.mailbox.empty()
-
-
-# ---------------------------------------------------------------------------
-# History stripping + rollout-backed refill
-# ---------------------------------------------------------------------------
-
-
-def test_strip_history_clears_messages():
-    dump = {"state": {"context": {"messages": [{"a": 1}, {"b": 2}]}}, "other": "kept"}
-    stripped = _strip_history(dump)
-    assert stripped["state"]["context"]["messages"] == []
-    assert stripped["other"] == "kept"
-    # original is not mutated
-    assert dump["state"]["context"]["messages"] == [{"a": 1}, {"b": 2}]
-
-
-def test_strip_history_tolerates_missing_shape():
-    assert _strip_history({}) == {}
-    assert _strip_history({"state": "nope"}) == {"state": "nope"}
-    assert _strip_history({"state": {"context": {}}}) == {"state": {"context": {}}}
-
-
-@pytest.mark.asyncio
-async def test_materialize_strips_history_when_rollout_exists(tmp_path):
-    sessions = tmp_path / "sessions"
-    store = ResidencyStore(base_dir=str(tmp_path / "residency"), sessions_base_dir=str(sessions))
-    seed_rollout(sessions, "sid", ["hello", "world"])
-
-    role = FakeRole(session_id="sid", messages=[UserMessage("hello"), UserMessage("world")])
-    rec = await store.materialize(AgentRuntime(role))
-
-    # History dropped from the record — the rollout owns it.
-    assert rec.role_dump["state"]["context"]["messages"] == []
-
-
-@pytest.mark.asyncio
-async def test_rehydrate_refills_history_from_rollout(tmp_path):
-    sessions = tmp_path / "sessions"
-    store = ResidencyStore(base_dir=str(tmp_path / "residency"), sessions_base_dir=str(sessions))
-    seed_rollout(sessions, "sid", ["first", "second", "third"])
-
-    role = FakeRole(session_id="sid", messages=[UserMessage("first"), UserMessage("second"), UserMessage("third")])
-    await store.materialize(AgentRuntime(role))
-
-    restored = store.rehydrate("sid", role_loader=make_role_loader())
-    contents = [m.content for m in restored.role.state.context.messages]
-    assert contents == ["first", "second", "third"]
-
-
-@pytest.mark.asyncio
-async def test_rehydrate_validates_identity_before_refilling_history(tmp_path):
-    sessions = tmp_path / "sessions"
+def _components(tmp_path: Path):
+    now = [1.0]
+    coordinator = InMemoryLeaseCoordinator(clock=lambda: now[0])
     store = ResidencyStore(
-        base_dir=str(tmp_path / "residency"),
-        sessions_base_dir=str(sessions),
+        str(tmp_path / "residency"),
+        sessions_base_dir=str(tmp_path / "sessions"),
+        lease_coordinator=coordinator,
     )
-    seed_rollout(sessions, "sid", ["durable"])
-    await store.materialize(AgentRuntime(ValidatingFakeRole(session_id="sid")))
-
-    def loader(_role_dump):
-        return ValidatingFakeRole(session_id="sid")
-
-    restored = store.rehydrate("sid", role_loader=loader)
-
-    assert restored.role.validated_meta["session_id"] == "sid"
-    assert [message.content for message in restored.role.state.context.messages] == ["durable"]
+    lease = coordinator.acquire("agent-residency:agent-1", "owner-1", 30)
+    return now, coordinator, store, lease
 
 
 @pytest.mark.asyncio
-async def test_rehydrate_no_rollout_keeps_loaded_history(tmp_path):
-    """With no rollout, history isn't stripped and replay refill is a no-op."""
-    sessions = tmp_path / "sessions"
-    store = ResidencyStore(base_dir=str(tmp_path / "residency"), sessions_base_dir=str(sessions))
+async def test_materialize_and_trusted_factory_rehydrate_round_trip(tmp_path: Path) -> None:
+    _seed_session(tmp_path / "sessions")
+    _, _, store, lease = _components(tmp_path)
+    agent = FakeResidentAgent("agent-1", payload="kept")
+    agent.state.msg_buffer.push(UserMessage("buffered"))
+    mailbox = Mailbox("agent-1")
+    mailbox.enqueue(UserMessage("mail"))
+    record = await store.materialize(AgentRuntime(agent, mailbox), identity=_identity(), lease=lease)
+    assert record.source_session_revision == 2
+    assert record.record_revision == 1
+    restored = store.rehydrate(_identity(), factory=FakeFactory(), lease=lease)
+    assert restored is not None
+    restored_agent, restored_mailbox = restored.agent, restored.mailbox
+    assert isinstance(restored_agent, FakeResidentAgent)
+    assert restored_agent.payload == "kept"
+    assert [message.content for message in restored_agent.messages] == ["durable"]
+    assert not restored_agent.state.msg_buffer.empty()
+    assert not restored_mailbox.empty()
 
-    role = FakeRole(session_id="sid", messages=[UserMessage("kept")])
-    await store.materialize(AgentRuntime(role))
 
-    restored = store.rehydrate("sid", role_loader=make_role_loader())
-    contents = [m.content for m in restored.role.state.context.messages]
-    assert contents == ["kept"]
+def test_missing_record_is_not_confused_with_corruption(tmp_path: Path) -> None:
+    _, _, store, lease = _components(tmp_path)
+    assert store.read_record("agent-1") is None
+    assert store.rehydrate(_identity(), factory=FakeFactory(), lease=lease) is None
 
 
 @pytest.mark.asyncio
-async def test_rehydrate_refill_uses_model_context_projection(tmp_path):
-    from mote.runtime.session.events import ContextCompactedFact
-    from mote.runtime.session.replay import replay
+async def test_materialize_requires_committed_session_truth(tmp_path: Path) -> None:
+    _, _, store, lease = _components(tmp_path)
+    with pytest.raises(ResidencyStoreError, match="Session stream"):
+        await store.materialize(AgentRuntime(FakeResidentAgent("agent-1")), identity=_identity(), lease=lease)
 
-    sessions = tmp_path / "sessions"
-    store = ResidencyStore(base_dir=str(tmp_path / "residency"), sessions_base_dir=str(sessions))
-    log = seed_rollout(sessions, "sid", ["pre1", "pre2"])
-    source_ids = [str(message.id) for message in replay(log).transcript_messages]
-    await log.append(
-        ContextCompactedFact(
-            model_context_messages=[UserMessage("summary")],
-            source_message_ids=source_ids,
-            summary="s",
+
+@pytest.mark.asyncio
+async def test_record_revision_advances_and_forget_is_revision_fenced(tmp_path: Path) -> None:
+    _seed_session(tmp_path / "sessions")
+    _, _, store, lease = _components(tmp_path)
+    runtime = AgentRuntime(FakeResidentAgent("agent-1"))
+    first = await store.materialize(runtime, identity=_identity(), lease=lease)
+    second = await store.materialize(runtime, identity=_identity(), lease=lease)
+    assert (first.record_revision, second.record_revision) == (1, 2)
+    claimed = store.rehydrate(_identity(), factory=FakeFactory(), lease=lease)
+    assert claimed is not None
+    with pytest.raises(ResidencyStoreError, match="revision conflict"):
+        store.forget("agent-1", expected_record_revision=1, lease=lease)
+    assert store.forget("agent-1", expected_record_revision=claimed.install_record_revision, lease=lease)
+    assert not store.has("agent-1")
+
+
+@pytest.mark.asyncio
+async def test_identity_definition_and_config_mismatch_fail_closed(tmp_path: Path) -> None:
+    _seed_session(tmp_path / "sessions")
+    _, _, store, lease = _components(tmp_path)
+    await store.materialize(AgentRuntime(FakeResidentAgent("agent-1")), identity=_identity(), lease=lease)
+    for identity in (
+        _identity(root_agent_id="other-root"),
+        _identity(incarnation_generation=2),
+    ):
+        with pytest.raises(ResidencyStoreError, match="trusted composition"):
+            store.rehydrate(identity, factory=FakeFactory(), lease=lease)
+
+    wrong_factory = FakeFactory()
+    wrong_factory.definition_id = "attacker.agent"
+    with pytest.raises(ResidencyStoreError, match="definition identity"):
+        store.rehydrate(_identity(), factory=wrong_factory, lease=lease)
+
+
+@pytest.mark.asyncio
+async def test_misplaced_record_and_restored_session_mismatch_preserve_evidence(
+    tmp_path: Path,
+) -> None:
+    _seed_session(tmp_path / "sessions")
+    _, _, store, lease = _components(tmp_path)
+    await store.materialize(AgentRuntime(FakeResidentAgent("agent-1")), identity=_identity(), lease=lease)
+    path = tmp_path / "residency" / "agent-1.json"
+    evidence = path.read_bytes()
+
+    misplaced = tmp_path / "residency" / "agent-2.json"
+    misplaced.write_bytes(evidence)
+    with pytest.raises(ResidencyStoreError, match="invalid"):
+        store.read_record("agent-2")
+    assert misplaced.read_bytes() == evidence
+
+    class WrongSessionFactory(FakeFactory):
+        def build(self, state: Mapping[str, JsonValue]) -> FakeResidentAgent:
+            restored = super().build(state)
+            restored._session_id = "agent-2"
+            return restored
+
+    with pytest.raises(ResidencyStoreError, match="logical identity"):
+        store.rehydrate(_identity(), factory=WrongSessionFactory(), lease=lease)
+    assert path.read_bytes() == evidence
+
+
+@pytest.mark.asyncio
+async def test_stale_install_claim_cannot_delete_successor_claim(tmp_path: Path) -> None:
+    _seed_session(tmp_path / "sessions")
+    now, coordinator, store, first_lease = _components(tmp_path)
+    await store.materialize(AgentRuntime(FakeResidentAgent("agent-1")), identity=_identity(), lease=first_lease)
+    first = store.rehydrate(_identity(), factory=FakeFactory(), lease=first_lease)
+    assert first is not None
+
+    now[0] = 40.0
+    second_lease = coordinator.acquire("agent-residency:agent-1", "owner-2", 30)
+    second = store.rehydrate(_identity(), factory=FakeFactory(), lease=second_lease)
+    assert second is not None
+    with pytest.raises(LeaseFencedError):
+        store.forget(
+            "agent-1",
+            expected_record_revision=first.install_record_revision,
+            lease=first_lease,
         )
+    assert store.forget(
+        "agent-1",
+        expected_record_revision=second.install_record_revision,
+        lease=second_lease,
     )
-    await log.append(MessageEvent(message=UserMessage("after")))
 
-    role = FakeRole(session_id="sid")
-    await store.materialize(AgentRuntime(role))
 
-    restored = store.rehydrate("sid", role_loader=make_role_loader())
-    contents = [m.content for m in restored.role.state.context.messages]
-    assert contents == ["summary", "after"]
+@pytest.mark.asyncio
+async def test_corruption_and_disk_selected_class_do_not_activate(tmp_path: Path) -> None:
+    _seed_session(tmp_path / "sessions")
+    _, _, store, lease = _components(tmp_path)
+    await store.materialize(AgentRuntime(FakeResidentAgent("agent-1")), identity=_identity(), lease=lease)
+    path = tmp_path / "residency" / "agent-1.json"
+    original = path.read_bytes()
+    path.write_bytes(b"{torn")
+    with pytest.raises(ResidencyStoreError, match="invalid"):
+        store.rehydrate(_identity(), factory=FakeFactory(), lease=lease)
+    path.write_bytes(original)
+    raw = json.loads(original)
+    raw["state_snapshot"]["backend_class"] = "attacker.Agent"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="state fields"):
+        store.rehydrate(_identity(), factory=FakeFactory(), lease=lease)
+
+
+@pytest.mark.asyncio
+async def test_stale_fence_cannot_materialize_rehydrate_or_forget(tmp_path: Path) -> None:
+    _seed_session(tmp_path / "sessions")
+    now, coordinator, store, stale = _components(tmp_path)
+    await store.materialize(AgentRuntime(FakeResidentAgent("agent-1")), identity=_identity(), lease=stale)
+    record = store.read_record("agent-1")
+    assert record is not None
+    now[0] = 40.0
+    coordinator.acquire("agent-residency:agent-1", "owner-2", 30)
+    with pytest.raises(LeaseFencedError):
+        store.rehydrate(_identity(), factory=FakeFactory(), lease=stale)
+    with pytest.raises(LeaseFencedError):
+        store.forget("agent-1", expected_record_revision=record.record_revision, lease=stale)

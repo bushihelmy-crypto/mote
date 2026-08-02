@@ -22,7 +22,7 @@ from mote.runtime.events.dispatcher import SubscriptionBinding, SubscriptionMani
 from mote.runtime.events.fabric import EventFabric, EventFabricReadOnly, EventFabricUnavailable
 from mote.runtime.events.health import FabricHealth, FabricHealthState, FabricState
 from mote.runtime.events.journal import LocalEventJournal
-from mote.runtime.events.telemetry import TelemetryBinding, TelemetryManifest, TelemetryRuntime
+from mote.runtime.events.telemetry import AllTelemetryBinding, TelemetryManifest, TelemetryRuntime
 
 _STREAM = StreamId("session/test")
 _SUBSCRIPTION = SubscriptionIdentity("mote.test.projection")
@@ -243,7 +243,7 @@ async def test_telemetry_failure_degrades_health_without_blocking_writes(
     telemetry = TelemetryRuntime(
         TelemetryManifest(
             (
-                TelemetryBinding(
+                AllTelemetryBinding(
                     TelemetrySubscriptionSpec(
                         identity=TelemetryIdentity("mote.test.health_telemetry"),
                         capacity=4,

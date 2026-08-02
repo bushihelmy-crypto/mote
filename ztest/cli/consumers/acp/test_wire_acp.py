@@ -12,8 +12,15 @@ diff round-trip, and the permission option vocabulary.
 
 from __future__ import annotations
 
+from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity
 from mote.product.interfaces.acp import wire as acp
 from mote.product.presentation.events import events as ev
+
+
+def _identity(value: str) -> ToolInvocationIdentity:
+    return ToolInvocationIdentity(
+        ToolInvocationId(value), ToolAttemptOrdinal(1), "definition", 1, "digest", "owner", "run"
+    )
 
 
 def _state() -> acp.AcpWireState:
@@ -53,7 +60,7 @@ def test_reasoning_delta_maps_to_thought_chunk():
 # ── tool calls: kind + status ────────────────────────────────────────────────
 def test_tool_started_announces_full_call_with_kind():
     st = _state()
-    out = acp.to_acp_updates(ev.ToolCallStarted(tool_name="Bash", headline="ls -la", tool_use_id="tc-1"), st)
+    out = acp.to_acp_updates(ev.ToolCallStarted(identity=_identity("tc-1"), tool_name="Bash", headline="ls -la"), st)
     call = out[0]
     assert call["sessionUpdate"] == acp.TOOL_CALL
     assert call["toolCallId"] == "tc-1"
@@ -66,8 +73,8 @@ def test_tool_started_announces_full_call_with_kind():
 
 def test_tool_completed_after_start_is_partial_update():
     st = _state()
-    acp.to_acp_updates(ev.ToolCallStarted(tool_name="Read", tool_use_id="tc-2"), st)
-    out = acp.to_acp_updates(ev.ToolCallCompleted(ok=True, summary="read 10 lines", tool_use_id="tc-2"), st)
+    acp.to_acp_updates(ev.ToolCallStarted(identity=_identity("tc-2"), tool_name="Read"), st)
+    out = acp.to_acp_updates(ev.ToolCallCompleted(identity=_identity("tc-2"), ok=True, summary="read 10 lines"), st)
     upd = out[0]
     assert upd["sessionUpdate"] == acp.TOOL_CALL_UPDATE  # start seen → partial
     assert upd["toolCallId"] == "tc-2"
@@ -77,7 +84,7 @@ def test_tool_completed_after_start_is_partial_update():
 
 def test_tool_completed_without_start_is_promoted_to_full_call():
     st = _state()
-    out = acp.to_acp_updates(ev.ToolCallCompleted(ok=False, summary="boom", tool_use_id="tc-3"), st)
+    out = acp.to_acp_updates(ev.ToolCallCompleted(identity=_identity("tc-3"), ok=False, summary="boom"), st)
     upd = out[0]
     # never announced → promote to a full tool_call so the editor learns kind/title
     assert upd["sessionUpdate"] == acp.TOOL_CALL
@@ -96,7 +103,7 @@ def test_tool_kind_classification_defaults_to_other():
 # ── file diff: locations + create/delete conventions ─────────────────────────
 def test_file_diff_carries_diff_block_and_locations():
     st = _state()
-    out = acp.to_acp_updates(ev.FileDiffBlock(path="a.py", old="x", new="y", tool_use_id="tc-e"), st)
+    out = acp.to_acp_updates(ev.FileDiffBlock(identity=_identity("tc-e"), path="a.py", old="x", new="y"), st)
     upd = out[0]
     diff = upd["content"][0]
     assert diff["type"] == "diff"
@@ -108,7 +115,7 @@ def test_file_diff_carries_diff_block_and_locations():
 
 def test_file_diff_creation_has_null_old_text():
     st = _state()
-    out = acp.to_acp_updates(ev.FileDiffBlock(path="new.py", old="", new="created", tool_use_id="tc-c"), st)
+    out = acp.to_acp_updates(ev.FileDiffBlock(identity=_identity("tc-c"), path="new.py", old="", new="created"), st)
     # empty old → creation → oldText null per ACP convention
     assert out[0]["content"][0]["oldText"] is None
     assert out[0]["content"][0]["newText"] == "created"
@@ -116,7 +123,7 @@ def test_file_diff_creation_has_null_old_text():
 
 def test_file_diff_before_tool_start_announces_edit_call():
     st = _state()
-    out = acp.to_acp_updates(ev.FileDiffBlock(path="z.py", old="a", new="b", tool_use_id="tc-z"), st)
+    out = acp.to_acp_updates(ev.FileDiffBlock(identity=_identity("tc-z"), path="z.py", old="a", new="b"), st)
     # no prior tool_call for tc-z → announce a minimal edit call
     assert out[0]["sessionUpdate"] == acp.TOOL_CALL
     assert out[0]["kind"] == acp.TOOL_KIND_EDIT

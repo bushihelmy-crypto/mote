@@ -4,13 +4,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from mote.product.inference.backends.sqlite import ReceiptConflictError, SQLiteAttemptReceiptStore, SQLiteUsageLedger
+from mote.runtime.clock import SystemClock
 
 
 def test_usage_reserve_settle_release_are_idempotent_and_budgeted(tmp_path):
     async def scenario():
         authority = SQLiteAttemptReceiptStore(tmp_path / "gateway.sqlite3")
         await authority.initialize()
-        ledger = SQLiteUsageLedger(authority)
+        ledger = SQLiteUsageLedger(authority, clock_source=SystemClock())
         await ledger.configure_budget("tenant", "project", 100)
         first = await ledger.reserve(
             reservation_id="r1",
@@ -62,7 +63,7 @@ def test_usage_reconciliation_requires_higher_fence_and_expiry_reclaims_only_res
     async def scenario():
         authority = SQLiteAttemptReceiptStore(tmp_path / "gateway.sqlite3")
         await authority.initialize()
-        ledger = SQLiteUsageLedger(authority)
+        ledger = SQLiteUsageLedger(authority, clock_source=SystemClock())
         await ledger.configure_budget("tenant", "project", 100)
         pending = await ledger.reserve(
             reservation_id="pending",

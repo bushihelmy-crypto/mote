@@ -4,7 +4,7 @@ The background graph engine runs a langgraph-style forward frontier. These are
 terminal failures of a graph run — a conditional-edge router blew up or returned
 an unknown key, the activation budget was exhausted, or one/more nodes failed at
 the terminal step. They are named with a ``Graph`` prefix to disambiguate from
-the model-routing :class:`~mote.runtime.errors.router.RouterError`.
+the model-routing error family.
 """
 
 from __future__ import annotations

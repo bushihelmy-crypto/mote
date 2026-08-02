@@ -8,8 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic import BaseModel
-
+from mote.contracts.config.base import ConfigModel
 from mote.contracts.conversation.constants import AUTOCOMPACT_BUFFER_TOKENS as _AUTOCOMPACT_BUFFER_TOKENS
 from mote.contracts.conversation.constants import AUTOCOMPACT_KEEP_TAIL_MESSAGES as _AUTOCOMPACT_KEEP_TAIL_MESSAGES
 from mote.contracts.conversation.constants import AUTOCOMPACT_KEEP_TAIL_TOKENS as _AUTOCOMPACT_KEEP_TAIL_TOKENS
@@ -28,7 +27,7 @@ from mote.contracts.conversation.constants import MICROCOMPACT_TRIGGER_THRESHOLD
 # ---------------------------------------------------------------------------
 
 
-class ContextManagerConfig(BaseModel):
+class ContextManagerConfig(ConfigModel):
     """Tunable knobs for the context manager's own scopes (history + request).
 
     The tool-execution scope (per-tool result caps + disk persistence) is NOT

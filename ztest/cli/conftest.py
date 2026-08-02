@@ -38,6 +38,7 @@ from mote.contracts.events.tool import (
     ToolCallFinishedEvent,
     ToolInvocationStartedEvent,
 )
+from mote.contracts.task.progress import ProgressPhase
 from mote.product.presentation.consumer import BaseConsumer
 from mote.product.presentation.events import Capabilities
 
@@ -80,9 +81,9 @@ def ev_tool_started(
     tool_use_id: str = "tu-1",
 ) -> ToolInvocationStartedEvent:
     return ToolInvocationStartedEvent(
+        identity=_tool_identity(tool_use_id),
         tool_name=tool_name,
         tool_input=tool_input or {},
-        tool_use_id=tool_use_id,
     )
 
 
@@ -109,9 +110,9 @@ def ev_post_tool(
     whose code/type/retryable/recovery the projector reads onto the completion.
     """
     return ToolCallFinishedEvent(
+        identity=_tool_identity(tool_use_id),
         tool_name=tool_name,
         tool_response=tool_response,
-        tool_use_id=tool_use_id,
         tool_input=tool_input or {},
         outcome="succeeded" if success else "failed",
         media=media or [],
@@ -121,8 +122,28 @@ def ev_post_tool(
     )
 
 
+def _tool_identity(value: str):
+    from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity
+
+    return ToolInvocationIdentity(
+        ToolInvocationId(value),
+        ToolAttemptOrdinal(1),
+        "test-definition",
+        1,
+        "test-arguments-digest",
+        "test-owner",
+        "test-run",
+    )
+
+
 def ev_progress(stage: str = "", status: str = "", detail: str = "") -> TaskProgressEvent:
-    return TaskProgressEvent(stage=stage, status=status, detail=detail)
+    return TaskProgressEvent.activity(
+        run_id="test-run",
+        definition_id="test-definition",
+        stage=stage or "progress",
+        phase=ProgressPhase(status or "running"),
+        detail=detail or None,
+    )
 
 
 def ev_budget(spend: float = 0.0, limit: float = 0.0, fraction: float = 0.0, stopped: bool = False) -> BudgetEvent:

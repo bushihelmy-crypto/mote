@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for deterministic transcript and model-context session projections."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -324,10 +325,10 @@ def test_turn_context_ignored(tmp_path):
     assert [m.content for m in result.model_context_messages] == ["hi"]
 
 
-def test_runtime_checkpoint_is_last_write_wins_per_readable_runtime(tmp_path):
+def test_runtime_checkpoint_advances_one_stable_runtime_identity(tmp_path):
     log = _fresh_log(tmp_path)
     first = RuntimeCheckpoint(
-        runtime_id="terminal-old",
+        runtime_id="terminal-stable",
         kind="terminal",
         epoch=1,
         revision=1,
@@ -337,7 +338,7 @@ def test_runtime_checkpoint_is_last_write_wins_per_readable_runtime(tmp_path):
         fidelity=CheckpointFidelity.LOGICAL,
     )
     latest = RuntimeCheckpoint(
-        runtime_id="terminal-new",
+        runtime_id="terminal-stable",
         kind="terminal",
         epoch=2,
         revision=3,
@@ -367,6 +368,60 @@ def test_runtime_checkpoint_is_last_write_wins_per_readable_runtime(tmp_path):
         "terminal:default": latest,
         "terminal:secondary": secondary,
     }
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    (
+        RuntimeCheckpoint(
+            runtime_id="replacement",
+            kind="terminal",
+            epoch=2,
+            revision=3,
+            codec="terminal@1",
+            schema_version=1,
+            payload_ref="memory:replacement",
+            fidelity=CheckpointFidelity.LOGICAL,
+        ),
+        RuntimeCheckpoint(
+            runtime_id="terminal-stable",
+            kind="terminal",
+            epoch=1,
+            revision=0,
+            codec="terminal@1",
+            schema_version=1,
+            payload_ref="memory:regressed",
+            fidelity=CheckpointFidelity.LOGICAL,
+        ),
+        RuntimeCheckpoint(
+            runtime_id="terminal-stable",
+            kind="terminal",
+            epoch=1,
+            revision=1,
+            codec="terminal@1",
+            schema_version=1,
+            payload_ref="memory:forked",
+            fidelity=CheckpointFidelity.LOGICAL,
+        ),
+    ),
+)
+def test_runtime_checkpoint_rejects_identity_replacement_regression_and_fork(tmp_path, candidate):
+    log = _fresh_log(tmp_path)
+    first = RuntimeCheckpoint(
+        runtime_id="terminal-stable",
+        kind="terminal",
+        epoch=1,
+        revision=1,
+        codec="terminal@1",
+        schema_version=1,
+        payload_ref="memory:first",
+        fidelity=CheckpointFidelity.LOGICAL,
+    )
+    log.commit_offline(RuntimeCheckpointEvent(first, reason="write-commit"))
+    log.commit_offline(RuntimeCheckpointEvent(candidate, reason="write-commit"))
+
+    with pytest.raises(ValueError, match="identity|regressed|conflicting"):
+        replay(log)
 
 
 def test_runtime_commit_replays_only_unacknowledged_projection_work(tmp_path):

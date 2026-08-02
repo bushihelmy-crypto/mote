@@ -27,7 +27,8 @@ from mote.contracts.surface import (
     SurfaceInput,
     SurfacePresentationMode,
 )
-from mote.runtime.interactive import HandoffCoordinator, RuntimeHost
+from mote.runtime.interactive.handoff import HandoffCoordinator
+from mote.runtime.interactive.host import RuntimeHost
 from mote.runtime.interactive.terminal.driver import TerminalRuntimeDriver
 from mote.runtime.session import SessionLog, SessionMetaEvent
 from mote.runtime.session.replay import replay

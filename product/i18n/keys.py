@@ -11,9 +11,10 @@ constants — makes a missing translation a *test failure* (completeness test),
 not a silent runtime ``⟦key⟧``.
 
 Scope note: only the human display layer is localised. Model-facing text (prompt
-builders, tool output, ``<system-reminder>``, ``common/text/*``) stays English
+builders, tool output, and ``<system-reminder>`` content) stays English
 and is deliberately absent here.
 """
+
 from __future__ import annotations
 
 from typing import Final, Tuple

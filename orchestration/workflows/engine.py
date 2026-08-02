@@ -21,10 +21,12 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import TypeAdapter, ValidationError
 
+from mote.contracts.foundation.errors.codes import RecoveryAction
 from mote.contracts.model.turn import FinalCandidateAction
 from mote.contracts.output import RunKind
 from mote.contracts.task.graph_errors import (
     GraphBatchFailureError,
+    GraphError,
     GraphNodeRetryExhaustedError,
     GraphNodeTimeoutError,
     GraphParamTypeError,
@@ -33,8 +35,8 @@ from mote.contracts.task.graph_errors import (
 )
 from mote.orchestration.workflows.channels import apply_updates
 from mote.orchestration.workflows.control import PauseReason
-from mote.orchestration.workflows.deferred import BgTaskResult, GraphMeta
-from mote.orchestration.workflows.events import report_progress
+from mote.orchestration.workflows.deferred import WorkflowDeferredResult, WorkflowRunMetadata
+from mote.orchestration.workflows.events import commit_workflow_checkpoint, emit_workflow_progress
 from mote.orchestration.workflows.notify import (
     _MSG_RESUMING,
     _MSG_RETRYING,
@@ -45,9 +47,9 @@ from mote.orchestration.workflows.notify import (
     push_started_notification,
     push_terminal_notification,
 )
-from mote.orchestration.workflows.types import END, BgStatus, GraphPause, GraphRunState, GraphState, Stage
-from mote.runtime.errors import GraphError, RecoveryAction, RecoveryRunner
+from mote.orchestration.workflows.types import END, GraphPause, GraphRunState, GraphState, Stage, WorkflowNodeStatus
 from mote.runtime.events.scope import ScopeRef, push_scope
+from mote.runtime.resilience.recovery import RecoveryRunner
 
 if TYPE_CHECKING:
     from mote.orchestration.workflows.graph import WorkflowBuilder
@@ -176,9 +178,16 @@ async def _run_one_node_body(
     node_def: Any,
 ) -> None:
     """The actual node execution, run inside the pushed ``node`` scope."""
-    if run_state is not None:
-        run_state.mark_running(node_name)
-    report_progress(node_name, BgStatus.RUNNING, node_def.description or None)
+    if run_state is None:
+        raise RuntimeError("workflow node execution requires GraphRunState")
+    run_state.mark_running(node_name)
+    emit_workflow_progress(
+        graph,
+        run_state,
+        node_name,
+        WorkflowNodeStatus.RUNNING,
+        node_def.description or None,
+    )
 
     attempts = 0
 
@@ -198,9 +207,11 @@ async def _run_one_node_body(
     async def _retry(exc: BaseException) -> bool:
         # Reached only when the runner classifies ``exc`` as RETRY. ``attempts``
         # already counts the failed attempt, so it is the 1-based retry number.
-        report_progress(
+        emit_workflow_progress(
+            graph,
+            run_state,
             node_name,
-            BgStatus.RUNNING,
+            WorkflowNodeStatus.RUNNING,
             _MSG_RETRYING.format(
                 attempt=attempts,
                 auto_retries=_AUTO_RETRIES,
@@ -218,7 +229,12 @@ async def _run_one_node_body(
     except asyncio.CancelledError:
         if run_state is not None:
             run_state.mark_cancelled(node_name)
-        report_progress(node_name, BgStatus.CANCELLED)
+        emit_workflow_progress(
+            graph,
+            run_state,
+            node_name,
+            WorkflowNodeStatus.CANCELLED,
+        )
         raise
     except GraphNodeTimeoutError as e:
         # Retry budget exhausted on a timeout — wrap as terminal.
@@ -337,7 +353,7 @@ async def _commit_finish_result(graph: "WorkflowBuilder", result: Any, run_state
         return result
     engine = graph.output_engine_factory(
         graph.output_contract,
-        run_id=run_state.run_id,
+        run_id=run_state.activity_execution_id,
         run_kind=RunKind.GRAPH,
     )
     evaluation = await engine.evaluate(FinalCandidateAction(raw=result, representation="run_graph"))
@@ -431,9 +447,8 @@ async def _run_driver(
             seeded into the frontier without re-executing them (resume_skip).
         completed: pre-seeded completed set (resume).
         trigger_count: pre-seeded AND-join arrivals (resume).
-        run_state: authoritative per-node records; created for this graph if
-            ``None``. Carried out on the pause result / failure exception so the
-            pool can snapshot it onto ``TaskMeta`` for resume.
+        run_state: authoritative per-node records; created for this run if
+            ``None`` and committed through the Workflow checkpoint path.
     """
     completed = completed if completed is not None else set()
     trigger_count = trigger_count if trigger_count is not None else defaultdict(set)
@@ -446,7 +461,7 @@ async def _run_driver(
     activations = 0
 
     if push_start:
-        push_started_notification(graph)
+        push_started_notification(graph, run_state)
 
     def spawn(node: str) -> None:
         nonlocal activations
@@ -485,7 +500,7 @@ async def _run_driver(
                     all_errors.append((n, exc))
                     push_node_notification(
                         n,
-                        BgStatus.FAILED,
+                        WorkflowNodeStatus.FAILED,
                         state,
                         graph,
                         completed=completed,
@@ -496,7 +511,7 @@ async def _run_driver(
                     continue
                 push_node_notification(
                     n,
-                    BgStatus.SUCCESS,
+                    WorkflowNodeStatus.SUCCESS,
                     state,
                     graph,
                     completed=completed,
@@ -510,9 +525,14 @@ async def _run_driver(
                     raise
                 for s in succs:
                     spawn(s)
+                await commit_workflow_checkpoint(
+                    state,
+                    run_state,
+                    tuple(sorted(running.values())),
+                )
     except _LlmPauseSignal:
         await _cancel_running(running)
-        push_llm_route_notification(pause_edge, state, graph)
+        push_llm_route_notification(pause_edge, state, graph, run_state)
         return GraphPause(
             reason=PauseReason.LLM_ROUTE,
             state=state,
@@ -523,16 +543,19 @@ async def _run_driver(
     except (GraphRecursionError, GraphRouterError) as e:
         await _cancel_running(running)
         fatal = e
+    except BaseException:
+        await _cancel_running(running)
+        raise
 
     if fatal is not None:
         # Carry the snapshot out on the exception so the pool captures it for
-        # resume even when the GraphMeta handoff did not thread run_state in.
+        # resume even when the metadata handoff did not thread run_state in.
         fatal.run_state = run_state
         fatal.graph_state = state
         push_terminal_notification(
             graph,
             state,
-            BgStatus.FAILED,
+            WorkflowNodeStatus.FAILED,
             error=fatal,
             initial_params=initial_params,
             run_state=run_state,
@@ -546,7 +569,7 @@ async def _run_driver(
         push_terminal_notification(
             graph,
             state,
-            BgStatus.FAILED,
+            WorkflowNodeStatus.FAILED,
             error=error,
             initial_params=initial_params,
             run_state=run_state,
@@ -575,7 +598,7 @@ async def _run_driver(
     push_terminal_notification(
         graph,
         state,
-        BgStatus.SUCCESS,
+        WorkflowNodeStatus.SUCCESS,
         result=result,
         initial_params=initial_params,
         run_state=run_state,
@@ -589,16 +612,16 @@ async def _run_driver(
 
 
 def _build_executor(graph: "WorkflowBuilder"):
-    """Return an async ``executor(**initial_state) -> BgTaskResult``."""
+    """Return an async executor producing a Workflow-owned deferred result."""
 
-    async def executor(**initial_state) -> BgTaskResult:
+    async def executor(**initial_state) -> WorkflowDeferredResult:
         state = graph.state_schema(**initial_state)
         entry_nodes = graph._get_entry_nodes()
         initial_params = dict(initial_state)
-        # One run_state, shared between the driver coroutine and the GraphMeta
+        # One run_state, shared between the driver coroutine and run metadata
         # handoff so the pool snapshots the very object the driver mutates.
         run_state = GraphRunState.for_graph(graph)
-        return BgTaskResult.background(
+        return WorkflowDeferredResult.background(
             poll_factory=lambda: _run_driver(
                 graph,
                 state,
@@ -609,12 +632,12 @@ def _build_executor(graph: "WorkflowBuilder"):
                 run_state=run_state,
             ),
             command_name=graph.command_name,
-            graph_meta=GraphMeta(
+            graph_meta=WorkflowRunMetadata(
                 graph_ref=graph,
                 initial_params=initial_params,
-                factory=executor,
                 run_state=run_state,
                 state=state,
+                definition_source=graph._definition_source,
             ),
         )
 
@@ -633,7 +656,7 @@ def resume(
     state: GraphState,
     from_nodes: list[str],
     run_state: Optional[GraphRunState] = None,
-) -> BgTaskResult:
+) -> WorkflowDeferredResult:
     """Resume execution by re-running *from_nodes*.
 
     Completed nodes come from the authoritative ``run_state`` (status SUCCESS /
@@ -650,7 +673,7 @@ def resume(
     trigger_count: dict = defaultdict(set)
     _prefill_trigger_count(graph, completed, trigger_count)
 
-    return BgTaskResult.hybrid(
+    return WorkflowDeferredResult.hybrid(
         result=_MSG_RESUMING.format(from_node=", ".join(from_nodes)),
         poll_factory=lambda: _run_driver(
             graph,
@@ -662,11 +685,12 @@ def resume(
             run_state=run_state,
         ),
         command_name=graph.command_name,
-        graph_meta=GraphMeta(
+        graph_meta=WorkflowRunMetadata(
             graph_ref=graph,
             run_state=run_state,
             state=state,
             from_nodes=tuple(from_nodes),
+            definition_source=graph._definition_source,
         ),
     )
 
@@ -680,7 +704,15 @@ def _apply_skip(
     for sn in skip_nodes:
         if run_state is not None:
             run_state.mark_skipped(sn)
-        report_progress(sn, BgStatus.SKIPPED, _MSG_SKIPPING.format(skip_nodes=sn, suffix=""))
+        if run_state is None:
+            raise RuntimeError("workflow skip progress requires GraphRunState")
+        emit_workflow_progress(
+            graph,
+            run_state,
+            sn,
+            WorkflowNodeStatus.SKIPPED,
+            _MSG_SKIPPING.format(skip_nodes=sn, suffix=""),
+        )
 
 
 def resume_skip(
@@ -688,7 +720,7 @@ def resume_skip(
     state: GraphState,
     skip_nodes: list[str],
     run_state: Optional[GraphRunState] = None,
-) -> BgTaskResult:
+) -> WorkflowDeferredResult:
     """Skip *skip_nodes* (keeping partial results) and continue downstream."""
     run_state = GraphRunState.ensure(graph, state, run_state)
     _apply_skip(graph, state, skip_nodes, run_state)
@@ -696,7 +728,7 @@ def resume_skip(
     trigger_count: dict = defaultdict(set)
     _prefill_trigger_count(graph, completed, trigger_count)
 
-    return BgTaskResult.hybrid(
+    return WorkflowDeferredResult.hybrid(
         result=_MSG_SKIPPING.format(skip_nodes=", ".join(skip_nodes), suffix=""),
         poll_factory=lambda: _run_driver(
             graph,
@@ -709,11 +741,12 @@ def resume_skip(
             run_state=run_state,
         ),
         command_name=graph.command_name,
-        graph_meta=GraphMeta(
+        graph_meta=WorkflowRunMetadata(
             graph_ref=graph,
             run_state=run_state,
             state=state,
             skip_nodes=tuple(skip_nodes),
+            definition_source=graph._definition_source,
         ),
     )
 
@@ -724,7 +757,7 @@ def resume_skip_and_from(
     skip_nodes: list[str],
     from_nodes: list[str],
     run_state: Optional[GraphRunState] = None,
-) -> BgTaskResult:
+) -> WorkflowDeferredResult:
     """Skip *skip_nodes* then re-run *from_nodes*, continuing downstream."""
     run_state = GraphRunState.ensure(graph, state, run_state)
     _apply_skip(graph, state, skip_nodes, run_state)
@@ -737,7 +770,7 @@ def resume_skip_and_from(
 
     skip_desc = ", ".join(skip_nodes)
     from_desc = ", ".join(from_nodes)
-    return BgTaskResult.hybrid(
+    return WorkflowDeferredResult.hybrid(
         result=f"Skipping [{skip_desc}], resuming from [{from_desc}]",
         poll_factory=lambda: _run_driver(
             graph,
@@ -750,11 +783,12 @@ def resume_skip_and_from(
             run_state=run_state,
         ),
         command_name=graph.command_name,
-        graph_meta=GraphMeta(
+        graph_meta=WorkflowRunMetadata(
             graph_ref=graph,
             run_state=run_state,
             state=state,
             from_nodes=tuple(from_nodes),
             skip_nodes=tuple(skip_nodes),
+            definition_source=graph._definition_source,
         ),
     )

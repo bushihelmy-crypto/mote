@@ -5,7 +5,7 @@ The upstream async-task media API (image / audio / music / video) returns a
 rarely carries a useful reason — most are transient backend hiccups (queue
 overload, a flaky GPU worker, a timed-out render) that succeed on a fresh
 re-submission. The historical code raised a bare ``RuntimeError`` for every
-failure, which :func:`~mote.runtime.errors.classification.is_retryable`
+failure, which :func:`~mote.runtime.resilience.error_classification.is_retryable`
 classifies as **permanent** → the bggraph engine aborts a node with ``attempt=0``
 and never re-submits.
 

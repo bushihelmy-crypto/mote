@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
-
 from mote.contracts.ports.service.endpoint import ServiceEndpointAdapter, ServiceEndpointResolver
 from mote.contracts.service import ServiceEndpointDescriptor
 
@@ -27,12 +25,7 @@ class ProductServiceEndpointResolver:
 
     async def aclose(self) -> None:
         for resolver in reversed(self._resolvers):
-            close = getattr(resolver, "aclose", None)
-            if close is None:
-                continue
-            result = close()
-            if inspect.isawaitable(result):
-                await result
+            await resolver.aclose()
 
 
 __all__ = ["ProductServiceEndpointResolver"]

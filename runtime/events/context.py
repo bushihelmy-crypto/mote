@@ -24,7 +24,7 @@ from contextvars import ContextVar
 from typing import Iterator, Optional
 
 from mote.kernel.telemetry.context import bind_trace_id_provider
-from mote.kernel.telemetry.events import bind_observers
+from mote.kernel.telemetry.events import KernelTelemetryEvent, bind_observers
 from mote.runtime.events.telemetry import TelemetryRuntime
 from mote.runtime.telemetry.logging import current_trace_id
 
@@ -56,7 +56,7 @@ def bind_telemetry(
         _ACTIVE_TELEMETRY.reset(token)
 
 
-async def observe_event(event) -> None:
+async def observe_event(event: object) -> None:
     """Publish ``event`` on the active telemetry runtime; no-op if unbound."""
     telemetry = _ACTIVE_TELEMETRY.get()
     if telemetry is None:
@@ -64,7 +64,7 @@ async def observe_event(event) -> None:
     await telemetry.emit(event)
 
 
-def observe_event_sync(event) -> None:
+def observe_event_sync(event: object) -> None:
     """Sync fire-and-forget observation on active telemetry; no-op if unbound."""
     telemetry = _ACTIVE_TELEMETRY.get()
     if telemetry is None:

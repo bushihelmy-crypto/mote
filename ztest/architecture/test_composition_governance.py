@@ -31,6 +31,16 @@ def _symbol_exists(symbol: str) -> bool:
             continue
         node = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         remaining = parts[boundary:]
+        if len(remaining) == 1:
+            exported = _literal_all(node)
+            imported = {
+                alias.asname or alias.name
+                for item in node.body
+                if isinstance(item, ast.ImportFrom)
+                for alias in item.names
+            }
+            if remaining[0] in exported & imported:
+                return True
         current = node.body
         for name in remaining:
             definition = next(
@@ -188,7 +198,6 @@ def test_no_process_global_tool_discovery_path_remains() -> None:
                     "register_tool",
                     "declared_agent_catalog",
                     "declared_tool_catalog",
-                    "AgentRegistry",
                     "ToolRegistry",
                 }:
                     violations.append(f"{path.relative_to(PACKAGE_ROOT)}:{node.lineno}:{node.id}")

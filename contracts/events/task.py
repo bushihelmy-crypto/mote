@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, List, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, ClassVar
+
+from mote.contracts.activity import ActivityKind, ActivityNodeState, ActivityOutcome, ActivityTopology
+from mote.contracts.task.progress import (
+    ActivityProgressEvent,
+    ActivityProgressIdentity,
+    BackgroundTaskProgressEvent,
+    DurableWorkflowRunProgress,
+    ProgressEvent,
+    ProgressPhase,
+)
 
 if TYPE_CHECKING:
     pass
@@ -24,10 +34,7 @@ class TaskProgressEvent:
     this lets subscribers mirror live progress without polling the store.
     """
 
-    task_id: str = ""
-    stage: str = ""
-    status: str = ""
-    detail: str = ""  # rendered, no trailing newline
+    progress: ProgressEvent
     #: Execution lineage (``ScopePath``) this ping belongs to. ``()`` for a plain
     #: background-task progress line (today's behavior — folds to a flat
     #: ``TaskProgress`` view event). A non-empty scope whose head is an open
@@ -36,6 +43,47 @@ class TaskProgressEvent:
 
     name: ClassVar[str] = TASK_PROGRESS
 
+    @classmethod
+    def activity(
+        cls,
+        *,
+        run_id: str,
+        definition_id: str,
+        stage: str,
+        phase: ProgressPhase,
+        detail: str | None = None,
+        scope: tuple[object, ...] = (),
+    ) -> "TaskProgressEvent":
+        return cls(
+            ActivityProgressEvent(
+                ActivityProgressIdentity(run_id, definition_id),
+                stage,
+                phase,
+                detail,
+            ),
+            scope,
+        )
+
+    @property
+    def stage(self) -> str:
+        if isinstance(self.progress, BackgroundTaskProgressEvent):
+            return self.progress.stage
+        if isinstance(self.progress, DurableWorkflowRunProgress):
+            return self.progress.node_id
+        return self.progress.stage
+
+    @property
+    def status(self) -> str:
+        if isinstance(self.progress, BackgroundTaskProgressEvent):
+            return self.progress.phase.value
+        return self.progress.phase.value
+
+    @property
+    def detail(self) -> str:
+        if isinstance(self.progress, BackgroundTaskProgressEvent):
+            return self.progress.detail or ""
+        return self.progress.detail or ""
+
 
 @dataclass
 class ActivityStartedEvent:
@@ -43,19 +91,24 @@ class ActivityStartedEvent:
     in future) began — the machine-side signal the projector folds into an
     :class:`~mote.product.cli.contracts.view.events.ActivityStarted` ViewEvent.
 
-    ``scope`` identifies the activity (its :class:`~mote.runtime.events.scope.
-    ScopePath`); ``topology`` is a neutral pre-computed structure describing the
-    declared graph (plain dicts/lists, so this leaf imports nothing from bggraph).
+    ``scope`` identifies the activity; ``topology`` is the canonical neutral
+    contract describing the declared graph without importing its implementation.
     Purely observational — mirrors *that an activity opened* so a renderer can
     draw its shape before any node runs.
     """
 
     scope: tuple[object, ...] = ()
-    activity_kind: str = ""  # "graph" | "agent" | "task"
+    activity_kind: ActivityKind = ActivityKind.GRAPH
     label: str = ""
-    topology: Optional[dict[str, Any]] = None
+    topology: ActivityTopology | None = None
 
     name: ClassVar[str] = ACTIVITY_STARTED
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.activity_kind, ActivityKind):
+            raise TypeError("activity_kind must be ActivityKind")
+        if self.topology is not None and not isinstance(self.topology, ActivityTopology):
+            raise TypeError("activity topology must be ActivityTopology or None")
 
 
 @dataclass
@@ -66,13 +119,21 @@ class ActivityCompletedEvent:
     (``node_states`` + ``outcome`` + ``summary``), so a replayed / resumed
     transcript renders the outcome from this event alone, never reconstructing it
     from the live :class:`TaskProgressEvent` stream (which a replay does not
-    have). ``node_states`` is a list of neutral dicts; ``outcome`` is
-    ``"success"`` | ``"failed"``. Purely observational.
+    have). ``node_states`` and ``outcome`` use the canonical activity DTOs.
+    Purely observational.
     """
 
     scope: tuple[object, ...] = ()
-    outcome: str = "success"  # success | failed
-    node_states: List[dict[str, Any]] = field(default_factory=list)
+    outcome: ActivityOutcome = ActivityOutcome.SUCCESS
+    node_states: tuple[ActivityNodeState, ...] = ()
     summary: str = ""
 
     name: ClassVar[str] = ACTIVITY_COMPLETED
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.outcome, ActivityOutcome):
+            raise TypeError("activity outcome must be ActivityOutcome")
+        if not isinstance(self.node_states, tuple) or not all(
+            isinstance(state, ActivityNodeState) for state in self.node_states
+        ):
+            raise TypeError("activity node_states must be ActivityNodeState tuple")

@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Protocol
 
 from mote.contracts.inference.generation_artifact import GenerationArtifact
 from mote.contracts.inference.shared import SharedSessionCredential
+from mote.product.inference.daemon.messages import GenerationCommand
 from mote.runtime.inference.generation import GatewayGenerationOwner
 
 
 class GenerationPersistence(Protocol):
-    async def stage_generation(self, artifact: GenerationArtifact) -> None:
-        ...
+    async def stage_generation(self, artifact: GenerationArtifact) -> None: ...
 
-    async def activate_generation(self, generation_id: str, artifact_digest: str) -> None:
-        ...
+    async def activate_generation(self, generation_id: str, artifact_digest: str) -> None: ...
 
 
 class SharedGenerationBackend:
@@ -30,7 +29,9 @@ class SharedGenerationBackend:
         self._persistence = persistence
         self._on_activation = on_activation
 
-    async def stage_generation(self, request: Any, credential: SharedSessionCredential) -> tuple[str, str, str]:
+    async def stage_generation(
+        self, request: GenerationCommand, credential: SharedSessionCredential
+    ) -> tuple[str, str, str]:
         artifact = GenerationArtifact.model_validate_json(request.generation_artifact)
         envelope = request.envelope
         if envelope.generation_id != artifact.generation_id:
@@ -40,7 +41,7 @@ class SharedGenerationBackend:
         if self._persistence is not None:
             await self._persistence.stage_generation(artifact)
         self._owner.stage(artifact)
-        if artifact.activation_policy.get("activate_immediately") is True:
+        if artifact.activation_policy.activate_immediately:
             if self._persistence is not None:
                 await self._persistence.activate_generation(artifact.generation_id, artifact.artifact_digest)
             self._owner.activate(artifact.generation_id, artifact.artifact_digest)
@@ -49,7 +50,9 @@ class SharedGenerationBackend:
         digest, state = self._owner.describe(artifact.generation_id)
         return artifact.generation_id, digest, state.value
 
-    async def observe_generation(self, request: Any, credential: SharedSessionCredential) -> tuple[str, str, str]:
+    async def observe_generation(
+        self, request: GenerationCommand, credential: SharedSessionCredential
+    ) -> tuple[str, str, str]:
         generation_id = request.envelope.generation_id
         if not generation_id:
             raise ValueError("generation id is required")

@@ -20,10 +20,10 @@ from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMe
 from mote.contracts.config.model.llm import LLMConfig
 from mote.contracts.model.constants import USE_CONFIG_TIMEOUT
 from mote.contracts.model.profile import profile_for
+from mote.contracts.model.provider_errors import LLMEmptyResponseError
 from mote.kernel.inference.tokenization import count_message_tokens, count_string_tokens
 from mote.product.models.compiler import context_tokens_for_model
-from mote.runtime.errors import LLMEmptyResponseError, classify_llm_error
-from mote.runtime.errors.handlers import handle_exception
+from mote.product.models.providers.error_handling import handle_exception
 from mote.runtime.events.stream import log_llm_stream
 from mote.runtime.models.clients.base import BaseLLM
 from mote.runtime.models.clients.credentials import CredentialBindingMixin
@@ -31,6 +31,7 @@ from mote.runtime.models.clients.schema_output import openai_strict_schema
 from mote.runtime.models.cost import CostTracker
 from mote.runtime.models.media import decode_image
 from mote.runtime.models.ratelimit.capture import install_rate_limit_hook
+from mote.runtime.resilience.error_classification import classify_llm_error
 from mote.runtime.telemetry.logging import logger
 
 # Model-name substrings whose models reject standard chat params → the set of

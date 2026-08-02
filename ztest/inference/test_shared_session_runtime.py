@@ -5,7 +5,7 @@ from mote.contracts.inference.deadline import CrossProcessDeadline
 from mote.contracts.inference.events import SessionEventType, SessionLifecycleEvent
 from mote.contracts.inference.executions import BoundExecutionRequest, SessionApplicationMessage
 from mote.contracts.inference.identity import InferencePrincipal, TrustedSchedulingClass
-from mote.contracts.inference.wire_permit import WirePermit
+from mote.contracts.inference.wire_permit import ExecutionTaxonomy, WirePermit
 from mote.product.inference.daemon.shared_runtime import SharedSessionRuntime
 
 DIGEST = "sha256:" + "1" * 64
@@ -116,7 +116,7 @@ def _permit(attempt_id, ordinal):
     now = datetime.now(timezone.utc)
     return WirePermit(
         attempt_id=attempt_id,
-        execution_taxonomy="long_lived_session",
+        execution_taxonomy=ExecutionTaxonomy.LONG_LIVED_SESSION,
         owner_journal_id="journal",
         wire_unit="realtime",
         generation_id="generation",

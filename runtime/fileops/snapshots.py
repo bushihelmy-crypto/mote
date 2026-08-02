@@ -28,7 +28,7 @@ from mote.runtime.fileops.metadata_manifest import (
     PreservedMetadata,
     encode_metadata_manifest,
 )
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, FileMutationArtifactRepository
 
 _CHUNK_SIZE = 1024 * 1024
 
@@ -45,7 +45,7 @@ class ObservedFileVersion:
 class SealedSnapshotReader:
     """Reads a regular file twice through one handle and seals the first pass."""
 
-    def __init__(self, artifacts: ArtifactRepository) -> None:
+    def __init__(self, artifacts: FileMutationArtifactRepository) -> None:
         self.artifacts = artifacts
 
     def open_snapshot(

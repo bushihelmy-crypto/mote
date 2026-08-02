@@ -7,10 +7,9 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Callable, Generic, TypeVar
+from typing import Callable, Generic, TypeVar, cast
 
 from mote.contracts.ports.events.telemetry import (
-    EventNarrower,
     SyncTelemetryHandler,
     TelemetryHandler,
     TelemetryIdentity,
@@ -34,10 +33,23 @@ class TelemetryPutResult(StrEnum):
 
 
 @dataclass(frozen=True)
-class TelemetryBinding:
+class _ErasedTelemetryBinding:
     spec: TelemetrySubscriptionSpec
     handler: TelemetryHandler[object]
     sync_handler: SyncTelemetryHandler[object] | None = None
+    event_type: type[object] | None = None
+
+
+@dataclass(frozen=True)
+class AllTelemetryBinding:
+    """Explicit subscription to every observation event in one Runtime."""
+
+    spec: TelemetrySubscriptionSpec
+    handler: TelemetryHandler[object]
+    sync_handler: SyncTelemetryHandler[object] | None = None
+
+    def _erase(self) -> _ErasedTelemetryBinding:
+        return _ErasedTelemetryBinding(self.spec, self.handler, self.sync_handler)
 
 
 EventT = TypeVar("EventT")
@@ -46,41 +58,22 @@ EventT = TypeVar("EventT")
 @dataclass(frozen=True)
 class _TypedTelemetryBinding(Generic[EventT]):
     spec: TelemetrySubscriptionSpec
-    accepts: EventNarrower[EventT]
+    event_type: type[EventT]
     handler: TelemetryHandler[EventT]
     sync_handler: SyncTelemetryHandler[EventT] | None = None
 
-    def erase(self) -> TelemetryBinding:
-        return TelemetryBinding(
+    def erase(self) -> _ErasedTelemetryBinding:
+        return _ErasedTelemetryBinding(
             self.spec,
-            _NarrowingAsyncHandler(self.accepts, self.handler),
-            (_NarrowingSyncHandler(self.accepts, self.sync_handler) if self.sync_handler is not None else None),
+            cast(TelemetryHandler[object], self.handler),
+            cast(SyncTelemetryHandler[object], self.sync_handler),
+            cast(type[object], self.event_type),
         )
-
-
-class _NarrowingAsyncHandler(Generic[EventT]):
-    def __init__(self, accepts: EventNarrower[EventT], handler: TelemetryHandler[EventT]) -> None:
-        self._accepts = accepts
-        self._handler = handler
-
-    async def handle(self, event: object) -> None:
-        if self._accepts(event):
-            await self._handler.handle(event)
-
-
-class _NarrowingSyncHandler(Generic[EventT]):
-    def __init__(self, accepts: EventNarrower[EventT], handler: SyncTelemetryHandler[EventT]) -> None:
-        self._accepts = accepts
-        self._handler = handler
-
-    def handle_sync(self, event: object) -> None:
-        if self._accepts(event):
-            self._handler.handle_sync(event)
 
 
 @dataclass(frozen=True)
 class TelemetryManifest:
-    bindings: tuple[TelemetryBinding, ...]
+    bindings: tuple[AllTelemetryBinding, ...]
 
     def __post_init__(self) -> None:
         identities = tuple(binding.spec.identity for binding in self.bindings)
@@ -189,7 +182,7 @@ class _TelemetryMailbox:
 
 
 class _TelemetryWorker:
-    def __init__(self, binding: TelemetryBinding) -> None:
+    def __init__(self, binding: _ErasedTelemetryBinding) -> None:
         self.binding = binding
         self._loop: asyncio.AbstractEventLoop | None = None
         self._wake: asyncio.Event | None = None
@@ -215,6 +208,8 @@ class _TelemetryWorker:
 
     def publish(self, event: object, *, synchronous: bool) -> TelemetryPutResult:
         if self._state not in {TelemetryState.RUNNING, TelemetryState.DEGRADED}:
+            return TelemetryPutResult.DROPPED
+        if self.binding.event_type is not None and type(event) is not self.binding.event_type:
             return TelemetryPutResult.DROPPED
         return self._mailbox.put(_TelemetryItem(event=event, synchronous=synchronous))
 
@@ -331,7 +326,7 @@ class TelemetryRuntime:
     """Loss-tolerant observation plane; never participates in correctness."""
 
     def __init__(self, manifest: TelemetryManifest) -> None:
-        self._workers = {binding.spec.identity: _TelemetryWorker(binding) for binding in manifest.bindings}
+        self._workers = {binding.spec.identity: _TelemetryWorker(binding._erase()) for binding in manifest.bindings}
         self._state = TelemetryState.NEW
 
     @property
@@ -357,7 +352,7 @@ class TelemetryRuntime:
     def emit_sync(self, event: object) -> None:
         self.emit_nowait(event, synchronous=True)
 
-    async def subscribe(self, binding: TelemetryBinding) -> TelemetryHandle:
+    async def _subscribe_erased(self, binding: _ErasedTelemetryBinding) -> TelemetryHandle:
         if self._state not in {TelemetryState.NEW, TelemetryState.RUNNING}:
             raise RuntimeError("telemetry runtime is not accepting subscriptions")
         identity = binding.spec.identity
@@ -372,13 +367,13 @@ class TelemetryRuntime:
     async def subscribe_typed(
         self,
         spec: TelemetrySubscriptionSpec,
-        accepts: EventNarrower[EventT],
+        event_type: type[EventT],
         handler: TelemetryHandler[EventT],
         sync_handler: SyncTelemetryHandler[EventT] | None = None,
     ) -> TelemetryHandle:
         """Register one typed binding and erase it inside the Runtime boundary."""
 
-        return await self.subscribe(_TypedTelemetryBinding(spec, accepts, handler, sync_handler).erase())
+        return await self._subscribe_erased(_TypedTelemetryBinding(spec, event_type, handler, sync_handler).erase())
 
     async def subscribe_all(
         self,
@@ -388,7 +383,7 @@ class TelemetryRuntime:
     ) -> TelemetryHandle:
         """Register an observer that intentionally accepts every event."""
 
-        return await self.subscribe(TelemetryBinding(spec, handler, sync_handler))
+        return await self._subscribe_erased(AllTelemetryBinding(spec, handler, sync_handler)._erase())
 
     async def unsubscribe(self, identity: TelemetryIdentity) -> None:
         worker = self._workers.pop(identity, None)
@@ -417,7 +412,7 @@ def _coalesce_key(event: object) -> tuple[type[object], object]:
 
 
 __all__ = [
-    "TelemetryBinding",
+    "AllTelemetryBinding",
     "TelemetryHandle",
     "TelemetryMailboxSnapshot",
     "TelemetryManifest",

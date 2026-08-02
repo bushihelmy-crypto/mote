@@ -7,7 +7,7 @@ RoleState — serializable runtime snapshot for checkpoint/recovery.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
@@ -76,9 +76,6 @@ class RoleState(BaseModel):
     # (rides the checkpoint like ``revealed_tools``); the ``RoleStateController``
     # owns the advance.
     turn_index: int = 0
-
-    # Environment (not serialized)
-    env: Optional[Any] = Field(default=None, exclude=True)
 
     # Files the session merely *glimpsed* — surfaced by a Search match but not
     # read in full. Distinct from FileOperations' observed sealed snapshots; a glimpse carries no body,

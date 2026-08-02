@@ -15,6 +15,7 @@ the one source of truth; MCP hot-reload and per-tool deregistration mutate it
 through :meth:`register` / :meth:`remove`, and every schema getter is a pure
 read derived from it.
 """
+
 from __future__ import annotations
 
 from typing import Any, Callable, Iterator
@@ -22,7 +23,7 @@ from typing import Any, Callable, Iterator
 from mote.contracts.tool.execution import ToolExecutionKind
 from mote.kernel.tools.spec_adapter import to_native_tool_specs
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
-from mote.runtime.tools.tool_binding import BoundTool
+from mote.runtime.tools.tool_binding import ExecutableToolBinding
 from mote.runtime.tools.tool_classification import is_pipeline_tool
 
 
@@ -45,6 +46,7 @@ class BoundToolCatalog:
         get_revealed: Callable[[], set[str]] | None = None,
     ) -> None:
         self._tools: dict[str, Any] = {}  # name -> BaseTool instance (aliases share one instance)
+        self._generation = 1
         # Names of tools hidden until discovered (schema-visibility only).
         self._deferred: set[str] = set(deferred) if deferred else set()
         # Live getter onto the revealed set (durable, on RoleState). Defaults to
@@ -56,15 +58,45 @@ class BoundToolCatalog:
     # Storage
     # ------------------------------------------------------------------
 
-    @property
-    def tools(self) -> dict[str, Any]:
-        """The live name→instance map (read access for introspection/compat)."""
+    def _live_tools(self) -> dict[str, Any]:
+        """Package-private mutable map used only by executor-owned internals."""
         return self._tools
+
+    @property
+    def generation(self) -> int:
+        return self._generation
 
     def register(self, tool: Any, names: list[str]) -> None:
         """Bind *tool* under every name in *names* (primary + aliases)."""
+        duplicates = set(names) & self._tools.keys()
+        if duplicates:
+            raise ValueError(f"tool namespace conflict: {sorted(duplicates)!r}")
+        if len(names) != len(set(names)):
+            raise ValueError("tool definition contains duplicate names")
         for name in names:
             self._tools[name] = tool
+        self._generation += 1
+
+    def replace_mcp(self, bindings: tuple[tuple[Any, tuple[str, ...]], ...]) -> tuple[tuple[Any, ...], tuple[str, ...]]:
+        """Atomically replace the complete MCP category after namespace validation."""
+        retained = {name: tool for name, tool in self._tools.items() if self.category(tool) != "mcp"}
+        candidate = dict(retained)
+        for tool, names in bindings:
+            if not names or len(names) != len(set(names)):
+                raise ValueError("MCP tool names are empty or duplicated")
+            conflicts = set(names) & candidate.keys()
+            if conflicts:
+                raise ValueError(f"MCP tool namespace conflict: {sorted(conflicts)!r}")
+            candidate.update((name, tool) for name in names)
+        old_names = tuple(self.mcp_names())
+        old_tools_by_identity: dict[int, Any] = {}
+        for name in old_names:
+            tool = self._tools[name]
+            old_tools_by_identity.setdefault(id(tool), tool)
+        old_tools = tuple(old_tools_by_identity.values())
+        self._tools = candidate
+        self._generation += 1
+        return old_tools, old_names
 
     def get(self, name: str) -> Any | None:
         """Resolve a tool by name/alias, or None."""
@@ -86,10 +118,12 @@ class BoundToolCatalog:
         """Drop the given names from the map."""
         for name in names:
             del self._tools[name]
+        self._generation += 1
 
     def clear(self) -> None:
         """Forget every bound tool."""
         self._tools.clear()
+        self._generation += 1
 
     def iter_unique(self) -> Iterator[Any]:
         """Yield each bound instance exactly once, deduping aliases by identity.
@@ -110,7 +144,7 @@ class BoundToolCatalog:
 
     def _is_mcp_tool(self, tool: Any) -> bool:
         """Return True if the tool is a runtime-discovered MCP adapter."""
-        return isinstance(tool, BoundTool) and tool.definition.category == "mcp"
+        return isinstance(tool, ExecutableToolBinding) and tool.definition.category == "mcp"
 
     def _is_pipeline_tool(self, tool: Any) -> bool:
         """Return True if the tool is backed by a compiled Workflow pipeline."""
@@ -185,7 +219,7 @@ class BoundToolCatalog:
         the tool's name if it exposes no ``summary`` (e.g. a bare stand-in).
         """
         name = str(getattr(tool, "name", ""))
-        if isinstance(tool, BoundTool):
+        if isinstance(tool, ExecutableToolBinding):
             return tool.definition.summary or name
         return name
 
@@ -237,7 +271,7 @@ class BoundToolCatalog:
             name = getattr(tool, "name", "")
             if name not in self._deferred:
                 continue
-            if isinstance(tool, BoundTool):
+            if isinstance(tool, ExecutableToolBinding):
                 index[name] = tool.definition.search_text or self._menu_line(tool)
             else:
                 index[name] = self._menu_line(tool)
@@ -285,7 +319,7 @@ class BoundToolCatalog:
             name = getattr(tool, "name", "")
             if name not in wanted:
                 continue
-            if isinstance(tool, BoundTool):
+            if isinstance(tool, ExecutableToolBinding):
                 out[name] = tool.definition.description.strip()
         return out
 
@@ -342,7 +376,7 @@ class XmlToolCatalog(BoundToolCatalog):
                 continue
             if self._is_hidden(tool):
                 continue
-            if not isinstance(tool, BoundTool) or not isinstance(tool.definition, XmlToolDefinition):
+            if not isinstance(tool, ExecutableToolBinding) or not isinstance(tool.definition, XmlToolDefinition):
                 raise TypeError("XmlToolCatalog contains a non-XML bound tool")
             schema = dict(tool.definition.render(tool.wrapped_tool))
             schemas[str(schema["name"])] = schema
@@ -367,7 +401,7 @@ class NativeToolCatalog(BoundToolCatalog):
                 continue
             if self._is_hidden(tool):
                 continue
-            if not isinstance(tool, BoundTool) or not isinstance(tool.definition, NativeToolDefinition):
+            if not isinstance(tool, ExecutableToolBinding) or not isinstance(tool.definition, NativeToolDefinition):
                 raise TypeError("NativeToolCatalog contains a non-Native bound tool")
             schema = dict(tool.definition.render(tool.wrapped_tool))
             schemas[str(schema["name"])] = schema
@@ -376,7 +410,7 @@ class NativeToolCatalog(BoundToolCatalog):
     def native_specs(self, provider: str = "anthropic") -> list[dict]:
         native: dict[str, dict] = {}
         for tool in self.iter_unique():
-            if not isinstance(tool, BoundTool) or not isinstance(tool.definition, NativeToolDefinition):
+            if not isinstance(tool, ExecutableToolBinding) or not isinstance(tool.definition, NativeToolDefinition):
                 raise TypeError("NativeToolCatalog contains a non-Native bound tool")
             if self._is_hidden(tool):
                 continue
@@ -389,7 +423,7 @@ class NativeToolCatalog(BoundToolCatalog):
 
         specs: list[dict] = []
         for tool in self.iter_unique():
-            if not isinstance(tool, BoundTool) or not isinstance(tool.definition, NativeToolDefinition):
+            if not isinstance(tool, ExecutableToolBinding) or not isinstance(tool.definition, NativeToolDefinition):
                 raise TypeError("NativeToolCatalog contains a non-Native bound tool")
             if not include_hidden and self._is_hidden(tool):
                 continue

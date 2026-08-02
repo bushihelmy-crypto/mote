@@ -257,18 +257,20 @@ async def test_engine_services_reject_direct_close_while_isolated_owner_is_live(
 
 
 def test_agent_wiring_freezes_product_collections() -> None:
-    source = {"rule": object}
+    from mote.product.agents.factory import CodingAgentFactory
+
+    policy = object()
+    source = {"rule": lambda: policy}
     wiring = AgentWiring(
-        dependencies=AgentDependencies(
-            deps=None,
-            output_contract=text_output_contract(),
-            routing_strategy_builders=source,
-            toolsets=[object()],
-        )
+        dependencies=CodingAgentFactory(
+            routing_strategy_builders_factory=lambda: source,
+        ).dependencies(deps=None, output_contract=text_output_contract(), toolsets=())
     )
     source["later"] = object
 
-    assert tuple(wiring.dependencies.routing_strategy_builders) == ("rule",)
-    assert isinstance(wiring.dependencies.toolsets, tuple)
-    with pytest.raises(TypeError):
-        wiring.dependencies.routing_strategy_builders["mutate"] = object
+    projection = wiring.dependencies.component_projection
+    assert projection is not None
+    factory = projection.cognition().routing_strategy_factory
+    assert factory is not None
+    assert factory.build("rule") is policy
+    assert factory.build("later") is None

@@ -1,6 +1,6 @@
 """Runtime authorization and sandbox configuration.
 
-Lives in ``common/schema`` alongside ``tool_config.py`` so both ``RoleSchema``
+Lives in the permission bounded context so both ``RoleSchema``
 (which declares it) and ``ToolExecutor`` (which enforces it) can reference it
 without importing the executor package. The enforcement logic stays in
 ``mote.runtime.tools.permission``.
@@ -9,14 +9,16 @@ Default: a Role with ``permissions=None`` (the default) runs tools with no
 approval layer. The engine is only engaged when
 a Role explicitly opts in by setting a ``PermissionConfig``.
 """
+
 from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 # Single source of truth for the approval-mode Literal (pure-data, no executor dep).
 from mote.contracts.authorization import PermissionMode
+from mote.contracts.config.base import ConfigModel
 from mote.runtime.sandbox.config import SandboxRuntimeConfig
 
 # Sandbox axis — ORTHOGONAL to the approval mode above. The mode decides whether
@@ -31,7 +33,7 @@ SandboxMode = Literal["read-only", "workspace-write", "full"]
 NetworkPolicy = Literal["restricted", "enabled"]
 
 
-class SandboxConfig(BaseModel):
+class SandboxConfig(ConfigModel):
     """Filesystem/network execution boundary, nested under PermissionConfig.
 
     A logical (path-checking) sandbox, not an OS-level one: file-mutating tools
@@ -62,7 +64,7 @@ class SandboxConfig(BaseModel):
     )
 
 
-class PermissionConfig(BaseModel):
+class PermissionConfig(ConfigModel):
     """Per-Role permission policy, declared on :class:`RoleSchema`.
 
     Rules are written in the familiar ``Tool(pattern)`` form, e.g.::

@@ -9,14 +9,16 @@ renders defines/imports/used-by, the block is change-gated (unchanged map stays
 quiet, an edit re-surfaces), a compaction resets the frontier, relative-path
 display honours cwd, and a raising CodeMap is swallowed (best-effort → None).
 """
+
 from __future__ import annotations
 
 import asyncio
 import os
 
+from mote.contracts.events.conversation import PostCompactEvent
+from mote.contracts.events.session import SessionStartEvent
 from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
 from mote.product.code_map.turn_context import CodeMapContextSource
-from mote.runtime.events import PostCompactEvent, SessionStartEvent
 
 
 def run(coro):
@@ -384,6 +386,9 @@ class _FakeRepoIndex:
 
     def module_summary_of(self, path) -> str:
         return self._summaries.get(path, "")
+
+    def references_to(self, path, symbol):
+        return ()
 
 
 def test_repo_index_lists_untouched_importer(tmp_path):

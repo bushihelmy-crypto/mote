@@ -6,6 +6,7 @@ from mote.contracts.inference.events import AttemptEventType, AttemptLifecycleEv
 from mote.contracts.inference.wire_permit import WirePermit
 from mote.contracts.model.failover import EndpointDescriptor
 from mote.product.interfaces.inference_api.composition import build_generation_inference_api
+from mote.runtime.inference.epochs import ExecutionEpochAuthority
 
 DIGEST = "sha256:" + "a" * 64
 
@@ -81,10 +82,13 @@ def test_generation_composition_builds_pinned_command_owner():
             session_runtime=None,
             transfer_runtime=None,
             permit_issuer=_Issuer(),
+            epoch_source=ExecutionEpochAuthority(),
             permit_audience="shared/socket/model/tenant",
             generation_id="generation-1",
             generation_artifact_digest=DIGEST,
             default_model=SimpleNamespace(model="model"),
+            artifact_store=None,
+            artifact_reader=None,
         )
         app = build_generation_inference_api(
             lease,
@@ -131,10 +135,13 @@ def test_generation_composition_fails_closed_without_runtime_owners():
         session_runtime=None,
         transfer_runtime=None,
         permit_issuer=_Issuer(),
+        epoch_source=ExecutionEpochAuthority(),
         permit_audience="audience",
         generation_id="generation-1",
         generation_artifact_digest=DIGEST,
         default_model=SimpleNamespace(model="model"),
+        artifact_store=None,
+        artifact_reader=None,
     )
     app = build_generation_inference_api(
         lease,

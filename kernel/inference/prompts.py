@@ -1,9 +1,10 @@
 """Provider-independent agent-turn prompt templates.
 
-Pure prompt constants for the Role react loop. Lives in ``common`` (the bottom
+Pure prompt constants for the Role react loop. Lives in Kernel (the bottom
 layer) because prompt text has no dependencies and is consumed across layers
 (PromptBuilder, RoleSchema, role_utils, ...).
 """
+
 # Marker separating the static (cacheable) system-prompt prefix from the
 # dynamic region. PromptBuilder splits SYSTEM_PROMPT on this line, substitutes
 # each half independently, and joins them — the marker itself never reaches the
@@ -66,9 +67,7 @@ ${tool_instructions}
 ${tool_catalog}
 
 ${tool_usage_guide}
-""".replace(
-    "{boundary}", SYSTEM_PROMPT_DYNAMIC_BOUNDARY
-)
+""".replace("{boundary}", SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
 
 # --- Dynamic system-prompt sections (live below the boundary) --------------
 # Each is optional: PromptBuilder substitutes the section text when the feature

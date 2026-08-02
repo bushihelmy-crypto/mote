@@ -105,14 +105,14 @@ def _resolve_ui(choice: str) -> str:
     return "rich"
 
 
-def _run_server(args: argparse.Namespace, tools) -> None:
+async def _run_server(args: argparse.Namespace, tools) -> None:
     """Build the shared engine once and serve it over the chosen network protocol."""
-    eng = build_engine(model=args.model, tools=tools, cwd=args.cwd, name=args.name)
+    eng = await build_engine(model=args.model, tools=tools, cwd=args.cwd, name=args.name)
     if args.serve == "agui":
         if serve_agui is None:
             raise RuntimeError("AG-UI serving requires the 'agui' optional dependencies.")
 
-        serve_agui(
+        await serve_agui(
             eng.agent,
             engine=eng,
             host=args.host,
@@ -127,7 +127,37 @@ def _run_server(args: argparse.Namespace, tools) -> None:
         if serve_acp is None:
             raise RuntimeError("ACP serving requires the 'acp' optional dependencies.")
 
-        serve_acp(eng.agent, name=args.name, engine=eng)
+        await serve_acp(eng.agent, name=args.name, engine=eng)
+
+
+async def _run_interactive(args: argparse.Namespace, tools) -> None:
+    ui = _resolve_ui(args.ui)
+
+    if ui == "textual":
+        if run_textual is None:
+            raise RuntimeError("The Textual UI requires the 'textual' optional dependency.")
+        await run_textual(
+            build_driver=build_app,
+            model=args.model,
+            tools=tools,
+            cwd=args.cwd,
+            name=args.name,
+        )
+        print("\nGoodbye.")
+        return
+
+    driver = await build_app(
+        model=args.model,
+        tools=tools,
+        cwd=args.cwd,
+        name=args.name,
+        consumers=args.consumer,
+    )
+    try:
+        await driver.run()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    print("\nGoodbye.")
 
 
 def main(argv=None) -> None:
@@ -141,38 +171,7 @@ def main(argv=None) -> None:
     args = _parse_args(raw)
     tools = [t.strip() for t in args.tools.split(",") if t.strip()] if args.tools else None
 
-    if args.serve:
-        _run_server(args, tools)
-        return
-
-    ui = _resolve_ui(args.ui)
-
-    if ui == "textual":
-        if run_textual is None:
-            raise RuntimeError("The Textual UI requires the 'textual' optional dependency.")
-
-        run_textual(
-            build_driver=build_app,
-            model=args.model,
-            tools=tools,
-            cwd=args.cwd,
-            name=args.name,
-        )
-        print("\nGoodbye.")
-        return
-
-    driver = build_app(
-        model=args.model,
-        tools=tools,
-        cwd=args.cwd,
-        name=args.name,
-        consumers=args.consumer,
-    )
-    try:
-        asyncio.run(driver.run())
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    print("\nGoodbye.")
+    asyncio.run(_run_server(args, tools) if args.serve else _run_interactive(args, tools))
 
 
 if __name__ == "__main__":

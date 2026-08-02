@@ -8,14 +8,12 @@ facts that have already happened to advisory lifecycle notifications.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Generic, TypeVar
+from typing import Callable, Generic, TypeVar
 
-from mote.contracts.events.conversation import POST_COMPACT
-from mote.contracts.events.file.observation import FILE_CHANGED
-from mote.contracts.events.session import SESSION_START
-
-if TYPE_CHECKING:
-    pass
+from mote.contracts.events.conversation import POST_COMPACT, PostCompactEvent
+from mote.contracts.events.file.observation import FILE_CHANGED, FileChangedEvent
+from mote.contracts.events.session import SESSION_START, SessionStartEvent
+from mote.contracts.hook.invocation import FileChangedPayload
 
 _E = TypeVar("_E")
 
@@ -38,16 +36,6 @@ _BINDINGS: dict[str, _HookBinding] = {
         "SessionStart",
         lambda event: {"source": event.source},
     ),
-    FILE_CHANGED: _HookBinding["FileChangedEvent"](
-        "FileChanged",
-        lambda event: {
-            "path": event.path,
-            "change_type": event.change_type,
-            "prior_version": event.prior_version,
-            "version": event.version,
-            "attribution": event.attribution,
-        },
-    ),
 }
 
 
@@ -58,6 +46,17 @@ class HookSubscriber:
         self._hook = hook_manager
 
     async def handle(self, event) -> None:
+        if isinstance(event, FileChangedEvent):
+            await self._hook.fire_file_changed(
+                FileChangedPayload(
+                    path=event.path,
+                    change_type=event.change_type,
+                    prior_version=event.prior_version,
+                    version=event.version,
+                    attribution=event.attribution,
+                )
+            )
+            return
         binding = _BINDINGS.get(event.name)
         if binding is not None:
             await self._hook.fire(binding.hook_name, binding.payload(event))

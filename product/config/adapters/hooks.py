@@ -22,10 +22,10 @@ Everything is best-effort: a missing / empty / malformed file yields ``None``
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional, Sequence
 
-from mote.product.config.layered_json import load_json_section
+from mote.product.config.layered_json import decode_json_section
+from mote.product.extensions.sources import ExtensionKind, ExtensionSource
 from mote.runtime.config.hook import HookConfig
 from mote.runtime.telemetry.logging import logger
 
@@ -34,7 +34,7 @@ from mote.runtime.telemetry.logging import logger
 HOOKS_CONFIG_FILE_NAME = "hooks.json"
 
 
-def load_global_hooks(paths: Sequence[Path]) -> Optional[HookConfig]:
+def load_global_hooks(sources: Sequence[ExtensionSource]) -> Optional[HookConfig]:
     """Merge every ``.mote/hooks.json`` on the layered walk into one HookConfig.
 
     Files are read low→high (``~/.mote/hooks.json`` then the git-root→cwd walk);
@@ -45,8 +45,10 @@ def load_global_hooks(paths: Sequence[Path]) -> Optional[HookConfig]:
     than raising.
     """
     merged: dict[str, list] = {}
-    for path in paths:
-        section = load_json_section(path, "hooks", "Global hooks config")
+    for source in sources:
+        if source.kind is not ExtensionKind.HOOK or not source.approved:
+            raise ValueError("Hook config requires an approved Hook source")
+        section = decode_json_section(source.content, source.canonical_path, "hooks")
         for event, groups in section.items():
             if isinstance(groups, list):
                 merged.setdefault(event, []).extend(groups)  # concat across files
@@ -58,8 +60,7 @@ def load_global_hooks(paths: Sequence[Path]) -> Optional[HookConfig]:
     try:
         return HookConfig(events=merged)  # pydantic validates raw dicts → groups
     except Exception as exc:  # noqa: BLE001 — a bad config must never break wiring
-        logger.warning(f"Global hooks config invalid, ignoring: {exc}")
-        return None
+        raise ValueError("approved Hook configuration is invalid") from exc
 
 
 def merge_hook_configs(*cfgs: Optional[HookConfig]) -> Optional[HookConfig]:

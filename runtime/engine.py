@@ -13,8 +13,7 @@ from mote.runtime.telemetry.logging import logger
 
 
 class ClosableAgent(Protocol):
-    async def cleanup(self) -> None:
-        ...
+    async def cleanup(self) -> None: ...
 
 
 AgentT = TypeVar("AgentT", bound=ClosableAgent)
@@ -66,7 +65,7 @@ class Engine(Generic[RequestT, AgentT]):
 
     @property
     def config(self):
-        return self.services.context.config
+        return self.services.context.activation
 
     @property
     def state(self) -> EngineState:

@@ -21,7 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Optional
+import uuid
+from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar
+
+from pydantic import BaseModel
 
 from mote.contracts.agent import (
     AgentBuilder,
@@ -36,13 +39,17 @@ from mote.contracts.conversation import UserMessage
 from mote.contracts.interaction import AskUserQuestionAnswers
 from mote.contracts.interaction.handoff import HandoffOutcome, HandoffRequest, HandoffStatus
 from mote.contracts.model.topology_codec import decode_route_id
+from mote.contracts.output import RunResult
 from mote.contracts.ports.task.operations import BackgroundTaskService
 from mote.contracts.task.models import TaskId, TaskResultRecord
+from mote.kernel.output import text_output_contract
 from mote.runtime.agent.control import spawn_and_run
 from mote.runtime.agent.role_state import RoleState
+from mote.runtime.agent.wiring import AgentWiring
 from mote.runtime.durable import begin_timer, complete_timer, resume_timer
-from mote.runtime.interactive import HandoffCoordinator
+from mote.runtime.interactive.handoff import HandoffCoordinator
 from mote.runtime.persistence.async_io import run_disk_io
+from mote.runtime.tools.execution_context import current_authorized_invocation
 
 if TYPE_CHECKING:
     from mote.contracts.file import (
@@ -59,7 +66,6 @@ if TYPE_CHECKING:
     from mote.contracts.ports.skill.registry import SkillCatalog
     from mote.runtime.agent.role import Role
     from mote.runtime.agent.role_schema import RoleSchema
-    from mote.runtime.agent.wiring import AgentWiring
     from mote.runtime.fileops.edit_plans import EditPlan, EditPlanRequest
 
 
@@ -68,18 +74,21 @@ if TYPE_CHECKING:
 _MSG_SKILL_FORK_FAILED = "Error: could not run skill fork (agent limit reached)."
 _MSG_QUESTION_REQUIRED = "Error: 'question' argument is required."
 _MSG_CONTENT_REQUIRED = "Error: 'content' argument is required."
-_MSG_NOT_IN_MOTE_ENV = "Not in MoteEnv, command will not be executed."
+_MSG_NO_HUMAN_INTERACTION = "No human interaction channel is bound; command will not be executed."
 _MSG_STOP_SUFFIX = " The user has asked me to stop because I have encountered a problem."
 
 
-class _SkillForkBuilder(AgentBuilder[AgentConstructionRequest, object]):
+SkillDepsT = TypeVar("SkillDepsT")
+
+
+class _SkillForkBuilder(AgentBuilder[AgentConstructionRequest, str], Generic[SkillDepsT]):
     def __init__(
         self,
-        role_type: type["Role[Any, object]"],
+        role_type: type["Role[SkillDepsT, str]"],
         child_schema: "RoleSchema",
         child_state: RoleState,
-        child_config: object,
-        wiring: "AgentWiring[Any, object]",
+        child_config: BaseModel | None,
+        wiring: "AgentWiring[SkillDepsT, str]",
     ) -> None:
         self._role_type = role_type
         self._child_schema = child_schema
@@ -87,7 +96,8 @@ class _SkillForkBuilder(AgentBuilder[AgentConstructionRequest, object]):
         self._child_config = child_config
         self._wiring = wiring
 
-    def build(self, _request: AgentConstructionRequest) -> RunnableAgent[object]:
+    def build(self, request: AgentConstructionRequest) -> RunnableAgent[str]:
+        self._child_state.session_id = request.logical_agent_id
         child = self._role_type(
             role_schema=self._child_schema,
             state=self._child_state,
@@ -146,24 +156,29 @@ class RoleCapabilities:
         pollutes the main transcript. Only the child's final summary returns.
         """
         role = self._role
-        child_schema = role.role_schema.model_copy(deep=True)
-        # Carry the rendered skill body into the child's system prompt (the only
-        # channel that reaches the model — see RoleSchema identity notes).
-        child_schema.system_prompt = f"{child_schema.system_prompt}\n\n{instructions}"
-        child_schema.tools = list(allowed_tools or [])
-        # A fork skill is a bounded subtask, not a delegating orchestrator: drop
-        # MCP/agent/skill declarations so it cannot spawn its own children.
-        child_schema.mcps = []
-        child_schema.agents = []
-        child_schema.skills = []
-
+        parent_schema = role.role_schema
+        route_id = parent_schema.model_route
         if model:
             route_id = decode_route_id(model)
             composition = role._components.current_runtime_composition()
             if not composition.route_policy.supports(route_id):
                 raise ValueError(f"skill fork route is unavailable: {model!r}")
-            child_schema.model_route = route_id
+        # Produce one immutable deployment projection. A fork skill is a bounded
+        # subtask, so MCP/agent/skill declarations are removed atomically with
+        # the prompt, tool allowlist, and optional route specialization.
+        child_schema = parent_schema.model_copy(
+            deep=True,
+            update={
+                "system_prompt": f"{parent_schema.system_prompt}\n\n{instructions}",
+                "tools": list(allowed_tools or []),
+                "mcps": [],
+                "agents": [],
+                "skills": [],
+                "model_route": route_id,
+            },
+        )
         child_config = role._config
+        child_wiring = AgentWiring(dependencies=role.wiring.dependencies.with_output_contract(text_output_contract()))
 
         child_state = RoleState(
             parent_session_id=role.state.session_id,
@@ -171,20 +186,23 @@ class RoleCapabilities:
         )
 
         # Born on the plane through the single spawn authority (resolved via the
-        # explicit ``ctx.agent_control`` on our shared Context), so the fork
+        # scheduler-bound ambient AgentControlPort), so the fork
         # counts against the cap / joins the lineage tree like any other child.
         # We declare SHARE_PARENT so the authority hands the child *our* Context
         # (cost rolls up to us — the skill-fork contract); the factory itself no
         # longer touches context. The handle always tears the child down (its own
         # terminal/kernel PTY, LSP servers, file-watch loop are session-scoped OS
         # resources that leak if dropped without cleanup()).
+        invocation = current_authorized_invocation()
+        request_id = uuid.uuid4().hex if invocation is None else str(invocation.identity.invocation_id)
         spec = SpawnPlan(
+            request_id=request_id,
             definition=SpawnableAgentDefinition(
                 name="skill_fork",
                 aliases=(),
                 description="Run one isolated skill fork.",
                 version="1",
-                builder=_SkillForkBuilder(type(role), child_schema, child_state, child_config, role.wiring),
+                builder=_SkillForkBuilder(type(role), child_schema, child_state, child_config, child_wiring),
             ),
             nickname="skill_fork",
             agent_role="skill_fork",
@@ -192,8 +210,8 @@ class RoleCapabilities:
             lifecycle=Lifecycle.EPHEMERAL,
             context_policy=ContextPolicy.SHARE_PARENT,
         )
-        report = await spawn_and_run(spec, UserMessage(content=arguments), ctx=role)
-        if report is None:
+        report = await spawn_and_run(spec, UserMessage(content=arguments))
+        if not isinstance(report, RunResult):
             return _MSG_SKILL_FORK_FAILED
         return str(report.output).strip()
 
@@ -236,12 +254,17 @@ class RoleCapabilities:
         files: dict[str, bytes],
         *,
         source: str,
+        transaction_id: str | None = None,
     ) -> "MutationResult":
         return await run_disk_io(
             self._role.file_operations.commit_generated_files,
             files,
             source=source,
+            transaction_id=transaction_id,
         )
+
+    def try_reserve_generated_targets(self, targets: tuple[str, ...]):
+        return self._role.file_operations.try_reserve_generated_targets(targets)
 
     def register_resource(self, *, id: str, kind: str, content: str) -> None:
         """Register a loaded capability body for post-compaction re-projection.
@@ -278,21 +301,21 @@ class RoleCapabilities:
         self._role.resource_registry.unload(task_id)
 
     # ------------------------------------------------------------------
-    # Human I/O (only valid inside a MoteEnv)
+    # Human I/O (available only while an explicit interaction Port is bound)
     # ------------------------------------------------------------------
 
     async def ask_user(self, question: str) -> str:
         """Ask the user a question and return their response.
 
-        Only valid inside a MoteEnv. A trailing 'stop' deactivates the role.
+        Requires a bound interaction Port. A trailing 'stop' deactivates the role.
         """
         if not question:
             return _MSG_QUESTION_REQUIRED
 
         role = self._role
-        env = role.state.env
+        env = role.human_interaction
         if env is None:
-            return _MSG_NOT_IN_MOTE_ENV
+            return _MSG_NO_HUMAN_INTERACTION
 
         response = await env.ask_user(question, sent_from=role.role_schema.name)
         if response.strip().lower().endswith(("stop", "<stop>")):
@@ -309,7 +332,7 @@ class RoleCapabilities:
         semantics stay on the plain ``ask_user`` / ``AskUser`` path.
         """
         role = self._role
-        env = role.state.env
+        env = role.human_interaction
         if env is None:
             return AskUserQuestionAnswers()
         return await env.ask_user_question(questions, sent_from=role.role_schema.name)
@@ -319,8 +342,8 @@ class RoleCapabilities:
         role = self._role
         host = role.runtime_host
         descriptor = host.descriptor(runtime)
-        env = role.state.env
-        if env is None or not hasattr(env, "open_handoff"):
+        env = role.human_interaction
+        if env is None:
             return HandoffOutcome(
                 status=HandoffStatus.UNAVAILABLE,
                 runtime_ref=descriptor.ref,
@@ -343,11 +366,11 @@ class RoleCapabilities:
         three :data:`ApprovalChoice` outcomes — the display wording lives in the
         env's front-end (the port selector under i18n, or the console fallback).
         Unlike ask_user(), this does NOT treat any reply as a kill switch — an
-        approval should never silently deactivate the Role. Outside a MoteEnv
+        approval should never silently deactivate the Role. Without a bound Port
         there is no channel, so it fails closed ("deny") and the engine denies.
         """
         role = self._role
-        env = role.state.env
+        env = role.human_interaction
         if env is None:
             return "deny"
         return await env.request_approval(request, sent_from=role.role_schema.name)
@@ -355,15 +378,15 @@ class RoleCapabilities:
     async def reply_to_user(self, content: str) -> str:
         """Reply to the user with the provided content.
 
-        Only valid inside a MoteEnv.
+        Requires a bound interaction Port.
         """
         if not content:
             return _MSG_CONTENT_REQUIRED
 
         role = self._role
-        env = role.state.env
+        env = role.human_interaction
         if env is None:
-            return _MSG_NOT_IN_MOTE_ENV
+            return _MSG_NO_HUMAN_INTERACTION
 
         return await env.reply_to_user(content, sent_from=role.role_schema.name)
 

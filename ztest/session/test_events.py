@@ -212,6 +212,50 @@ def test_runtime_checkpoint_event_roundtrips():
     assert rebuilt.reason == "write-commit"
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("epoch", "2"),
+        ("revision", "7"),
+        ("schema_version", "1"),
+        ("runtime_id", 1),
+        ("fidelity", 1),
+    ),
+)
+def test_runtime_checkpoint_event_rejects_primitive_coercion(field, value):
+    checkpoint = RuntimeCheckpoint(
+        runtime_id="terminal-1",
+        kind="terminal",
+        epoch=2,
+        revision=7,
+        codec="terminal-state+json@1",
+        schema_version=1,
+        payload_ref="memory:terminal",
+        fidelity=CheckpointFidelity.LOGICAL,
+    )
+    payload = RuntimeCheckpointEvent(checkpoint=checkpoint).payload()
+    payload[field] = value
+    with pytest.raises((TypeError, ValueError)):
+        RuntimeCheckpointEvent.from_payload(payload)
+
+
+def test_runtime_checkpoint_event_rejects_extra_field():
+    checkpoint = RuntimeCheckpoint(
+        runtime_id="terminal-1",
+        kind="terminal",
+        epoch=2,
+        revision=7,
+        codec="terminal-state+json@1",
+        schema_version=1,
+        payload_ref="memory:terminal",
+        fidelity=CheckpointFidelity.LOGICAL,
+    )
+    payload = RuntimeCheckpointEvent(checkpoint=checkpoint).payload()
+    payload["future"] = True
+    with pytest.raises(ValueError, match="fields must be exactly"):
+        RuntimeCheckpointEvent.from_payload(payload)
+
+
 def test_runtime_commit_fact_and_projection_ack_roundtrip():
     checkpoint = RuntimeCheckpoint(
         runtime_id="canvas-1",

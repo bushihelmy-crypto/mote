@@ -8,6 +8,7 @@ Covers OpenAI<->Anthropic message conversion, tool spec / tool_choice mapping,
 response normalization, cost accounting, streaming, error translation, and the
 base_url auto-detection in ``create_llm_instance``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -444,7 +445,7 @@ class TestCompletion:
         llm = _make_llm()
         fake = _FakeMessages(resp=_Resp([]))
         llm.aclient = _FakeClient(fake)
-        from mote.runtime.errors import LLMEmptyResponseError
+        from mote.contracts.model.provider_errors import LLMEmptyResponseError
 
         with pytest.raises(LLMEmptyResponseError):
             run(llm._achat_completion([{"role": "user", "content": "hi"}], raise_if_empty=True))
@@ -480,7 +481,7 @@ class TestCompletion:
         response = httpx.Response(429, request=request)
         exc = anthropic.RateLimitError("rate limited", response=response, body=None)
         llm.aclient = _FakeClient(_FakeMessages(raise_exc=exc))
-        from mote.runtime.errors import LLMRateLimitError
+        from mote.contracts.model.provider_errors import LLMRateLimitError
 
         with pytest.raises(LLMRateLimitError):
             run(llm._achat_completion([{"role": "user", "content": "hi"}]))
@@ -630,8 +631,8 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.runtime.errors import LLMAuthenticationError, LLMBadRequestError, classify_llm_error
-        from mote.runtime.errors.classification import is_retryable
+        from mote.contracts.model.provider_errors import LLMAuthenticationError, LLMBadRequestError
+        from mote.runtime.resilience.error_classification import classify_llm_error, is_retryable
 
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
 
@@ -649,7 +650,8 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.runtime.errors import LLMRateLimitError, classify_llm_error
+        from mote.contracts.model.provider_errors import LLMRateLimitError
+        from mote.runtime.resilience.error_classification import classify_llm_error
 
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         response = httpx.Response(429, request=request, headers={"retry-after": "17"})
@@ -664,7 +666,8 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.runtime.errors import LLMRateLimitError, classify_llm_error
+        from mote.contracts.model.provider_errors import LLMRateLimitError
+        from mote.runtime.resilience.error_classification import classify_llm_error
 
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         response = httpx.Response(429, request=request)  # no Retry-After header
@@ -681,7 +684,7 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.runtime.errors import classify_llm_error
+        from mote.runtime.resilience.error_classification import classify_llm_error
 
         # RFC 7231 second form: an absolute HTTP-date → converted to a positive
         # delay by subtracting *now* (aware UTC). Use a far-future instant so the
@@ -703,7 +706,7 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.runtime.errors import classify_llm_error
+        from mote.runtime.resilience.error_classification import classify_llm_error
 
         past = datetime.now(timezone.utc) - timedelta(seconds=60)
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
@@ -718,7 +721,7 @@ class TestErrorClassification:
         import anthropic
         import httpx
 
-        from mote.runtime.errors import classify_llm_error
+        from mote.runtime.resilience.error_classification import classify_llm_error
 
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         response = httpx.Response(429, request=request, headers={"retry-after": "not-a-date-or-number"})

@@ -27,7 +27,7 @@ from mote.contracts.file.mutations import CreateMutation, DeleteMutation, Replac
 from mote.contracts.file.transactions import HunkRecord
 from mote.contracts.tool import parse_toolset_manifest
 from mote.runtime.artifacts import ArtifactRepositoryLayout
-from mote.runtime.fileops.mutation import ArtifactRepository
+from mote.runtime.fileops.mutation import FileMutationArtifactRepository
 from mote.runtime.fileops.resource_limits import ARTIFACT_HARD_LIMIT_BYTES, ARTIFACT_WRITE_TTL_SECONDS
 from mote.runtime.persistence import DiskWriter
 from mote.runtime.session.codec import decode_session_event
@@ -95,12 +95,12 @@ async def _inherit_file_history(source: SessionLog, child: SessionLog) -> None:
     content_repository = layout.open(
         layout.ownership(session_id=source.session_id, project_root=source.path.parent)
     ).repository
-    source_repository = ArtifactRepository(
+    source_repository = FileMutationArtifactRepository(
         content_repository,
         lifecycle_root=source.path.parent / "artifact-lifecycle",
         hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
     )
-    child_repository = ArtifactRepository(
+    child_repository = FileMutationArtifactRepository(
         content_repository,
         lifecycle_root=child.path.parent / "artifact-lifecycle",
         hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
@@ -244,8 +244,8 @@ def _hunk_refs(records: Iterable[HunkRecord]) -> tuple[str, ...]:
 
 async def _append_with_artifacts(
     child: SessionLog,
-    child_repository: ArtifactRepository,
-    source_repository: ArtifactRepository,
+    child_repository: FileMutationArtifactRepository,
+    source_repository: FileMutationArtifactRepository,
     event: SessionEvent,
     refs: Iterable[ContentIdentity | str],
     *,
@@ -272,7 +272,7 @@ async def _append_with_artifacts(
 
 
 def _resolve_unique_refs(
-    repository: ArtifactRepository,
+    repository: FileMutationArtifactRepository,
     refs: Iterable[ContentIdentity | str],
 ) -> tuple[ContentIdentity, ...]:
     unique: dict[str, ContentIdentity] = {}

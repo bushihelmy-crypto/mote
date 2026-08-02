@@ -20,9 +20,14 @@ from mote.contracts.model.failover import (
     Retryability,
 )
 from mote.contracts.service import (
+    MediaGenerationPayload,
+    MediaGenerationResult,
+    MediaGenerationSpec,
+    MediaKind,
     ServiceAcceptance,
     ServiceAccepted,
     ServiceAttemptFinishedRecord,
+    ServiceCallState,
     ServiceCompleted,
     ServiceEndpointDescriptor,
     ServiceEndpointFailure,
@@ -32,15 +37,24 @@ from mote.contracts.service import (
     ServiceReceipt,
     ServiceResponse,
 )
-from mote.contracts.service.errors import ServiceCallExhaustedError, ServiceCallInDoubtError
+from mote.contracts.service.errors import (
+    ServiceCallExhaustedError,
+    ServiceCallInDoubtError,
+    ServiceCallWaitingRemoteError,
+)
 from mote.runtime.resilience.admission import AdmissionResult
 from mote.runtime.service_gateway import (
+    HostedServiceReconciler,
     LocalServiceCallJournal,
     RuntimeServiceGateway,
     ServiceFailoverGroup,
     ServiceFailoverPlanner,
     ServiceRuntimeSnapshot,
 )
+
+
+class _ProcessCrash(BaseException):
+    pass
 
 
 def _transient() -> FailureDisposition:
@@ -64,6 +78,7 @@ class _Adapter:
         *,
         endpoint_id: str = "endpoint-a",
         credential_slot_id: str = "slot-a",
+        cancel_error: Exception | None = None,
     ) -> None:
         self.endpoint_id = endpoint_id
         self.credential_slot_id = credential_slot_id
@@ -72,6 +87,8 @@ class _Adapter:
         self.start_count = 0
         self.poll_count = 0
         self.reconcile_count = 0
+        self.cancel_count = 0
+        self.cancel_error = cancel_error
 
     async def start_once(self, invocation, endpoint, *, timeout_seconds):
         self.start_count += 1
@@ -92,6 +109,9 @@ class _Adapter:
         return None
 
     async def cancel_once(self, receipt, endpoint, *, timeout_seconds):
+        self.cancel_count += 1
+        if self.cancel_error is not None:
+            raise self.cancel_error
         return None
 
     def classify_start(self, exc: Exception) -> ServiceEndpointFailure:
@@ -146,11 +166,23 @@ class _CrashAfterAttemptFinish:
             self._crashed = True
             raise RuntimeError("injected process window")
 
+    def claim(self, service_call_id):
+        return self._journal.claim(service_call_id)
+
     def records(self, service_call_id):
         return self._journal.records(service_call_id)
 
     def recover(self, service_call_id):
         return self._journal.recover(service_call_id)
+
+    async def request_cancel(self, service_call_id):
+        await self._journal.request_cancel(service_call_id)
+
+    def cancellation_requested(self, service_call_id):
+        return self._journal.cancellation_requested(service_call_id)
+
+    async def pending_calls(self, *, after, limit):
+        return await self._journal.pending_calls(after=after, limit=limit)
 
 
 def _gateway(
@@ -296,7 +328,10 @@ def _invocation(
         service_call_id=call_id,
         route_id="media.image",
         capability="media.generate.image",
-        payload={"item": {"filename": "a.png"}},
+        payload=MediaGenerationPayload(
+            media_kind=MediaKind.IMAGE,
+            item=MediaGenerationSpec(description="test", filename="a.png"),
+        ),
         semantics=semantics,
         idempotency_key=f"key-{call_id}",
     )
@@ -304,15 +339,134 @@ def _invocation(
 
 @pytest.mark.asyncio
 async def test_one_shot_success_is_checkpointed(tmp_path: Path) -> None:
-    adapter = _Adapter([ServiceCompleted(response=ServiceResponse(value={"url": "u"}))])
+    adapter = _Adapter(
+        [ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="u")))]
+    )
     gateway = _gateway(tmp_path, adapter)
 
     first = await gateway.execute(_invocation("one-shot"))
     replay = await gateway.execute(_invocation("one-shot"))
 
-    assert first.response.value == {"url": "u"}
+    assert first.response.value.url == "u"
     assert replay == first
     assert adapter.start_count == 1
+
+
+@pytest.mark.asyncio
+async def test_two_gateway_instances_share_one_cross_process_call_owner(
+    tmp_path: Path,
+) -> None:
+    adapter = _Adapter(
+        [ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="u")))]
+    )
+    first = _gateway(tmp_path, adapter)
+    second = _gateway(tmp_path, adapter)
+
+    left, right = await asyncio.gather(
+        first.execute(_invocation("multi-owner")),
+        second.execute(_invocation("multi-owner")),
+    )
+
+    assert left == right
+    assert adapter.start_count == 1
+    journal = LocalServiceCallJournal(tmp_path)
+    owner = journal.generation_path_for("multi-owner")
+    assert '"generation":2' in owner.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_reconciler_rediscovers_accepted_call_without_process_wake(
+    tmp_path: Path,
+) -> None:
+    receipt = ServiceReceipt(provider_operation_id="remote-reconcile", poll_after_seconds=0)
+    interrupted = _Adapter(
+        [ServiceAccepted(receipt=receipt)],
+        [_ProcessCrash()],
+    )
+    with pytest.raises(_ProcessCrash):
+        await _gateway(tmp_path, interrupted).execute(_invocation("scan-reconcile"))
+
+    resumed = _Adapter(
+        [],
+        [ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="settled")))],
+    )
+    journal = LocalServiceCallJournal(tmp_path)
+    gateway = _gateway(tmp_path, resumed, journal=journal)
+    reconciler = HostedServiceReconciler(gateway, journal, scan_interval_seconds=60, page_size=1, concurrency=1)
+
+    cycle = await reconciler.reconcile_once()
+
+    assert cycle.discovered == cycle.settled == 1
+    assert cycle.failed == 0
+    assert journal.recover("scan-reconcile").state is ServiceCallState.SUCCEEDED
+    assert resumed.start_count == 0
+
+
+@pytest.mark.asyncio
+async def test_deadline_returns_resume_handle_without_remote_cancel(
+    tmp_path: Path,
+) -> None:
+    receipt = ServiceReceipt(provider_operation_id="remote-deadline", poll_after_seconds=20)
+    adapter = _Adapter([ServiceAccepted(receipt=receipt)])
+    journal = LocalServiceCallJournal(tmp_path)
+
+    with pytest.raises(ServiceCallWaitingRemoteError) as raised:
+        await _gateway(tmp_path, adapter, journal=journal).execute(_invocation("deadline-waiting"))
+
+    assert raised.value.resume_handle.service_call_id == "deadline-waiting"
+    assert raised.value.resume_handle.stream_revision >= 4
+    assert journal.recover("deadline-waiting").state is ServiceCallState.WAITING_REMOTE
+    assert adapter.cancel_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_fails", [False, True])
+async def test_caller_cancellation_has_one_durable_remote_settlement(
+    tmp_path: Path,
+    cancel_fails: bool,
+) -> None:
+    receipt = ServiceReceipt(provider_operation_id="remote-cancel", poll_after_seconds=5)
+    adapter = _Adapter(
+        [ServiceAccepted(receipt=receipt)],
+        cancel_error=(RuntimeError("unknown cancel") if cancel_fails else None),
+    )
+    journal = LocalServiceCallJournal(tmp_path)
+    gateway = _gateway(tmp_path, adapter, journal=journal)
+    task = asyncio.create_task(gateway.execute(_invocation("caller-cancel")))
+    while adapter.start_count == 0:
+        await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    recovery = journal.recover("caller-cancel")
+    assert adapter.cancel_count == 1
+    assert recovery.state is (ServiceCallState.IN_DOUBT if cancel_fails else ServiceCallState.CANCELLED)
+    assert recovery.terminal is not None
+
+
+@pytest.mark.asyncio
+async def test_explicit_cancel_signals_current_fenced_poll_owner(
+    tmp_path: Path,
+) -> None:
+    receipt = ServiceReceipt(provider_operation_id="remote-explicit", poll_after_seconds=0)
+    adapter = _Adapter(
+        [ServiceAccepted(receipt=receipt)],
+        [ServiceAccepted(receipt=receipt) for _ in range(1000)],
+    )
+    gateway = _gateway(tmp_path, adapter)
+    execution = asyncio.create_task(gateway.execute(_invocation("explicit-cancel")))
+    while adapter.poll_count == 0:
+        await asyncio.sleep(0)
+
+    cancelled = await gateway.cancel("explicit-cancel")
+    with pytest.raises(ServiceCallExhaustedError, match="explicitly cancelled"):
+        await execution
+
+    assert cancelled
+    assert adapter.cancel_count == 1
 
 
 @pytest.mark.asyncio
@@ -323,14 +477,14 @@ async def test_receipt_poll_failure_never_resubmits(tmp_path: Path) -> None:
         [
             ConnectionError("poll transport"),
             ServiceAccepted(receipt=receipt),
-            ServiceCompleted(response=ServiceResponse(value={"url": "u"})),
+            ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="u"))),
         ],
     )
     gateway = _gateway(tmp_path, adapter)
 
     result = await gateway.execute(_invocation("poll-retry"))
 
-    assert result.response.value == {"url": "u"}
+    assert result.response.value.url == "u"
     assert adapter.start_count == 1
     assert adapter.poll_count == 3
 
@@ -340,18 +494,18 @@ async def test_receipt_survives_cancelled_process_window(tmp_path: Path) -> None
     receipt = ServiceReceipt(provider_operation_id="remote-2", poll_after_seconds=0)
     first_adapter = _Adapter(
         [ServiceAccepted(receipt=receipt)],
-        [asyncio.CancelledError()],
+        [_ProcessCrash()],
     )
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(_ProcessCrash):
         await _gateway(tmp_path, first_adapter).execute(_invocation("resume-receipt"))
 
     resumed_adapter = _Adapter(
         [],
-        [ServiceCompleted(response=ServiceResponse(value={"url": "restored"}))],
+        [ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="restored")))],
     )
     result = await _gateway(tmp_path, resumed_adapter).resume(_invocation("resume-receipt"))
 
-    assert result.response.value == {"url": "restored"}
+    assert result.response.value.url == "restored"
     assert resumed_adapter.start_count == 0
     assert resumed_adapter.poll_count == 1
 
@@ -379,8 +533,8 @@ async def test_non_repeatable_unknown_submit_becomes_in_doubt(tmp_path: Path) ->
 async def test_concurrent_calls_keep_attempt_cursors_isolated(tmp_path: Path) -> None:
     adapter = _Adapter(
         [
-            ServiceCompleted(response=ServiceResponse(value="a")),
-            ServiceCompleted(response=ServiceResponse(value="b")),
+            ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="a"))),
+            ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="b.png", url="b"))),
         ]
     )
     gateway = _gateway(tmp_path, adapter)
@@ -390,7 +544,7 @@ async def test_concurrent_calls_keep_attempt_cursors_isolated(tmp_path: Path) ->
         gateway.execute(_invocation("right")),
     )
 
-    assert {left.response.value, right.response.value} == {"a", "b"}
+    assert {left.response.value.url, right.response.value.url} == {"a", "b"}
     assert adapter.start_count == 2
 
 
@@ -407,14 +561,14 @@ async def test_definitive_rejection_can_fallback_endpoint(tmp_path: Path) -> Non
         credential_slot_id="slot-a",
     )
     right = _Adapter(
-        [ServiceCompleted(response=ServiceResponse(value="fallback"))],
+        [ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="fallback")))],
         endpoint_id="endpoint-b",
         credential_slot_id="slot-b",
     )
 
     result = await _multi_gateway(tmp_path, left, right).execute(_invocation("definitive-fallback"))
 
-    assert result.response.value == "fallback"
+    assert result.response.value.url == "fallback"
     assert left.start_count == 1
     assert right.start_count == 1
 
@@ -429,7 +583,11 @@ async def test_unknown_idempotent_submit_does_not_cross_endpoint(
         credential_slot_id="slot-a",
     )
     right = _Adapter(
-        [ServiceCompleted(response=ServiceResponse(value="unsafe-fallback"))],
+        [
+            ServiceCompleted(
+                response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="unsafe-fallback"))
+            )
+        ],
         endpoint_id="endpoint-b",
         credential_slot_id="slot-b",
     )
@@ -460,7 +618,9 @@ async def test_admission_rejection_does_not_consume_wire_attempt(
                 )
             )
 
-    adapter = _Adapter([ServiceCompleted(response=ServiceResponse(value="must-not-run"))])
+    adapter = _Adapter(
+        [ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="must-not-run")))]
+    )
     gateway = _gateway(
         tmp_path,
         adapter,
@@ -494,13 +654,13 @@ async def test_auth_rejection_rotates_credential_without_switching_endpoint(
         credential_slot_id="slot-a",
     )
     second = _Adapter(
-        [ServiceCompleted(response=ServiceResponse(value="rotated"))],
+        [ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="rotated")))],
         credential_slot_id="slot-b",
     )
 
     result = await _credential_gateway(tmp_path, first, second).execute(_invocation("credential-rotation"))
 
-    assert result.response.value == "rotated"
+    assert result.response.value.url == "rotated"
     assert first.start_count == 1
     assert second.start_count == 1
 
@@ -510,7 +670,9 @@ async def test_resume_heals_success_checkpoint_window_without_new_wire(
     tmp_path: Path,
 ) -> None:
     journal = LocalServiceCallJournal(tmp_path)
-    first = _Adapter([ServiceCompleted(response=ServiceResponse(value="checkpointed"))])
+    first = _Adapter(
+        [ServiceCompleted(response=ServiceResponse(value=MediaGenerationResult(filename="a.png", url="checkpointed")))]
+    )
     with pytest.raises(RuntimeError, match="injected process window"):
         await _gateway(
             tmp_path,
@@ -521,7 +683,7 @@ async def test_resume_heals_success_checkpoint_window_without_new_wire(
     resumed = _Adapter([])
     result = await _gateway(tmp_path, resumed, journal=journal).resume(_invocation("heal-success"))
 
-    assert result.response.value == "checkpointed"
+    assert result.response.value.url == "checkpointed"
     assert resumed.start_count == 0
 
 

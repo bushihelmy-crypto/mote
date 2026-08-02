@@ -1,6 +1,5 @@
 """Public contracts for Mote's File bounded context."""
 
-from mote.contracts.content.identity import ContentIdentity
 from mote.contracts.file.errors import (
     ContentChangedError,
     DocumentExtractionError,
@@ -103,7 +102,6 @@ __all__ = [
     "AbsentVersion",
     "ArtifactStorePort",
     "AtomicPublisherPort",
-    "ContentIdentity",
     "ByteReadRequest",
     "ByteViewMode",
     "ContentChangedError",

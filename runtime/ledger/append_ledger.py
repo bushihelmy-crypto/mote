@@ -1,53 +1,62 @@
-"""Runtime crash-durable, fold-by-key JSONL ledger primitive.
-
-Several subsystems need the same bookkeeping shape: an append-only log of small
-records, each keyed by a stable id, written durably (fsync) *before* the thing
-it records happens, and folded on read to the latest record per key so a fresh
-instance — e.g. one rebuilt by a resume path in a new process — sees the
-pre-crash state. Run-step and file-operation journals use this primitive.
-
-This base owns the mechanics — append / fold / rewrite (bounded growth) /
-best-effort durability — and stays storage-agnostic: it is handed an already
-resolved file :class:`~pathlib.Path`, so the domain subclass keeps ownership of
-*where* its log lives (e.g. resolving a session directory through the workspace
-store). The subclass supplies only the two domain facts the base cannot know:
-how to serialize/parse a record and what its fold key is.
-
-Records must expose ``to_json() -> str`` (one JSON object, no newline). Subclass
-hooks: :meth:`_parse_record` (dict → record) and :meth:`_record_key`
-(record → fold key).
-"""
+"""Fail-closed crash-durable, fold-by-key JSONL ledger primitive."""
 
 from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic, Iterable, Optional, Protocol, TypeVar, runtime_checkable
 
 from mote.runtime.persistence import disk_io
-from mote.runtime.telemetry.logging import logger
 
 
 @runtime_checkable
 class LedgerRecord(Protocol):
-    """A ledger entry — must serialize to a single JSON object line."""
+    """A ledger entry serialized as one canonical JSON object line."""
 
-    def to_json(self) -> str:
-        ...
+    def to_json(self) -> str: ...
 
 
 R = TypeVar("R", bound=LedgerRecord)
 
 
-class AppendOnlyLedger(ABC, Generic[R]):
-    """Append-only JSONL, folded to the latest record per key, crash-durable.
+@dataclass(frozen=True)
+class LedgerCommitReceipt:
+    """Proof that one local ledger mutation reached its durable commit point."""
 
-    Cheap to construct: it folds any existing on-disk log into an in-memory
-    latest-per-key index (so lookups are O(1)). All disk I/O is best-effort — a
-    write failure logs and is swallowed so it can never break the caller; only
-    cross-crash durability is lost, the in-memory index stays correct for the
-    live process.
+    record_key: str
+    path: Path
+
+
+class LedgerPersistenceError(RuntimeError):
+    """A local ledger mutation did not reach its durable commit point."""
+
+    def __init__(self, operation: str, path: Path, cause: OSError) -> None:
+        self.operation = operation
+        self.path = path
+        self.cause = cause
+        super().__init__(f"[ledger_persistence_failed] operation={operation} path={path}: {cause}")
+
+
+class LedgerCorruptionError(RuntimeError):
+    """A committed JSONL frame cannot be decoded or violates ledger invariants."""
+
+    def __init__(self, path: Path, line_number: int, byte_offset: int, reason: str) -> None:
+        self.path = path
+        self.line_number = line_number
+        self.byte_offset = byte_offset
+        self.reason = reason
+        super().__init__(f"[ledger_corruption] path={path} line={line_number} offset={byte_offset}: {reason}")
+
+
+class AppendOnlyLedger(ABC, Generic[R]):
+    """JSONL ledger whose observable state changes only after durable commit.
+
+    A final byte segment without a newline is an uncommitted torn tail and is
+    ignored in its entirety. Every newline-terminated frame is committed and
+    therefore decoded strictly; corruption never degrades to an empty or
+    partially folded ledger.
     """
 
     def __init__(self, path: Path) -> None:
@@ -57,90 +66,112 @@ class AppendOnlyLedger(ABC, Generic[R]):
 
     @property
     def path(self) -> Path:
-        """The resolved JSONL file backing this ledger."""
         return self._path
 
-    # ------------------------------------------------------------------
-    # Subclass hooks — the only domain knowledge the base needs
-    # ------------------------------------------------------------------
-
     @abstractmethod
-    def _parse_record(self, data: dict) -> R:
-        """Build a record from one decoded JSON object (raises on bad shape)."""
+    def _parse_record(self, data: dict[str, object]) -> R:
+        """Build a record from one decoded JSON object."""
 
     @abstractmethod
     def _record_key(self, record: R) -> str:
-        """The stable fold key for *record* (latest write per key wins)."""
+        """Return the stable fold key for *record*."""
 
-    # ------------------------------------------------------------------
-    # Reads
-    # ------------------------------------------------------------------
+    def _validate_transition(self, previous: R | None, record: R) -> None:
+        """Validate a domain lifecycle transition before it becomes visible."""
 
     def get(self, key: str) -> Optional[R]:
-        """The latest record for *key*, or ``None`` if never recorded."""
         return self._latest.get(key)
 
     def records(self) -> list[R]:
-        """All folded records (latest per key), in insertion order."""
         return list(self._latest.values())
 
-    # ------------------------------------------------------------------
-    # Writes
-    # ------------------------------------------------------------------
-
-    def append(self, record: R) -> None:
-        """Fold *record* into the index and durably append it (fsync)."""
-        self._latest[self._record_key(record)] = record
+    def append(self, record: R) -> LedgerCommitReceipt:
+        """Durably append *record*, then publish it to the in-memory fold."""
+        line, canonical = self._serialize_and_parse(record)
+        key = self._record_key(canonical)
+        self._validate_transition(self._latest.get(key), canonical)
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            disk_io.append_line(self._path, record.to_json(), fsync=True)
-        except OSError as e:
-            logger.warning(f"Failed to append ledger record {self._path}: {e}")
+            disk_io.append_line(self._path, line, fsync=True)
+        except OSError as exc:
+            raise LedgerPersistenceError("append", self._path, exc) from exc
+        self._latest[key] = canonical
+        return LedgerCommitReceipt(record_key=key, path=self._path)
 
-    def reap(self, keys: Iterable[str]) -> None:
-        """Drop the given keys and atomically rewrite the folded log.
-
-        Keeps the file from growing without bound over a long-lived session
-        once records have been resolved and no longer need to survive a crash.
-        """
+    def reap(self, keys: Iterable[str]) -> LedgerCommitReceipt | None:
+        """Durably replace the folded log, then publish the new snapshot."""
         ids = set(keys)
         if not ids:
-            return
-        removed = False
-        for key in ids:
-            if self._latest.pop(key, None) is not None:
-                removed = True
-        if removed:
-            self._rewrite()
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
-    def _rewrite(self) -> None:
+            return None
+        candidate = {key: record for key, record in self._latest.items() if key not in ids}
+        if len(candidate) == len(self._latest):
+            return None
+        lines = "".join(f"{self._serialize_record(record)}\n" for record in candidate.values())
         try:
-            lines = "".join(f"{r.to_json()}\n" for r in self._latest.values())
             disk_io.atomic_write(self._path, lines.encode("utf-8"), fsync=True)
-        except OSError as e:
-            logger.warning(f"Failed to rewrite ledger {self._path}: {e}")
+        except OSError as exc:
+            raise LedgerPersistenceError("reap", self._path, exc) from exc
+        self._latest = candidate
+        return LedgerCommitReceipt(record_key="reap", path=self._path)
+
+    def _serialize_record(self, record: R) -> str:
+        line, _ = self._serialize_and_parse(record)
+        return line
+
+    def _serialize_and_parse(self, record: R) -> tuple[str, R]:
+        line = record.to_json()
+        if "\n" in line or "\r" in line:
+            raise ValueError("ledger record must occupy exactly one JSONL frame")
+        decoded = json.loads(line)
+        if not isinstance(decoded, dict):
+            raise TypeError("ledger record must encode a JSON object")
+        canonical = self._parse_record(decoded)
+        if canonical != record:
+            raise ValueError("ledger record does not round-trip through its strict decoder")
+        return line, canonical
+
+    def _decode_frame(self, raw: bytes) -> R:
+        text = raw.decode("utf-8")
+        decoded = json.loads(text)
+        if not isinstance(decoded, dict):
+            raise TypeError("ledger frame must be a JSON object")
+        return self._parse_record(decoded)
 
     def _load(self) -> None:
-        if not self._path.exists():
-            return
         try:
-            text = self._path.read_text(encoding="utf-8")
-        except OSError as e:
-            logger.warning(f"Failed to read ledger {self._path}: {e}")
+            content = self._path.read_bytes()
+        except FileNotFoundError:
             return
-        for raw in text.splitlines():
-            raw = raw.strip()
-            if not raw:
-                continue
+        except OSError as exc:
+            raise LedgerPersistenceError("read", self._path, exc) from exc
+
+        candidate: dict[str, R] = {}
+        offset = 0
+        frames = content.splitlines(keepends=True)
+        for index, framed in enumerate(frames, start=1):
+            terminated = framed.endswith((b"\n", b"\r"))
+            if not terminated:
+                break  # the only tolerated state: one uncommitted torn tail
+            raw = framed.rstrip(b"\r\n")
             try:
-                record = self._parse_record(json.loads(raw))
-            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-                continue  # skip a torn/garbled line, keep folding the rest
-            self._latest[self._record_key(record)] = record
+                if not raw:
+                    raise ValueError("empty committed ledger frame")
+                record = self._decode_frame(raw)
+                key = self._record_key(record)
+                self._validate_transition(candidate.get(key), record)
+            except Exception as exc:
+                if isinstance(exc, LedgerPersistenceError):
+                    raise
+                raise LedgerCorruptionError(self._path, index, offset, str(exc)) from exc
+            candidate[key] = record
+            offset += len(framed)
+        self._latest = candidate
 
 
-__all__ = ["AppendOnlyLedger", "LedgerRecord"]
+__all__ = [
+    "AppendOnlyLedger",
+    "LedgerCommitReceipt",
+    "LedgerCorruptionError",
+    "LedgerPersistenceError",
+    "LedgerRecord",
+]

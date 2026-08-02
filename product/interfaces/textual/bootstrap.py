@@ -1,4 +1,5 @@
 """Composition root for the optional Textual host."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -20,7 +21,7 @@ from mote.runtime.interactive.presentation import SurfacePresenterRegistry
 from mote.runtime.telemetry.logging import resume_console_log, suspend_console_log
 
 
-def run_textual(
+async def run_textual(
     *,
     build_driver: Callable[..., Any],
     model: Optional[str] = None,
@@ -47,7 +48,7 @@ def run_textual(
     )
     port = TextualPort(presenters=presenters)
     consumer = TextualConsumer(app)
-    driver = build_driver(
+    driver = await build_driver(
         model=model,
         tools=tools,
         cwd=cwd,
@@ -60,7 +61,7 @@ def run_textual(
     port.bind_app(app)
     suspended = suspend_console_log()
     try:
-        app.run()
+        await app.run_async()
     finally:
         if suspended:
             resume_console_log()

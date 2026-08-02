@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for OAuthManager: refresh-on-expiry, caching, mtime re-read, force_refresh."""
+
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -28,7 +30,9 @@ class FakeClient:
     def refresh(self, refresh_token: str) -> OAuthToken:
         self.refresh_calls += 1
         return OAuthToken(
-            access_token=f"rf-{self.refresh_calls}", refresh_token=refresh_token, expires_at=time.time() + self.ttl
+            access_token=f"rf-{self.refresh_calls}",
+            refresh_token=refresh_token,
+            expires_at=time.time() + self.ttl,
         )
 
 
@@ -49,6 +53,15 @@ def test_bootstrap_mints_via_client_credentials(tmp_path):
     assert client.cc_calls == 1
     # persisted
     assert store.load().access_token == "cc-1"
+
+
+def test_untrusted_provider_name_cannot_escape_lock_root(tmp_path):
+    cfg = OAuthProviderConfig(token_url="https://issuer/token", client_id="cid")
+    store = FileCredentialStore("../../outside", base_dir=tmp_path)
+    manager = OAuthManager(cfg, provider="../../outside", store=store, client=FakeClient())
+
+    assert manager._lock_path.parent == tmp_path.resolve()
+    assert "outside" not in manager._lock_path.name
 
 
 def test_cached_token_not_refetched(tmp_path):
@@ -93,6 +106,34 @@ def test_mtime_reread_skips_redundant_refresh(tmp_path):
     # No network refresh happened because the re-read under lock found it valid.
     assert client.cc_calls == 0
     assert client.refresh_calls == 0
+
+
+def test_two_managers_serialize_refresh_and_commit_one_generation(tmp_path):
+    class SlowClient(FakeClient):
+        def refresh(self, refresh_token: str) -> OAuthToken:
+            time.sleep(0.05)
+            return super().refresh(refresh_token)
+
+    client = SlowClient()
+    first, store = _manager(tmp_path, client)
+    second, _ = _manager(tmp_path, client)
+    store.save(
+        OAuthToken(
+            access_token="expired",
+            refresh_token="refresh",
+            expires_at=time.time() - 1,
+        )
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda manager: manager.get_valid_token(), (first, second)))
+
+    assert results == ["rf-1", "rf-1"]
+    assert client.refresh_calls == 1
+    record = store.load_record()
+    assert record is not None
+    assert record.revision == 2
+    assert record.token_generation == 2
 
 
 def test_force_refresh_bypasses_buffer(tmp_path):
@@ -164,6 +205,22 @@ def test_login_rejects_headless_grant(tmp_path):
     mgr, _ = _manager(tmp_path, FakeClient(), grant_type=GrantType.CLIENT_CREDENTIALS)
     with pytest.raises(OAuthConfigError):
         mgr.login()
+
+
+def test_delete_commits_tombstone_and_clears_cache(tmp_path):
+    manager, store = _manager(tmp_path, FakeClient())
+    assert manager.get_valid_token() == "cc-1"
+    before = store.load_record()
+    assert before is not None
+
+    manager.delete()
+
+    after = store.load_record()
+    assert after is not None
+    assert after.revision == before.revision + 1
+    assert after.token_generation == before.token_generation + 1
+    assert after.token is None
+    assert manager._cached is None
 
 
 def test_interactive_grant_without_token_says_login_first(tmp_path):

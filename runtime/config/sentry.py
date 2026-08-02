@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import Field
 
-from mote.runtime.config.base import ConfigModel as YamlModel
+from mote.contracts.config.base import ConfigModel as YamlModel
 
 
 class SentryConfig(YamlModel):

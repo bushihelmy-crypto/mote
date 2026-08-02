@@ -129,6 +129,19 @@ class FakePort:
         self.exit_requested = False
         self.staged: List[str] = []
 
+    def bind_driver_control(self, binding) -> None:
+        self._on_interrupt = binding.interrupt
+        self._is_turn_running = binding.turn_running
+
+    async def start(self) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        return None
+
+    def take_turn_images(self) -> list[dict]:
+        return []
+
     def request_exit(self) -> None:
         self.exit_requested = True
 
@@ -299,6 +312,14 @@ class RunOncePort:
         self._is_turn_running = None
         self._on_steer = None
         self.closed = False
+
+    def bind_driver_control(self, binding) -> None:
+        self._on_interrupt = binding.interrupt
+        self._is_turn_running = binding.turn_running
+        self._on_steer = binding.steer
+
+    def stage_restore(self, text: str) -> None:
+        return None
 
     async def start(self) -> None:
         pass

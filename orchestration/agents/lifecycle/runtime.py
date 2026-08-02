@@ -79,7 +79,9 @@ class AgentRuntime(Generic[OutputT]):
         agent_path: Optional[AgentPath] = None,
     ):
         self.role = role
-        self.mailbox = mailbox if mailbox is not None else Mailbox()
+        self.mailbox = mailbox if mailbox is not None else Mailbox(role.session_id)
+        if self.mailbox.owner_agent_id != role.session_id:
+            raise ValueError("mailbox owner does not match runtime Agent identity")
         self.agent_path = agent_path
         self.status: AgentStatus = AgentStatus.IDLE
         self.active_turn: bool = False

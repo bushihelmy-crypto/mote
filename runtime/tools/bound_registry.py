@@ -15,16 +15,16 @@ class UnrecoverableBindingError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class BoundTool:
+class PinnedToolInvocation:
     semantic_identity: str
     invoke: BoundCallable
 
 
 class BoundToolRegistry:
     def __init__(self) -> None:
-        self._revisions: dict[tuple[str, int], dict[str, BoundTool]] = {}
+        self._revisions: dict[tuple[str, int], dict[str, PinnedToolInvocation]] = {}
 
-    def pin(self, snapshot_id: str, revision: int, tools: dict[str, BoundTool]) -> None:
+    def pin(self, snapshot_id: str, revision: int, tools: dict[str, PinnedToolInvocation]) -> None:
         key = (snapshot_id, revision)
         if key in self._revisions:
             raise ValueError("tool snapshot revision is already pinned")
@@ -52,4 +52,4 @@ class BoundToolRegistry:
         return self._revisions.pop((snapshot_id, revision), None) is not None
 
 
-__all__ = ["BoundTool", "BoundToolRegistry", "UnrecoverableBindingError"]
+__all__ = ["BoundToolRegistry", "PinnedToolInvocation", "UnrecoverableBindingError"]

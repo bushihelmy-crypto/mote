@@ -6,15 +6,52 @@ The classifier maps an OAuth2 error-response ``error`` code (RFC 6749 §5.2 /
 RFC 6750) to a typed exception so the manager/LLM layer can decide whether a
 refresh is permanently broken (re-auth required) or merely transient.
 """
+
 from __future__ import annotations
 
-from typing import Optional
+from typing import ClassVar, Optional
 
-# Exception types are unified under the global exception package; re-exported
-# here so OAuth callers share the canonical common exception hierarchy
-# sites keep working. Only the refresh-failure classification (OAuth-domain
-# logic) lives in this module.
-from mote.runtime.errors import OAuthConfigError, OAuthError, OAuthHTTPError, OAuthRefreshError  # noqa: F401
+from mote.contracts.foundation.errors.base import MoteError, NonRetryableError
+from mote.contracts.foundation.errors.codes import ErrorCode
+
+
+class OAuthError(MoteError):
+    default_code: ClassVar[ErrorCode] = ErrorCode.OAUTH
+
+
+class OAuthConfigError(OAuthError, NonRetryableError):
+    default_code: ClassVar[ErrorCode] = ErrorCode.OAUTH_CONFIG
+
+
+class OAuthHTTPError(OAuthError):
+    default_code: ClassVar[ErrorCode] = ErrorCode.OAUTH_HTTP
+
+    def __init__(self, message: str, status_code: int | None = None, error_code: str | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+
+
+class OAuthRefreshError(OAuthError):
+    default_code: ClassVar[ErrorCode] = ErrorCode.OAUTH_REFRESH
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str | None = None,
+        recoverable: bool = False,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.recoverable = recoverable
+        self.status_code = status_code
+
+
+class JWTDecodeError(OAuthError):
+    default_code: ClassVar[ErrorCode] = ErrorCode.OAUTH_JWT
+
 
 # OAuth2 error codes that mean the refresh token is permanently unusable.
 _UNRECOVERABLE_ERROR_CODES = {

@@ -16,9 +16,9 @@ After a durable model-context rebuild commits, the context domain invokes
 callback resets the frontier so the next turn re-emits the full index; this
 correctness step does not travel through lossy telemetry.
 
-Duck-typed (mirrors :class:`SkillActivationContextSource`): it holds a single
-callable so the low ``context`` layer never imports the skill manager or the
-Role. ``get_injector()`` yields the live :class:`SkillInjector` (or ``None`` when
+It holds a callable returning a narrow injector Protocol, so the low ``context``
+layer never imports the skill manager or the Role. ``get_injector()`` yields the
+live injector capability (or ``None`` when
 skills are disabled / not yet ready).
 """
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Callable, Iterable, Optional, Protocol
 
-from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS, ModelContextRebuiltEvent
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 
 
@@ -37,11 +37,7 @@ class _IndexedSkill(Protocol):
 
 
 class _SkillInjector(Protocol):
-    """The skill-index slice this source reads off the injector (duck-typed).
-
-    Structural only — keeps the low ``context`` layer from importing the skill
-    manager; any object exposing these two members satisfies it.
-    """
+    """The exact skill-index slice consumed by this source."""
 
     def _index_skills(self) -> Iterable[_IndexedSkill]: ...
 
@@ -70,7 +66,7 @@ class SkillListingContextSource:
         # Names already surfaced in a prior turn — the incremental frontier.
         self._sent_names: set[str] = set()
 
-    async def on_model_context_rebuilt(self, event: object) -> None:
+    async def on_model_context_rebuilt(self, event: ModelContextRebuiltEvent) -> None:
         """Reset the incremental frontier when stored history is structurally rebuilt.
 
         Two orthogonal causes fold to the same fix (``MODEL_CONTEXT_REBUILT_EVENTS``):
@@ -89,7 +85,7 @@ class SkillListingContextSource:
         if not self._is_enabled():
             return None
 
-        injector = self._get_injector() if self._get_injector else None
+        injector = self._get_injector()
         if injector is None:
             return None
 

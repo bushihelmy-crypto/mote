@@ -1,10 +1,12 @@
 """NativeToolChannel + factory helpers."""
+
 from __future__ import annotations
 
 import json
 from typing import Any, AsyncGenerator, Callable, Optional, TypeAlias
 
 from mote.contracts.conversation import AIMessage, ToolMessage
+from mote.contracts.events.envelope import thaw_json
 from mote.contracts.model.failover import EndpointDescriptor
 from mote.contracts.model.inference import InferenceResult
 from mote.contracts.model.turn import FinalCandidateAction, ModelTurn, TextAction, ToolCallAction
@@ -148,13 +150,13 @@ class NativeToolChannel(CommandChannel):
 
     async def iter_commands(self, result: InferenceResult, valid_names: set[str]) -> AsyncGenerator[dict, None]:
         for cmd in result.tool_calls or []:
-            name = cmd["command_name"]
+            name = cmd.name
             if valid_names and name not in valid_names:
                 continue
             yield {
-                "id": cmd.get("id"),
+                "id": cmd.id or None,
                 "command_name": name,
-                "args": cmd.get("args") or {},
+                "args": cmd.arguments,
                 "status": "running",
                 "error_msg": "",
             }
@@ -258,18 +260,18 @@ class NativeToolChannel(CommandChannel):
         )
 
     def turn_signature(self, result: InferenceResult) -> str:
-        calls = [{"name": c["command_name"], "args": c.get("args") or {}} for c in (result.tool_calls or [])]
+        calls = [{"name": call.name, "args": thaw_json(call.arguments)} for call in (result.tool_calls or [])]
         return json.dumps(calls, sort_keys=True, ensure_ascii=False)
 
     async def model_turn(self, result: InferenceResult) -> ModelTurn:
         """Translate native text/tool calls into semantic actions."""
         actions = []
         for call in result.tool_calls or []:
-            arguments = call.get("args") or {}
-            if call["command_name"] == FINAL_OUTPUT_TOOL_NAME:
+            arguments = call.arguments
+            if call.name == FINAL_OUTPUT_TOOL_NAME:
                 actions.append(
                     FinalCandidateAction(
-                        candidate_id=call.get("id") or "",
+                        candidate_id=call.id,
                         raw=arguments.get("output"),
                         representation="native_output_tool",
                     )
@@ -277,13 +279,13 @@ class NativeToolChannel(CommandChannel):
             else:
                 actions.append(
                     ToolCallAction(
-                        action_id=call.get("id") or "",
-                        name=call["command_name"],
+                        action_id=call.id,
+                        name=call.name,
                         arguments=arguments,
                     )
                 )
         content = result.content or ""
-        if result.tool_calls == []:
+        if result.tool_calls is not None and not result.tool_calls:
             binding = self.output_binding(is_text=self._output_is_text)
             if binding.kind in {
                 OutputBindingKind.TEXT,

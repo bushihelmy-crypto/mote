@@ -20,6 +20,14 @@ HookEvent = Literal[
 HookBehavior = PermissionBehavior
 
 
+@dataclass(frozen=True, slots=True)
+class HookAuthorizationFact:
+    """Sanitized authorization fact bound to the consuming effect identity."""
+
+    handler_id: str
+    disposition: Literal["allow", "deny"]
+
+
 @dataclass
 class HookOutcome:
     """The folded influence a hook event has on its host."""
@@ -31,10 +39,16 @@ class HookOutcome:
     system_message: str = ""
     stop: bool = False
     stop_reason: str = ""
+    authorization_facts: list[HookAuthorizationFact] = field(default_factory=list)
 
     @property
     def is_blocking(self) -> bool:
         return self.behavior == "deny" or self.stop
 
 
-__all__ = ["HookBehavior", "HookEvent", "HookOutcome"]
+__all__ = [
+    "HookAuthorizationFact",
+    "HookBehavior",
+    "HookEvent",
+    "HookOutcome",
+]

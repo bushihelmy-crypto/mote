@@ -8,6 +8,7 @@ deactivate→break path (End tool), the background-pool wait branch, and the
 budget gate (stop vs proceed). The loop has no iteration cap of its own — it
 terminates purely on those natural exits.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -196,8 +197,8 @@ async def test_output_correction_budget_bounds_model_turns(make_engine):
     from pydantic import BaseModel
 
     from mote.contracts.output import OutputContractId
+    from mote.contracts.output.errors import OutputCorrectionExhaustedError
     from mote.kernel.output import OutputContract, OutputRetryPolicy, TypeAdapterOutputDecoder
-    from mote.runtime.errors import OutputCorrectionExhaustedError
     from mote.runtime.output.engine import OutputEngine
 
     class Report(BaseModel):

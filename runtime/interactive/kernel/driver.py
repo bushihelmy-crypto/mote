@@ -21,6 +21,7 @@ registered with the Role's managed RuntimeHost (one implicit kernel per session,
 with no model-facing id). The host owns identity, serialization, revision,
 fencing and teardown; this module owns the kernel engine and its driver.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -67,7 +68,11 @@ from mote.contracts.surface import (
     SurfacePresentationMode,
 )
 from mote.contracts.tool.errors import ToolError
-from mote.runtime.interactive.checkpoint_codec import decode_inline_json, encode_inline_json
+from mote.runtime.interactive.checkpoint_codec import (
+    KERNEL_CHECKPOINT_CODEC,
+    KernelCheckpointState,
+    ShellCheckpointState,
+)
 from mote.runtime.interactive.kernel.notebook_export import export_notebook_ipynb
 from mote.runtime.interactive.observation import SurfaceObservationHub
 from mote.runtime.interactive.session_state import diff_env_state
@@ -93,8 +98,7 @@ class _SandboxRuntime(Protocol):
         cwd: Optional[str] = ...,
         env: Optional[dict[str, str]] = ...,
         extra_writable: Optional[list[str]] = ...,
-    ) -> tuple[list[str], dict[str, str]]:
-        ...
+    ) -> tuple[list[str], dict[str, str]]: ...
 
 
 # --- Constants -------------------------------------------------------------
@@ -765,13 +769,12 @@ class KernelRuntimeDriver:
             restore = self._decode_checkpoint(checkpoint) if checkpoint is not None else None
             if restore:
                 await session.restore_state(
-                    restore.get("cwd", ""),
-                    restore.get("env", {}),
-                    restore.get("unset", []),
+                    restore.shell.cwd,
+                    dict(restore.shell.env),
+                    list(restore.shell.unset),
                 )
-                notebook_payload = restore.get("notebook")
-                if notebook_payload is not None:
-                    notebook = NotebookDocument.model_validate(notebook_payload)
+                if restore.notebook is not None:
+                    notebook = restore.notebook
                     self._surface_ref = notebook.ref
                     self._cells = [cell.model_copy(deep=True) for cell in notebook.cells]
                     self._cells_truncated = notebook.truncated
@@ -796,14 +799,11 @@ class KernelRuntimeDriver:
         if state is None:
             raise RuntimeError("kernel logical state is unavailable")
         cwd, env, unset = state
-        return encode_inline_json(
-            {
-                "cwd": cwd,
-                "env": env,
-                "unset": unset,
-                "notebook": self.snapshot_document().model_dump(mode="json"),
-            },
-            codec="jupyter-state+json@2",
+        return KERNEL_CHECKPOINT_CODEC.encode(
+            KernelCheckpointState(
+                ShellCheckpointState(cwd, env, tuple(unset)),
+                self.snapshot_document(),
+            ),
             fidelity=CheckpointFidelity.LOGICAL,
         )
 
@@ -1041,11 +1041,5 @@ class KernelRuntimeDriver:
             raise RuntimeError("jupyter surface attachment is not current")
 
     @staticmethod
-    def _decode_checkpoint(checkpoint: RuntimeCheckpoint) -> Optional[dict]:
-        if checkpoint.codec == "jupyter-state+json@1":
-            payload = decode_inline_json(checkpoint, codec="jupyter-state+json@1")
-        else:
-            payload = decode_inline_json(checkpoint, codec="jupyter-state+json@2")
-        if not isinstance(payload, dict):
-            raise ValueError("kernel checkpoint payload must be an object")
-        return payload
+    def _decode_checkpoint(checkpoint: RuntimeCheckpoint) -> KernelCheckpointState:
+        return KERNEL_CHECKPOINT_CODEC.decode(checkpoint)

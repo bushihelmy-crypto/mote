@@ -20,9 +20,9 @@ from __future__ import annotations
 import asyncio
 from typing import List, Optional, Sequence
 
-from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS
-from mote.contracts.ports.conversation.turn_context import DEFAULT_TURN_CONTEXT_PRIORITY, EphemeralContextSource
-from mote.runtime.context.turn.format import wrap_system_reminder
+from mote.contracts.events.conversation import MODEL_CONTEXT_REBUILT_EVENTS, ModelContextRebuiltEvent
+from mote.contracts.ports.conversation.turn_context import EphemeralContextSource, ModelContextRebuildSource
+from mote.runtime.context.markers import wrap_system_reminder
 from mote.runtime.telemetry.logging import logger
 
 
@@ -41,17 +41,17 @@ class TurnContextBus:
     """
 
     def __init__(self, sources: Sequence[EphemeralContextSource]) -> None:
+        if any(not isinstance(source, EphemeralContextSource) for source in sources):
+            raise TypeError("turn-context source does not satisfy the canonical Protocol")
         # Stable priority order (lower first); ties keep registration order.
         self._sources: List[EphemeralContextSource] = sorted(
             sources,
-            key=lambda s: int(getattr(s, "priority", DEFAULT_TURN_CONTEXT_PRIORITY)),
+            key=lambda source: int(source.priority),
         )
         # Partition by save_to_context (missing attribute => persisted).
-        self._persistent: List[EphemeralContextSource] = [
-            s for s in self._sources if getattr(s, "save_to_context", True)
-        ]
+        self._persistent: List[EphemeralContextSource] = [source for source in self._sources if source.save_to_context]
         self._ephemeral: List[EphemeralContextSource] = [
-            s for s in self._sources if not getattr(s, "save_to_context", True)
+            source for source in self._sources if not source.save_to_context
         ]
         # Central "what did this turn inject?" view: source name -> did it emit a
         # block on the most recent render of the bucket it belongs to. Updated by
@@ -77,7 +77,7 @@ class TurnContextBus:
         """
         return await self._render_bucket(self._persistent, cwd)
 
-    async def model_context_rebuilt(self, event: object) -> None:
+    async def model_context_rebuilt(self, event: ModelContextRebuiltEvent) -> None:
         """Refresh context sources before exposing a committed rebuilt view."""
 
         if not isinstance(event, MODEL_CONTEXT_REBUILT_EVENTS):
@@ -86,7 +86,7 @@ class TurnContextBus:
             *(
                 self._notify_rebuild(source, event)
                 for source in self._sources
-                if callable(getattr(source, "on_model_context_rebuilt", None))
+                if isinstance(source, ModelContextRebuildSource)
             )
         )
 
@@ -104,7 +104,7 @@ class TurnContextBus:
         # Record the injection manifest for this bucket (merged into last_render
         # so the two buckets share one observable view), then log a one-line
         # trace of which feeds actually spoke this turn.
-        manifest = {getattr(s, "name", repr(s)): bool(r) for s, r in zip(sources, results)}
+        manifest = {source.name: bool(result) for source, result in zip(sources, results)}
         self.last_render.update(manifest)
         emitted = [n for n, hit in manifest.items() if hit]
         if emitted:
@@ -117,19 +117,21 @@ class TurnContextBus:
         try:
             block = await source.render(cwd=cwd)
         except Exception as exc:  # noqa: BLE001 — one feed must not break the turn
-            logger.warning(f"turn_context: source {getattr(source, 'name', source)!r} failed: {exc}")
+            logger.warning(f"turn_context: source {source.name!r} failed: {exc}")
             return None
         if not isinstance(block, str):
             return None
         return block
 
     @staticmethod
-    async def _notify_rebuild(source: EphemeralContextSource, event: object) -> None:
-        callback = getattr(source, "on_model_context_rebuilt")
+    async def _notify_rebuild(
+        source: ModelContextRebuildSource,
+        event: ModelContextRebuiltEvent,
+    ) -> None:
         try:
-            await callback(event)
+            await source.on_model_context_rebuilt(event)
         except Exception as exc:  # noqa: BLE001 — advisory source refresh
-            logger.warning(f"turn_context: rebuild source " f"{getattr(source, 'name', source)!r} failed: {exc}")
+            logger.warning(f"turn_context: rebuild source {source.name!r} failed: {exc}")
 
 
 __all__ = ["TurnContextBus"]

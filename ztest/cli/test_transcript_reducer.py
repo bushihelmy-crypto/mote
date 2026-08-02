@@ -11,6 +11,7 @@ the same decision (the terminal + Textual surfaces only *land* these ops).
 
 from __future__ import annotations
 
+from mote.contracts.activity import ActivityKind, ActivityOutcome, ActivityTopology
 from mote.product.presentation.events import (
     ActivityCompleted,
     ActivityStarted,
@@ -312,12 +313,12 @@ _GRAPH = ("graph:7f",)
 _NODE = ("graph:7f", "node:a")
 
 
-def _activity_started(scope=_GRAPH, kind="graph", label="run_graph"):
+def _activity_started(scope=_GRAPH, kind=ActivityKind.GRAPH, label="run_graph"):
     return ActivityStarted(
         scope=scope,
         activity_kind=kind,
         label=label,
-        topology={"nodes": [], "edges": []},
+        topology=ActivityTopology((), ()),
     )
 
 
@@ -369,7 +370,7 @@ def test_scoped_progress_ping_routes_to_owning_activity_scope():
 def test_activity_completed_keyed_by_its_own_scope():
     r = TranscriptReducer()
     r.feed(_activity_started())
-    ops = r.feed(ActivityCompleted(scope=_GRAPH, outcome="success", node_states=[], summary="done"))
+    ops = r.feed(ActivityCompleted(scope=_GRAPH, outcome=ActivityOutcome.SUCCESS, summary="done"))
     assert _kinds(ops) == ["close_activity"]
     op = ops[0]
     assert isinstance(op, CloseActivity)
@@ -423,6 +424,6 @@ def test_closed_activity_no_longer_owns_child_events():
     it (the widget handle is gone) — it falls through to a top-level row."""
     r = TranscriptReducer()
     r.feed(_activity_started())
-    r.feed(ActivityCompleted(scope=_GRAPH, outcome="success", node_states=[], summary="done"))
+    r.feed(ActivityCompleted(scope=_GRAPH, outcome=ActivityOutcome.SUCCESS, summary="done"))
     ops = r.feed(TaskProgress(scope=_NODE, stage="node:a", status="running"))
     assert _kinds(ops) == ["render_task_progress"]

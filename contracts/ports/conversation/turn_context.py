@@ -19,6 +19,8 @@ from __future__ import annotations
 from enum import IntEnum
 from typing import Optional, Protocol, runtime_checkable
 
+from mote.contracts.events.conversation import ModelContextRebuiltEvent
+
 
 class TurnContextPriority(IntEnum):
     """Render order of ephemeral context sources — a *named* contract.
@@ -67,8 +69,8 @@ class EphemeralContextSource(Protocol):
     Each source renders a self-contained text block that the bus wraps (with the
     others) into a single ``<system-reminder>``. ``name`` is a stable key
     (logging / dedupe); ``priority`` is a :class:`TurnContextPriority` tier
-    ordering the blocks within the envelope (lower first), read via
-    ``getattr(s, "priority", DEFAULT_TURN_CONTEXT_PRIORITY)``.
+    ordering the blocks within the envelope (lower first). Every source declares
+    the property explicitly; the bus performs no reflective defaulting.
 
     ``save_to_context`` routes the source into one of the bus's two disjoint
     buckets:
@@ -80,12 +82,17 @@ class EphemeralContextSource(Protocol):
       ``TurnContextBus.collect`` and appended to the cycle's user prompt, never
       stored in history.
 
-    A source missing the attribute is treated as ``True`` (persisted).
+    Every source must declare this lifecycle policy explicitly.
     """
 
-    name: str
-    priority: int
-    save_to_context: bool
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def priority(self) -> int: ...
+
+    @property
+    def save_to_context(self) -> bool: ...
 
     async def render(self, *, cwd: Optional[str] = None) -> Optional[str]:
         """Return this source's context block, or ``None`` when it has nothing.
@@ -96,8 +103,17 @@ class EphemeralContextSource(Protocol):
         ...
 
 
+@runtime_checkable
+class ModelContextRebuildSource(EphemeralContextSource, Protocol):
+    async def on_model_context_rebuilt(
+        self,
+        event: ModelContextRebuiltEvent,
+    ) -> None: ...
+
+
 __all__ = [
     "EphemeralContextSource",
+    "ModelContextRebuildSource",
     "TurnContextPriority",
     "DEFAULT_TURN_CONTEXT_PRIORITY",
 ]

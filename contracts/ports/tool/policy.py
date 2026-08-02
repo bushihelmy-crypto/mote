@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from mote.contracts.authorization import PermissionFacts
+from mote.contracts.tool.identity import ToolInvocationIdentity
 from mote.contracts.tool.policy import (
     ToolCallDecision,
     ToolCallInspection,
@@ -23,13 +24,24 @@ class ToolCallPolicy(Protocol):
         self,
         intent: ToolCallIntent,
         resolve_permission_facts: PermissionFactsResolver,
-    ) -> ToolCallDecision:
-        ...
+    ) -> ToolCallDecision: ...
+
+
+@runtime_checkable
+class ToolPermissionFactsProvider(Protocol):
+    """Tool-owned dynamic target preparation consumed only by authorization."""
+
+    def permission_facts(
+        self,
+        arguments: dict[str, Any],
+        identity: ToolInvocationIdentity,
+    ) -> PermissionFacts: ...
+
+    def release_permission_facts(self, identity: ToolInvocationIdentity) -> None: ...
 
 
 class ToolResultPolicy(Protocol):
-    async def present(self, intent: ToolResultIntent) -> ToolResultPresentation:
-        ...
+    async def present(self, intent: ToolResultIntent) -> ToolResultPresentation: ...
 
 
 class ToolCallPolicyExtension(Protocol):
@@ -39,8 +51,7 @@ class ToolCallPolicyExtension(Protocol):
         self,
         intent: ToolCallIntent,
         facts: PermissionFacts,
-    ) -> ToolCallInspection:
-        ...
+    ) -> ToolCallInspection: ...
 
 
 ToolCallPolicyExtensionFactory = Callable[[], ToolCallPolicyExtension]
@@ -58,6 +69,7 @@ class ToolCallPolicyExtensionSpec:
 __all__ = [
     "PermissionFactsResolver",
     "ToolCallPolicy",
+    "ToolPermissionFactsProvider",
     "ToolCallPolicyExtension",
     "ToolCallPolicyExtensionFactory",
     "ToolCallPolicyExtensionSpec",

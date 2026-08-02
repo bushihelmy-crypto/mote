@@ -7,6 +7,7 @@ the "never clean" (``<= 0``) form, current-session exclusion, and the 24h
 throttle / disabled short-circuits of
 :func:`run_cleanup_if_due`.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,6 +18,7 @@ import pytest
 
 from mote.runtime.session.events import SessionMetaEvent
 from mote.runtime.session.log import SessionLog
+from mote.runtime.session.run_lease import RunLeaseStore
 from mote.runtime.session.workspace import SessionSpace, SessionWorkspace
 from mote.runtime.session.workspace.cleanup import run_cleanup_if_due, sweep_workspace
 
@@ -113,6 +115,16 @@ class TestSweepWorkspace:
         assert store.rollout_path("live").exists()
         assert store.space("live", SessionSpace.TOOL_RESULTS).exists()
         assert stats.scanned == 0
+
+    def test_other_process_live_run_lease_overrides_stale_mtime(self, tmp_path):
+        now = time.time()
+        store = SessionWorkspace(tmp_path)
+        _make_session(store, "live-elsewhere", age_days=1000, now=now)
+        leases = RunLeaseStore(store.session_dir("live-elsewhere") / "run_leases.json")
+        leases.acquire("turn", "other-process", 60)
+        sweep_workspace(store, session_ttl_days=30, artifact_ttl_days=7, now=now)
+        assert store.rollout_path("live-elsewhere").exists()
+        assert store.space("live-elsewhere", SessionSpace.TOOL_RESULTS).exists()
 
     def test_orphan_session_dir_uses_dir_mtime(self, tmp_path):
         now = time.time()

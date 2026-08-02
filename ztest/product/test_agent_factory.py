@@ -16,7 +16,8 @@ def _native_tools():
 def test_root_builder_injects_explicit_product_dependencies():
     toolsets = (_native_tools(),)
     pool_builder = object()
-    routing_builder = object()
+    routing_policy = object()
+    routing_builder = lambda: routing_policy
     factory = CodingAgentFactory(
         toolsets_factory=lambda _protocol: toolsets,
         background_task_pool_builder=pool_builder,
@@ -38,20 +39,20 @@ def test_root_builder_injects_explicit_product_dependencies():
         )
     )
 
-    assert agent.wiring.dependencies.toolsets == toolsets
-    assert agent.wiring.dependencies.background_task_pool_builder is pool_builder
-    assert agent.wiring.dependencies.routing_strategy_builders == {"tenant": routing_builder}
+    projection = agent.wiring.dependencies.component_projection
+    assert projection is not None
+    assert projection.action().toolsets == toolsets
+    assert projection.action().background_task_pool_builder is pool_builder
+    assert projection.cognition().routing_strategy_factory.build("tenant") is routing_policy
 
 
 def test_root_builder_preserves_explicit_wiring():
     factory = CodingAgentFactory(toolsets_factory=lambda _protocol: (_native_tools(),))
     wiring = AgentWiring(
-        dependencies=AgentDependencies(
+        dependencies=factory.dependencies(
             deps=None,
             output_contract=text_output_contract(),
             toolsets=(_native_tools(),),
-            background_task_pool_builder="custom-pool",
-            routing_strategy_builders={"custom": object()},
         )
     )
 
@@ -73,6 +74,7 @@ def test_child_builder_rejects_non_runnable_agent_result():
 
     factory = CodingAgentFactory()
     request = AgentConstructionRequest(
+        logical_agent_id="child-agent",
         parent_session_id=None,
         child_identity="child",
         child_path="root/child",

@@ -1500,3 +1500,595 @@ Phase 0 扩展人工分类覆盖，再按 DAG 进入 Execution Waves
 10. 试点故障注入同时证明 fail closed、crash reconciliation 和环境清理。
 
 在这十项关闭之前，可以继续编写 schema、bootstrap validator、CLI 和隔离试点；仍不能批准批量 production cutover。它们关闭后，Phase -1 才具备严格顺序执行与失败后继续推进的控制面基础。
+
+---
+
+## 17. 第八轮审核补充：授权新鲜度、终态语义、例外与发布闭环
+
+本轮以当前 `Draft v8` 为准。v8 已吸收第七轮提出的 authority revocation、bootstrap validator、phase artifact contract、G1～G6、schema evolution、CLI contract、lease/fencing、trust lifecycle 和全来源对账。控制面骨架已经接近可实施，但继续推演真实 merge、失败、修复和发布序列后，仍有几处会造成“节点看似 completed，系统却不能安全继续”的语义缺口。
+
+### 17.1 P0：`completed` 与 `stale/blocked` 的关系仍自相矛盾
+
+状态机把 `completed` 视为不可再进入 `superseded` 的终态之一；Phase Artifact Contract 又规定 completed 阶段相关输入漂移时，下游自动变成 `stale/blocked`。这里至少有三个不同概念尚未拆开：
+
+1. 历史 migration 已完成，事实不可改写；
+2. 该 migration 的证据是否仍可为新的下游节点授权；
+3. 当前仓库是否仍满足该 migration 建立的不变量。
+
+不应把历史 `completed` 回退为 `stale`，也不能让旧 completion 永久授权未来节点。建议采用双状态：
+
+```text
+execution_state = completed | rolled_back | aborted | ...
+authorization_state = current | stale | revoked | superseded
+invariant_state = satisfied | violated | unknown
+```
+
+`completed` 保持不可变；相关事实漂移只使 authorization 失效并触发 invariant recheck。若不变量被后来提交破坏，应创建 violation/repair 节点，不能篡改原迁移历史。所有 predecessor 判断必须同时指定所需 execution、authorization 和 invariant 状态。
+
+### 17.2 P0：批准绑定 base commit，但缺少 merge 后授权协议
+
+策略说明 rebase/merge/cherry-pick 后重新计算局部 digest，也要求 cutover 绑定唯一 commit，但没有完整描述以下实际顺序：
+
+```text
+approved on base B
+candidate commit C built on B
+merge queue rebases or creates merge commit M
+post-merge verification runs on M
+completion attestation authorizes M
+```
+
+生产 cutover 的真实事实是受保护分支上的 `M`，不是本地候选 `C`。必须定义：
+
+```text
+approved_base_commit
+candidate_commit
+merge_commit
+merge_tree_digest
+protected_branch_identity
+merge_queue_identity
+pre_merge_gate_set
+post_merge_gate_set
+post_merge_drift_result
+completion_commit
+```
+
+只有 `M` 的 governed tree 与批准 projected result 一致、post-merge Gates 通过，才能进入 `verified/completed`。若 merge queue 引入邻接提交导致 claim、closure 或 graph 变化，节点进入 `verification_failed/blocked`，不得用候选分支证据完成主线迁移。
+
+### 17.3 P0：Forward-fix 与 repair 没有进入 DAG 状态转换
+
+策略指出失败后可 rollback 或 forward-fix，也说后继节点用 `repairs`/`supersedes` 引用原记录；但未定义从 `verification_failed` 到 repair 创建、生产恢复和原节点收敛的合法转换。若 cutover 已合入且不能回滚，原节点会永久停在非终态，进而阻塞 Track 的 `no_failed_or_cutting_over_member`。
+
+建议冻结：
+
+```text
+failure_id
+failed_migration_id
+failure_scope
+containment_state
+repair_migration_id
+repair_strategy = rollback | forward_fix
+repair_predecessors
+repair_completion_evidence
+original_resolution = rolled_back | repaired
+residual_risk
+```
+
+合法序列应明确，例如：
+
+```text
+cutting_over → verification_failed → contained
+contained → repair_pending → repaired
+contained → rollback_pending → rolled_back
+```
+
+Track closure 应允许“失败节点已由 verified repair 完整解决”，但不得把失败记录删除或伪装为原节点成功。Repair 节点要继承原节点的 claim、安全、持久化和 release reviewers，并重新计算受影响下游。
+
+### 17.4 P1：Approval/Evidence 缺少 freshness 与最大年龄
+
+Trust policy 有 issued/expires/revocation，digest 能检测代码漂移，但外部事实也会随时间失效：dependency index、漏洞信息、许可证状态、支持平台镜像、外部插件兼容、CI runner image、凭据策略等即使 source digest 不变也可能变化。
+
+Gate registry 应支持：
+
+```text
+issued_at
+valid_until
+max_age
+freshness_basis
+refresh_command_id
+refresh_required_before_state
+external_fact_digest
+revocation_event_refs
+```
+
+结构性 AST/golden evidence 可以长期有效直至输入漂移；security、dependency、platform、license 和 clean-install evidence 应有按风险设定的 freshness。Approval 到 cutover 间超过窗口时只刷新相应 Gate，不必重做无关人工决策。
+
+### 17.5 P1：临时例外只有目标，没有完整生命周期 schema
+
+策略多次要求临时例外归零并统计 overdue，但没有定义一个可执行的 exception record。至少需要：
+
+```text
+exception_id
+rule_id
+exact_import_or_symbol_site
+scope_digest
+reason
+risk_class
+owner
+approvers
+introduced_in_commit
+expires_at_or_phase
+removal_migration_id
+non_expansion_predicate
+compensating_controls
+verification_command_id
+status
+```
+
+例外必须精确到 site，不允许 package-wide wildcard；任何 scope 扩大都需新审批。过期例外阻止相关节点和 Track closure；security/permission/persistence 的硬不变量应明确不可豁免。`allowed_deferred_items` 也必须引用这种记录，不能成为不带 owner/期限的自由文本逃生口。
+
+### 17.6 P1：Evidence append-only 尚未覆盖可用性、保留与灾难恢复
+
+Evidence 模型有 retention/access 字段，但 completion 依赖外部 evidence store 时，还需证明以后能够读取和验证。否则 artifact 被 CI 清理、对象存储丢失或密钥轮换后，历史 completion 无法审计，repair/release closure 也无法复用。
+
+建议定义：
+
+```text
+evidence_store_id
+content_address
+replication_policy
+retention_until
+legal_hold_or_delete_policy
+integrity_check_schedule
+encryption_key_version
+key_retention_policy
+restore_test_evidence
+availability_class
+missing_artifact_policy
+```
+
+正式 completion 所引用的最小证据集合必须至少保留到相关 public compatibility、持久数据和审计窗口结束。丢失或无法验签时，历史 execution 仍不可改写，但 authorization 状态变为 `unknown/stale`，后续高风险动作需重新生成等价证据或人工风险裁决。
+
+### 17.7 P1：Release Closure 没有绑定唯一制品与版本事务
+
+当前 build evidence 保存 wheel/sdist digest，但 Release Closure 只描述完成 deprecation/removal release，没有规定源码 cutover、版本、tag、制品和索引发布之间的唯一关联。需补充：
+
+```text
+release_id
+version
+source_commit
+source_tree_digest
+build_evidence_id
+wheel_and_sdist_digests
+artifact_signature_or_attestation
+release_manifest_digest
+tag_identity
+package_index_identity
+published_artifact_observation
+release_notes_digest
+deprecation_obligations_closed
+```
+
+Release completion 必须验证实际上传制品与已验证制品逐字节一致，版本不可覆盖，tag/commit 唯一，索引端可下载并 clean-install。若上传部分成功，状态应是 `release_partial_failure`，后续只能完成剩余不可变制品或发布新版本，不能覆盖原版本。
+
+### 17.8 P1：Internal Closure 与 Release Closure 的依赖不是总是线性的
+
+对于 private/internal move，Internal Closure 可以直接结束；对于 public deprecation，旧 shim 必须跨发行窗口存在，因此全仓“旧路径归零”只能在 removal release 后完成。当前 Internal Closure 又要求 internal 旧 path 归零，Release Closure 要求 public/plugin 旧路径清理，方向基本正确，但需要资产级 closure 分类，避免一个全局状态阻塞所有 Track：
+
+```text
+closure_class = internal_only | public_deprecation | plugin_compatibility | persistent_reader
+internal_complete_conditions
+release_complete_conditions
+long_lived_compatibility_obligation
+removal_release
+reader_retention_horizon
+```
+
+持久兼容 reader 可能合法跨越 removal release，不应被当作 public shim 残渣；但必须有 reader coverage、数据保留 horizon 与最终清理策略。全局完成状态应从各资产 closure class 聚合，而不是假设所有旧形态在同一时点删除。
+
+### 17.9 P1：安全事故或信任根撤销后的“紧急停止”未定义
+
+普通 revocation 只说明未 cutover 的批准失效。若 CI issuer、签名 key、governance CLI 或 evidence store 被攻陷，需要全局冻结：
+
+```text
+emergency_state = normal | freeze_new_approvals | freeze_all_writes | recovery
+incident_id
+affected_authority_versions
+affected_attestations
+freeze_actor
+recovery_authority
+revalidation_scope
+unfreeze_evidence
+```
+
+紧急冻结必须能优先于 lease 和既有 approval，阻止新状态转换；恢复不能由同一已失陷身份单独批准。历史 evidence 根据受影响时间窗和 issuer 标记为 suspect，再按范围重验。没有这个机制，trust lifecycle 只能处理日常轮换，无法安全处置信任基础本身失效。
+
+### 17.10 P2：最终不变量没有覆盖治理控制面自身
+
+第 15 节最终不变量仍主要描述五层生产架构。经过 v8 扩展后，应加入控制面不变量，避免未来文档精简时丢失关键保障：
+
+1. 只有一个 active governance authority；
+2. 历史 execution state append-only，授权新鲜度单独计算；
+3. 任何主线 completion 都绑定受保护分支真实 commit；
+4. 失败节点只能通过可追踪 rollback/repair 收敛；
+5. 临时例外精确、有期限、不可静默扩大；
+6. Evidence 可寻址、可验签、可恢复；
+7. Release 状态绑定唯一版本和实际发布制品；
+8. 紧急冻结优先于所有普通授权。
+
+---
+
+## 18. 第八轮后的执行判定
+
+Draft v8 已具备实施 Phase -1A～-1D 的设计基础，但仍不能批准完整生产 cutover 链。下一版至少应关闭：
+
+1. execution、authorization、invariant 三类状态分离；
+2. merge queue 与 post-merge commit 的授权/验证协议；
+3. `verification_failed` 经 rollback/forward-fix 收敛的 repair DAG；
+4. 按 Gate 风险定义 approval/evidence freshness；
+5. 临时例外和 deferred item 的完整生命周期；
+6. evidence store 的保留、验签、恢复与缺失政策；
+7. Release Closure 对版本、tag、commit、制品和索引观察的事务绑定；
+8. internal/public/plugin/persistent-reader 的资产级 closure class；
+9. trust compromise 时的全局 emergency freeze/recovery；
+10. 将治理控制面约束提升为最终不变量。
+
+当前更精确的授权结论是：
+
+```text
+Phase -1A ～ -1D 的实现与隔离验证：可以开始
+Phase -1E ～ -1G 的 manifest/fixture 设计：可以开始
+真实低风险试点：需先关闭状态终态、merge 后验证和 repair DAG
+批量 production cutover：不可开始
+Release Closure：不可开始
+```
+
+这不是对 v8 总体方向的否定；剩余问题集中在异常路径和长期授权语义。只有正常路径完整而失败路径不能收敛，仍不满足“可以顺序执行所有 Phase”的目标。
+
+---
+
+## 19. 第九轮审核补充：控制面真相源、快照一致性与判定完备性
+
+本轮以当前 `Draft v9` 为准。v9 已完整吸收第八轮提出的三状态、post-merge、repair DAG、freshness、exception lifecycle、evidence availability、release transaction、asset closure 与 emergency freeze。继续从实现者视角推演后，当前最大问题变成：这些丰富状态究竟由哪个权威存储、针对哪一个一致性快照计算，以及多个 validator 是否能对同一输入得出唯一结论。
+
+### 19.1 P0：治理控制面缺少唯一事务真相源
+
+策略定义了 facts、decisions、migrations、evidence、phase/track、lease、trust、exception、release 等大量记录，也要求 CAS 和 reconciliation，但没有指定“状态转换的权威真相源是什么”。Git manifest、CI attestation、evidence store、package index 和 lease backend 都可能观察到不同状态；若每个都是半权威来源，crash 后无法判定谁覆盖谁。
+
+必须定义 control-plane journal 或等价的唯一事务记录：
+
+```text
+control_event_id
+control_sequence
+authority_id
+aggregate_type
+aggregate_id
+expected_revision
+resulting_revision
+transition_kind
+payload_digest
+actor_attestation
+source_commit
+recorded_at
+```
+
+Git 中的 manifest、状态页和 Markdown 只能是这个 journal 的可验证 projection，或反过来明确 Git commit 是唯一 journal、外部系统只存不可变附件引用。两种方案任选其一，但不能含糊。Reconciliation 必须从唯一 truth 重建所有 projection，并通过 revision/CAS 拒绝双写分叉。
+
+### 19.2 P0：Facts 缺少一致性 generation，存在 TOCTOU
+
+策略要求“同代 facts”，但没有定义 generation 的原子边界。扫描器可能依次生成 import graph、symbol graph、identity、packaging 和 dynamic references；扫描期间源码或 branch head 改变，会形成每个文件各自有效、整体却不可能同时存在的混合快照。
+
+建议所有 facts 使用统一 generation envelope：
+
+```text
+facts_generation_id
+source_commit
+source_tree_digest
+scanner_suite_digest
+schema_set_digest
+started_at
+finished_at
+input_file_manifest_digest
+component_artifact_digests
+generation_complete
+```
+
+正式扫描只能读取冻结 commit/tree 或只读隔离 worktree；最后以 CAS 一次发布 generation index。任何 component 缺失、source tree 改变或 scanner version 不同都使 generation 不完整，不允许 -1E/-1F 混用旧 graph 与新 identity manifest。
+
+### 19.3 P0：失效传播缺少机器化依赖索引
+
+v9 已规定 authorization stale 和下游重算，但没有说明如何穷举“相关下游”。仅依赖每个 artifact 的 `invalidated_by` 正向字段容易漏边；漏掉一条就会让旧批准继续生效。
+
+需要构建 provenance/dependency graph：
+
+```text
+artifact_id
+artifact_revision
+derived_from_artifact_ids
+derived_from_source_digests
+consumed_by_decision_ids
+consumed_by_gate_evidence_ids
+consumed_by_migration_ids
+invalidation_rule_id
+```
+
+每次 source、schema、command、trust 或 external fact 变化，工具从反向索引计算完整影响闭包。完整性 Gate 要证明所有人工 decision、approval 和 completion projection 的输入都在 graph 中；无 provenance 的 artifact 不得授权。失效算法本身需有 mutation test，覆盖漏边、环和重复边。
+
+### 19.4 P0：Gate 的 `applies_when` 与 N/A 判定仍可能人工绕过
+
+Gate registry 有 `applies_when` 和 `not_applicable_predicate`，但尚未要求其为封闭、可执行规则。若 migration author 可手写 `not_applicable`，security、packaging、persistence 或 release 子门禁仍能被绕过。
+
+建议每个条件门禁由 facts 自动派生触发原因：
+
+```text
+applicability_rule_id
+rule_version
+input_fact_kinds
+triggered_by_fact_ids
+applicability_result = required | not_applicable | unknown
+not_applicable_evidence
+override_policy
+```
+
+`unknown` 必须 fail closed。N/A 只能由 registry rule 计算并引用完整 facts generation；人工只能升级为 required，不能把 required 降为 N/A。特别是 public API、persistent identity、command/security、packaging 和 lifecycle 触达，应由扫描事实与 claimed assets 联合判定。
+
+### 19.5 P1：ID 分配、命名空间、重命名与 tombstone 未定义
+
+策略正确要求 stable symbol ID 不依赖路径，但没有定义谁分配 ID、如何防并发碰撞、删除后是否可复用、拆分/合并符号如何表达。相同问题也存在于 migration、decision、evidence、exception、release 和 artifact ID。
+
+应冻结统一 identity policy：
+
+```text
+id_namespace
+id_kind
+id_value
+allocation_authority
+allocated_at_revision
+aliases
+predecessor_ids
+successor_ids
+tombstone_status
+reuse_forbidden
+collision_check
+```
+
+删除 ID 永不复用；rename 只改 canonical name；split/merge 必须记录 predecessor/successor 映射且默认不是 identity-preserving。临时分支分配应使用无协调冲突概率足够低的 ID，合入时仍做 authority CAS。否则两条并行迁移可能各自创建相同人类可读 ID。
+
+### 19.6 P1：路径与仓库对象模型还不够完备
+
+Canonical encoding 提到 path normalization、symlink 和 mode，但扫描/claim 规则尚未覆盖：
+
+- 大小写不敏感文件系统上的路径碰撞；
+- Unicode NFC/NFD 等价路径；
+- symlink 逃出治理根目录或循环；
+- hardlink 导致多个路径共享内容对象；
+- Git submodule、LFS pointer、sparse checkout、shallow clone；
+- executable bit 和平台不可表达 mode；
+- rename 的大小写-only/Unicode-only 语义。
+
+需要 repository capability profile 与 fail-closed 规则。正式 facts 应以 Git tree entry 为主要身份，工作树 filesystem 只作受验证 materialization；不支持的 submodule/LFS/symlink 情况标为 unsupported，不能静默当普通文件。这样跨 Linux/Windows/macOS 的 graph、claim 与 digest 才能一致。
+
+### 19.7 P1：CLI 的安全执行模型未禁止 shell 拼接
+
+CLI contract 虽定义 network、环境和副作用，但 command/evidence model 仍以 `command_id` 和可读命令为主。现有旧治理工具的 `tests(..., run=True)` 使用 `subprocess.run(command, shell=True)`，证明如果新模型允许自由字符串，manifest 内容可能成为命令注入入口。
+
+正式 command registry 应保存结构化 argv：
+
+```text
+executable_identity
+argv
+working_directory_id
+environment_allowlist
+stdin_policy
+timeout
+network_policy
+expected_outputs
+```
+
+禁止通过 shell 解释 manifest 字符串；确实需要 shell 语义的命令必须进入 `shell_command_boundary`，使用固定脚本 artifact digest、无用户拼接参数并由 security reviewer 批准。Evidence 的 command digest 对结构化执行描述计算，而不是对展示文本计算。
+
+### 19.8 P1：时间语义缺少可信时钟与偏差政策
+
+Freshness、lease expiry、exception expiry、trust expiry 和 release window 都依赖时间，但策略只要求 UTC/clock policy，没有规定时钟来源和 skew。恶意或漂移 runner 可让过期 approval 看似有效，或者夺取尚未真正过期的 lease。
+
+至少定义：
+
+```text
+trusted_time_source
+observed_at_authority
+max_clock_skew
+monotonic_duration_source
+wall_clock_timestamp
+expiry_comparison_rule
+uncertain_time_policy
+```
+
+Lease duration 使用权威后端 revision/fencing 与单调时长，不只相信 runner wall clock；签名 attestation 的 issued/expiry 由可信 issuer 验证。偏差超限或时间源不可用时，新 approval/cutover fail closed，但允许执行预先批准的紧急 containment。
+
+### 19.9 P1：控制面自身升级缺少 canary 与回滚边界
+
+Schema 有 expand/contract，但 scanner、graph algorithm、Gate predicate、invalidator、reconciler 或 trust verifier 的代码升级同样会改变治理结论。仅用 `command_definition_digest` 标记变化还不足以安全切换 active authority。
+
+控制面升级应作为特殊 migration：
+
+```text
+control_upgrade_id
+old_authority_version
+new_authority_version
+dual_read_comparison
+shadow_evaluation_scope
+decision_diff_report
+false_allow_count
+false_deny_count
+activation_commit
+rollback_boundary
+post_activation_monitor
+```
+
+先对冻结 facts 做 old/new shadow comparison，任何新增 allow 必须人工解释；再 canary 到非授权模式；最后原子切 active authority。若新版本已写入不可逆 schema/transition，不能简单回滚 binary，必须按 forward repair。
+
+### 19.10 P1：Manual risk ruling 的权限边界不清晰
+
+证据丢失时 v9 允许“显式风险裁决”，unknown reference 也可由人工裁决进入 manifest。若不限定范围，人工 decision 可能绕过本来不可豁免的 Gate。应定义人工裁决类型：
+
+```text
+manual_ruling_kind = classification | provenance_resolution | risk_acceptance
+scope
+cannot_override_rule_ids
+required_reviewers
+expires_at
+replacement_evidence_plan
+```
+
+人工可以补充语义 owner、解释静态不可解析引用，或对非硬性可用性风险限时接受；不能伪造测试通过、降低 required Gate 为 N/A、忽略签名失败、覆盖 security/permission/persistence 硬不变量，也不能把缺失的 release artifact 视作已发布。
+
+---
+
+## 20. 第九轮后的执行判定
+
+Draft v9 已形成相当成熟的治理需求，但“真实低风险试点”仍应保持未授权，直到控制面状态能从唯一真相源、单代快照和完备依赖图确定性重建。下一版至少补齐：
+
+1. 唯一 control-plane truth/journal 与所有 projection 的恢复规则；
+2. 原子 facts generation，禁止跨 generation 混用；
+3. artifact provenance 反向索引和完整失效闭包；
+4. Gate applicability/N/A 由版本化规则自动计算；
+5. 所有治理 ID 的命名空间、分配、split/merge 与 tombstone；
+6. Git tree、filesystem、symlink、case/Unicode、submodule/LFS 的仓库对象政策；
+7. Command registry 使用结构化 argv，禁止 manifest 自由字符串经 shell 执行；
+8. freshness/lease/expiry 的可信时间与 clock-skew 规则；
+9. active governance authority 自身升级的 shadow/canary/activation 协议；
+10. 人工裁决可做什么、不可覆盖什么的封闭权限模型。
+
+当前授权维持：
+
+```text
+Phase -1A ～ -1D 的实现与隔离验证：可以继续
+Phase -1E ～ -1G 的 schema/manifest/fixture：可以继续设计
+真实试点：不可开始
+production cutover：不可开始
+Release Closure：不可开始
+```
+
+这轮不再增加业务架构目标，而是要求新治理系统本身达到数据库式的一致性、可重建性和确定性。否则规则越丰富，多个部分状态之间发生歧义的风险反而越大。
+
+---
+
+## 21. 第十轮审核补充：最小可实施控制面、Git Journal 安全与运维可持续性
+
+本轮以当前 Draft v10 为准。v10 已吸收第九轮提出的唯一 Git journal、原子 facts generation、provenance、Gate applicability、ID policy、repository profile、structured commands、可信时间、authority upgrade 和 manual ruling 权限。设计上的关键语义已非常完整；继续审核的重点转为“这套控制面是否能以有限复杂度可靠运行”，以及 Git 被选为事务 journal 后必须补齐的存储安全契约。
+
+### 21.1 P0：Append-only Git Journal 缺少不可改写保护
+
+Git 提供内容寻址和历史，但默认并不 append-only。具备 force-push、删除 ref、重写历史或管理员权限的人仍可删除或替换 control events。策略只要求 protected branch，没有冻结：禁止 force push/ref deletion、required signed commit/tag、journal path 的强制 CODEOWNERS、merge queue 线性化、远端镜像备份、历史截断检测和管理员 bypass 审计。
+
+建议新增 Git journal integrity policy：journal ref、genesis commit、expected ancestor、branch-protection policy digest、签名与评审策略、linearization policy、mirror refs、backup frequency、history-rewrite detection 和 admin-bypass policy。Validator 不仅检查文件内 sequence，还必须验证从 genesis 到当前 head 的不可断裂祖先链；远端历史被重写时立即进入 freeze-all-writes。
+
+### 21.2 P0：Journal 事件与 Production Cutover 无法真正原子提交
+
+Production source commit、post-merge evidence 和 completion journal event 分时产生，不可能成为一个原子动作。必须显式建模 prepared、candidate、merged-unverified、verification attachment 和 completion event，并记录 expected source/journal refs、reconciliation deadline 与 timeout containment。
+
+“代码已合入但未验证”应是正式可观察状态。它禁止下游节点，失败或超时自动进入 containment。策略不能宣称 code merge 与 completion event 原子；真正可保证的是协议可恢复且不会把中间状态误判为 completed。
+
+### 21.3 P0：缺少最小可行控制面切片，Phase -1A～-1D 仍过大
+
+v10 同时要求 journal、trust、lease、facts、provenance、Gate registry、repository profile、structured runner、trusted time、authority upgrade 和 evidence store。若没有最小实施边界，可能在没有可运行闭环前建设大量 schema。
+
+建议定义 Control-plane MVP：
+
+1. MVP-1：撤销 legacy authority；
+2. MVP-2：验证 canonical journal/schema/ID references；
+3. MVP-3：生成一个原子 static-facts generation；
+4. MVP-4：计算 provenance 与 G1～G5，但不具备 production authorization；
+5. MVP-5：完成 negative/rebuild/determinism fixtures；
+6. MVP-6：仅在 trust/lease/post-merge/repair 完成后启用 G6。
+
+每项必须有 executable demo、测试和非能力清单。未实现类别明确为 unsupported，G6 默认硬关闭。
+
+### 21.4 P1：控制面复杂度缺少预算与性能 SLO
+
+Provenance 反向闭包、全 Git tree 扫描、mutation tests、跨平台矩阵和 journal replay 会随规模增长。应记录 repository entry、symbol、artifact、journal event 数量，以及 full/incremental scan、provenance recompute、journal replay、projection rebuild 的耗时、峰值内存、Evidence 增长与 CI 并发。
+
+允许缓存和增量计算，但正式授权结果必须可由无缓存全量重建验证；缓存命中不得改变结论。否则治理工具变慢后，团队会被激励绕过它。
+
+### 21.5 P1：Journal/Provenance 需要快照、归档与 GC 契约
+
+永久 event、tombstone、provenance 与 evidence 引用会持续增长。需要 snapshot ID、control sequence、state digest、event range、archive location/digest、genesis replay evidence、attachment reachability roots、GC candidate/proof 和 minimum retention horizon。
+
+Journal event 与 ID tombstone 原则上不删除；可删除的只能是过保留期且不再被 active/public/persistence/audit roots 引用的附件。Snapshot 只加速 projection rebuild，不替代原始历史。
+
+### 21.6 P1：运维 Owner、RACI 与故障处理时限未定义
+
+策略有 reviewer roles，却没有 journal/validator/CLI、Evidence Store、Lease Backend、Trusted Time、漏洞/许可证刷新、Emergency Recovery、过期 Exception 和 Partial Release 的日常 service owner。
+
+应建立 Governance Operations RACI，至少包含 component、service/backup owner、响应渠道、severity、response/recovery target、runbook、restore-drill frequency 和 escalation authority。即使完全基于 Git/CI，也需要明确维护责任。
+
+### 21.7 P1：可用性故障下允许的动作集合不精确
+
+Evidence Store、Lease Backend、Package Index、CI、Git Hosting 或可信时间不可用时，应通过 degraded-mode matrix 定义：是否允许读取现状、新批准、新 cutover、rollback、containment、evidence buffering，以及恢复后的 reconciliation 和最大降级时长。
+
+默认禁止新 approval/cutover；允许 freeze、containment 和不扩大风险的 rollback。离线 evidence 不能事后伪装成在线 attestation。
+
+### 21.8 P1：Bootstrap Trust 需要双人和可复现封存
+
+Phase -1B0 的人工冻结是系统唯一无法由既有 authority 批准的创世动作。需要 bootstrap ceremony ID、参与者与职责分离、输入 digest、genesis event/commit 签名、独立重建结果、sealed backup locations 和 activation observation。
+
+至少两名独立角色从干净环境复核并重建 digest；genesis commit/tag 签名、镜像和封存。后续 authority 必须能追溯至 genesis。
+
+### 21.9 P1：Scanner Soundness 声明需要可量化验证
+
+每个 scanner 应记录 supported syntax/version、soundness claim、known blind spots、unknown emission rules、false-negative corpus、false-positive baseline、mutation operators 和 corpus version。
+
+关键门禁优先保证不漏报；无法静态解析必须输出 unknown。固定语料覆盖 alias/relative import、TYPE_CHECKING、annotation string、dynamic loader、re-export、module-qualified identity、generated source 和 Python 语法版本差异。Scanner 升级时新增漏报是 hard failure。
+
+### 21.10 P2：需求文档已接近控制面设计书，应分层拆分
+
+当前策略已超过两千行，同时包含 package owner 原则和 journal/trust/lease/storage/CLI schema。建议保留本文件作为规范索引，将实现契约拆成 core、control-plane、schema-registry、gates、operations 和 release 文档。
+
+拆分不能复制规则：每条规则只有一个规范 owner，其他文档通过 stable rule ID 引用；主策略维护规范依赖图和冲突优先级。
+
+---
+
+## 22. 第十轮后的执行判定
+
+Draft v10 足以开始实现控制面 MVP，但还不足以把 Git journal 当作生产授权基础。真实试点前至少关闭：
+
+1. Git journal 的 branch protection、签名、镜像和历史改写检测；
+2. code merge 与 completion event 之间的 merged-unverified 协议；
+3. 可执行 Control-plane MVP 与 G6 默认关闭；
+4. 控制面容量基线、性能预算与全量重建 SLO；
+5. journal/provenance snapshot、archive、reachability GC；
+6. Operations RACI、runbook 与恢复演练；
+7. 依赖不可用时的 degraded-mode matrix；
+8. bootstrap genesis 的双人、签名、独立重建和封存仪式；
+9. scanner soundness contract、固定语料和漏报 mutation test；
+10. 核心原则与控制面实现规范分层。
+
+当前授权建议：
+
+- Phase -1A、-1B0、-1B1：可以实现并隔离验证；
+- Phase -1B2、-1C、-1D：按 MVP 顺序实现，G6 必须关闭；
+- Phase -1E～-1G：只可设计 schema/manifest/fixture；
+- 真实试点、Production cutover、Release Closure：不可开始。
+
+此时应停止无限增加抽象字段，转向实现 MVP-1～MVP-5，用可运行代码验证 journal、generation、provenance 和 scanner 语义。后续审核应以实际实现和失败注入结果为主，而不再只审核需求文本。
+
+---
+
+## 23. 落地收敛：MVP 执行规范
+
+为避免继续在总策略中增加实现细节，已新增独立执行文档
+[`PYTHON_PACKAGE_GOVERNANCE_MVP_EXECUTION.md`](./PYTHON_PACKAGE_GOVERNANCE_MVP_EXECUTION.md)。它把允许实施的范围收敛为 MVP-1～MVP-5，并明确：
+
+- 治理实现只位于架构测试/治理工具范围，不修改五层生产包；
+- legacy authority 先撤权，旧产物只作审计；
+- bootstrap validator 标准库-only、只读且不 import `mote`；
+- static facts 必须针对一个冻结 Git tree 原子生成；
+- provenance 与 G1～G5 可以实现，G6 固定 policy rejection；
+- 未实现能力必须为 `unsupported`，不能以空集合、N/A 或 100% 伪装完成；
+- 所有失败注入在临时 repository/worktree 执行；
+- 即使 MVP 全部通过，也必须经过实现审核，不能自动获得真实试点授权。
+
+总策略 Draft v11 已加入对该文档的规范引用。两者冲突时采用更严格的授权边界，MVP 文档无权开启 Production cutover。
+
+后续“继续完善”的正确方向已经从文本扩写切换为实现审查：先完成 MVP-1，再逐项提供代码、测试、机器输出和失败证据。除非实现暴露新的结构性缺口，不建议继续向总策略追加新的抽象层。
+
+MVP 执行规范现已补充阶段验收矩阵、统一机器输出 envelope、G6 多层不可绕过要求和实现提交边界。至此，需求审核阶段已经形成可开工输入；下一检查点应是 MVP-1 的实际实现，而不是继续扩大总体设计。

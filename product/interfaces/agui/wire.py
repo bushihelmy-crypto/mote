@@ -17,7 +17,7 @@ Design notes
   ``list[dict]`` (possibly empty). An unknown / display-only kind → ``[]`` (a
   forward-compatible frontend simply never sees it — never an error).
 * **Id correlation.** AG-UI keys streaming text by ``messageId`` and tool calls
-  by ``toolCallId``. mote already carries ``tool_use_id`` on tool events; for
+  by ``toolCallId``. mote projects the execution-owner invocation id; for
   message blocks (which have no per-block id on the wire until completion) the
   mapper mints a stable per-run ``messageId`` from a monotonic block counter.
   :class:`AguiWireState` holds that tiny per-run correlation state so the mapper
@@ -37,10 +37,14 @@ Design notes
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
+from mote.contracts.async_work.codec import decode_async_work_observation, encode_async_work_observation
 from mote.product.presentation.events import events as ev
+from mote.product.presentation.wire_types import WireJsonValue, WireObject, to_wire_json
+from mote.product.session_hosting.prompt_broker import PromptHandle
 
 # ── AG-UI event type strings (the wire ``type`` discriminator) ──────────────
 RUN_STARTED = "RUN_STARTED"
@@ -67,7 +71,7 @@ class AguiWireState:
     used to mint a stable ``messageId`` for an assistant message block (mote
     message blocks carry no id on the wire until completion) and remembers the
     currently-open block id so ``delta``/``end`` events reference the same one.
-    Tool calls need no state here — they carry ``tool_use_id`` end-to-end.
+    Tool calls need no state here — they carry canonical invocation identity.
     """
 
     thread_id: str
@@ -95,17 +99,17 @@ class AguiWireState:
 
 
 # ── Run lifecycle (emitted by the transport, not folded from a ViewEvent) ───
-def run_started(state: AguiWireState) -> Dict[str, Any]:
+def run_started(state: AguiWireState) -> WireObject:
     """The ``RUN_STARTED`` frame the transport emits before streaming a turn."""
     return {"type": RUN_STARTED, "threadId": state.thread_id, "runId": state.run_id}
 
 
-def run_finished(state: AguiWireState) -> Dict[str, Any]:
+def run_finished(state: AguiWireState) -> WireObject:
     """The ``RUN_FINISHED`` frame the transport emits after a turn's events."""
     return {"type": RUN_FINISHED, "threadId": state.thread_id, "runId": state.run_id}
 
 
-def _custom(name: str, value: Any) -> Dict[str, Any]:
+def _custom(name: str, value: WireJsonValue) -> WireObject:
     """A ``CUSTOM`` event — the escape hatch for kinds without a native AG-UI
     shape (reasoning / approval / question / notice / compaction / retry). A
     frontend renders known ``name``s and ignores the rest; nothing breaks."""
@@ -125,22 +129,26 @@ def approval_prompt(
     action: str = "",
     args_preview: str = "",
     risk: str = "medium",
-) -> Dict[str, Any]:
+    binding: PromptHandle | None = None,
+) -> WireObject:
     """The ``CUSTOM{name:'approval'}`` frame the frontend answers via ``/respond``.
 
     ``approvalId`` correlates the frame to the ``/respond`` body that resolves
     it; the frontend renders ``action`` / ``argsPreview`` / ``risk`` and posts
     back ``{promptId: approvalId, outcome, editedArgs?}``.
     """
+    value: WireObject = {
+        "approvalId": approval_id,
+        "toolName": tool_name,
+        "action": action,
+        "argsPreview": args_preview,
+        "risk": risk,
+    }
+    if binding is not None:
+        value.update(_prompt_binding(binding))
     return _custom(
         "approval",
-        {
-            "approvalId": approval_id,
-            "toolName": tool_name,
-            "action": action,
-            "argsPreview": args_preview,
-            "risk": risk,
-        },
+        value,
     )
 
 
@@ -149,8 +157,9 @@ def question_prompt(
     question_id: str = "",
     question: str = "",
     options: Optional[List[str]] = None,
-    structured: Optional[Any] = None,
-) -> Dict[str, Any]:
+    structured: Optional[WireJsonValue] = None,
+    binding: PromptHandle | None = None,
+) -> WireObject:
     """The ``CUSTOM{name:'question'}`` frame for a free-text or structured ask.
 
     ``questionId`` correlates the answer posted to ``/respond``; ``options`` is
@@ -158,36 +167,53 @@ def question_prompt(
     full multi-question payload so a rich frontend can render selects, and the
     answer comes back as ``{promptId, answers:[...]}``.
     """
-    value: Dict[str, Any] = {"questionId": question_id, "question": question, "options": options or []}
+    value: WireObject = {
+        "questionId": question_id,
+        "question": question,
+        "options": to_wire_json(options or []),
+    }
     if structured is not None:
         value["structured"] = structured
+    if binding is not None:
+        value.update(_prompt_binding(binding))
     return _custom("question", value)
 
 
-def to_agui_events(event: ev.ViewEvent, state: AguiWireState) -> List[Dict[str, Any]]:
+def _prompt_binding(handle: PromptHandle) -> WireObject:
+    scope = handle.scope
+    return {
+        "promptId": handle.prompt_id,
+        "promptNonce": handle.nonce,
+        "promptKind": scope.kind.value,
+        "agentId": scope.agent_id,
+        "threadId": scope.thread_id,
+        "runId": scope.run_id,
+    }
+
+
+def to_agui_events(event: ev.ViewEvent, state: AguiWireState) -> list[WireObject]:
     """Map one ``ViewEvent`` to zero-or-more AG-UI event dicts.
 
     Pure w.r.t. ``(event, state)``: the only mutation is ``state``'s message-id
     correlation counters (unavoidable — AG-UI needs stable per-block ids that
     mote's block deltas don't carry). Unknown / display-only kinds → ``[]``.
     """
-    kind = getattr(event, "kind", None)
-    handler = _DISPATCH.get(kind) if kind else None
+    handler = _DISPATCH.get(event.kind)
     if handler is None:
         return []
     return handler(event, state)
 
 
 # ── per-kind handlers ───────────────────────────────────────────────────────
-def _on_message_started(e: ev.MessageBlockStarted, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_message_started(e: ev.MessageBlockStarted, st: AguiWireState) -> list[WireObject]:
     return [{"type": TEXT_MESSAGE_START, "messageId": st.open_message(), "role": e.role}]
 
 
-def _on_message_delta(e: ev.MessageBlockDelta, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_message_delta(e: ev.MessageBlockDelta, st: AguiWireState) -> list[WireObject]:
     return [{"type": TEXT_MESSAGE_CONTENT, "messageId": st.current_message(), "delta": e.text}]
 
 
-def _on_message_completed(e: ev.MessageBlockCompleted, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_message_completed(e: ev.MessageBlockCompleted, st: AguiWireState) -> list[WireObject]:
     # If the block never streamed (non-streaming upstream), synthesize the whole
     # start→content→end triple so the frontend still gets a complete message.
     if e.streamed:
@@ -201,13 +227,13 @@ def _on_message_completed(e: ev.MessageBlockCompleted, st: AguiWireState) -> Lis
     ]
 
 
-def _on_reasoning_delta(e: ev.ReasoningDelta, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_reasoning_delta(e: ev.ReasoningDelta, st: AguiWireState) -> list[WireObject]:
     # Reasoning has no first-class AG-UI text channel here; ride CUSTOM so a
     # frontend can render a "thinking" stream without a bespoke handler.
     return [_custom("reasoning", {"delta": e.text})]
 
 
-def _on_output_snapshot(e: ev.OutputSnapshot, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_output_snapshot(e: ev.OutputSnapshot, st: AguiWireState) -> list[WireObject]:
     return [
         _custom(
             "outputSnapshot",
@@ -215,13 +241,13 @@ def _on_output_snapshot(e: ev.OutputSnapshot, st: AguiWireState) -> List[Dict[st
                 "runId": e.run_id,
                 "revision": e.revision,
                 "schemaFingerprint": e.schema_fingerprint,
-                "value": e.value,
+                "value": to_wire_json(e.value),
             },
         )
     ]
 
 
-def _on_output_snapshot_invalidated(e: ev.OutputSnapshotInvalidated, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_output_snapshot_invalidated(e: ev.OutputSnapshotInvalidated, st: AguiWireState) -> list[WireObject]:
     return [
         _custom(
             "outputSnapshotInvalidated",
@@ -230,7 +256,7 @@ def _on_output_snapshot_invalidated(e: ev.OutputSnapshotInvalidated, st: AguiWir
     ]
 
 
-def _on_output_committed(e: ev.OutputCommitted, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_output_committed(e: ev.OutputCommitted, st: AguiWireState) -> list[WireObject]:
     return [
         _custom(
             "outputCommitted",
@@ -239,15 +265,15 @@ def _on_output_committed(e: ev.OutputCommitted, st: AguiWireState) -> List[Dict[
                 "runKind": e.run_kind,
                 "contractId": e.contract_id,
                 "schemaFingerprint": e.schema_fingerprint,
-                "value": e.value,
+                "value": to_wire_json(e.value),
             },
         )
     ]
 
 
-def _on_tool_started(e: ev.ToolCallStarted, st: AguiWireState) -> List[Dict[str, Any]]:
-    tool_call_id = e.tool_use_id or f"{st.run_id}-tool-{id(e)}"
-    out: List[Dict[str, Any]] = [{"type": TOOL_CALL_START, "toolCallId": tool_call_id, "toolCallName": e.tool_name}]
+def _on_tool_started(e: ev.ToolCallStarted, st: AguiWireState) -> list[WireObject]:
+    tool_call_id = str(e.identity.invocation_id)
+    out: list[WireObject] = [{"type": TOOL_CALL_START, "toolCallId": tool_call_id, "toolCallName": e.tool_name}]
     # The projector already picked the headline/body; pass them as the tool's
     # arg preview so the frontend can render the call before it completes.
     args_preview = e.headline or e.body
@@ -256,8 +282,8 @@ def _on_tool_started(e: ev.ToolCallStarted, st: AguiWireState) -> List[Dict[str,
     return out
 
 
-def _on_tool_completed(e: ev.ToolCallCompleted, st: AguiWireState) -> List[Dict[str, Any]]:
-    tool_call_id = e.tool_use_id or f"{st.run_id}-tool-{id(e)}"
+def _on_tool_completed(e: ev.ToolCallCompleted, st: AguiWireState) -> list[WireObject]:
+    tool_call_id = str(e.identity.invocation_id)
     content = e.summary if e.ok else (e.recovery or e.error_code or e.summary or "error")
     if e.detail:
         content = f"{content}\n{e.detail}" if content else e.detail
@@ -272,20 +298,20 @@ def _on_tool_completed(e: ev.ToolCallCompleted, st: AguiWireState) -> List[Dict[
     ]
 
 
-def _on_task_progress(e: ev.TaskProgress, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_task_progress(e: ev.TaskProgress, st: AguiWireState) -> list[WireObject]:
     label = e.stage or e.status or "task"
     return [{"type": STEP_STARTED, "stepName": label}]
 
 
-def _on_activity_started(e: ev.ActivityStarted, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_activity_started(e: ev.ActivityStarted, st: AguiWireState) -> list[WireObject]:
     return [{"type": STEP_STARTED, "stepName": e.label or e.activity_kind or "activity"}]
 
 
-def _on_activity_completed(e: ev.ActivityCompleted, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_activity_completed(e: ev.ActivityCompleted, st: AguiWireState) -> list[WireObject]:
     return [{"type": STEP_FINISHED, "stepName": e.summary or e.outcome or "activity"}]
 
 
-def _on_usage(e: ev.UsageUpdated, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_usage(e: ev.UsageUpdated, st: AguiWireState) -> list[WireObject]:
     snapshot = {
         "usage": {
             "inputTokens": e.input_tokens,
@@ -296,10 +322,10 @@ def _on_usage(e: ev.UsageUpdated, st: AguiWireState) -> List[Dict[str, Any]]:
             "model": e.model,
         }
     }
-    return [{"type": STATE_SNAPSHOT, "snapshot": snapshot}]
+    return [{"type": STATE_SNAPSHOT, "snapshot": to_wire_json(snapshot)}]
 
 
-def _on_approval(e: ev.ApprovalRequested, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_approval(e: ev.ApprovalRequested, st: AguiWireState) -> list[WireObject]:
     # Display-side echo of an approval (if a projector ever emits one); the live
     # HITL round-trip goes through the port, which builds the same frame.
     return [
@@ -313,19 +339,19 @@ def _on_approval(e: ev.ApprovalRequested, st: AguiWireState) -> List[Dict[str, A
     ]
 
 
-def _on_question(e: ev.QuestionAsked, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_question(e: ev.QuestionAsked, st: AguiWireState) -> list[WireObject]:
     return [question_prompt(question=e.question, options=e.options)]
 
 
-def _on_error(e: ev.ErrorRaised, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_error(e: ev.ErrorRaised, st: AguiWireState) -> list[WireObject]:
     return [{"type": RUN_ERROR, "message": e.text}]
 
 
-def _on_notice(e: ev.Notice, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_notice(e: ev.Notice, st: AguiWireState) -> list[WireObject]:
     return [_custom("notice", {"text": e.text, "level": e.level})]
 
 
-def _on_media(e: ev.MediaBlock, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_media(e: ev.MediaBlock, st: AguiWireState) -> list[WireObject]:
     return [
         _custom(
             "media",
@@ -334,19 +360,29 @@ def _on_media(e: ev.MediaBlock, st: AguiWireState) -> List[Dict[str, Any]]:
     ]
 
 
-def _on_file_diff(e: ev.FileDiffBlock, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_file_diff(e: ev.FileDiffBlock, st: AguiWireState) -> list[WireObject]:
     return [_custom("fileDiff", {"path": e.path, "old": e.old, "new": e.new})]
 
 
-def _on_compacted(e: ev.ConversationCompacted, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_compacted(e: ev.ConversationCompacted, st: AguiWireState) -> list[WireObject]:
     return [_custom("compacted", {"summary": e.summary, "messageCount": e.message_count})]
 
 
-def _on_retry(e: ev.RetryStatus, st: AguiWireState) -> List[Dict[str, Any]]:
+def _on_retry(e: ev.RetryStatus, st: AguiWireState) -> list[WireObject]:
     return [
         _custom(
             "retry",
             {"attempt": e.attempt, "maxAttempts": e.max_attempts, "delayMs": e.delay_ms},
+        )
+    ]
+
+
+def _on_async_work(e: ev.AsyncWorkObserved, st: AguiWireState) -> list[WireObject]:
+    observation = decode_async_work_observation(json.loads(e.observation_json))
+    return [
+        _custom(
+            "async_work_observation",
+            to_wire_json(encode_async_work_observation(observation)),
         )
     ]
 
@@ -375,10 +411,11 @@ _DISPATCH = {
     ev.FILE_DIFF_BLOCK: _on_file_diff,
     ev.CONVERSATION_COMPACTED: _on_compacted,
     ev.RETRY_STATUS: _on_retry,
+    ev.ASYNC_WORK_OBSERVED: _on_async_work,
 }
 
 
-def encode_sse(event: Dict[str, Any]) -> str:
+def encode_sse(event: Mapping[str, WireJsonValue]) -> str:
     """Serialize one AG-UI event dict as an SSE ``data:`` frame (single-line JSON).
 
     AG-UI frames are ``data: <json>\\n\\n`` with the JSON on ONE line (no

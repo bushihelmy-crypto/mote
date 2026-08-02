@@ -29,6 +29,7 @@ from mote.contracts.conversation.fields import (
     TOOL_REFERENCES,
     TOOL_RESULT_RESOURCE_PATH,
 )
+from mote.contracts.events.envelope import freeze_json, thaw_json
 from mote.contracts.tool.calls import serialize_tool_call_args
 
 _INSTRUCT_CONTENT_TYPES: dict[str, type[BaseModel]] = {
@@ -204,21 +205,64 @@ class Message(BaseModel):
         avoid a redundant ``json.dumps``/``json.loads`` round-trip. The stored
         ``id`` is preserved as-is rather than regenerated.
         """
-        m = dict(data)
-        id = m.pop("id", None)
-        msg = cls(**m)
-        if id:
-            msg.id = id
-        return msg
+        if type(data) is not dict:
+            raise ValueError("message payload must be an object")
+        required = {
+            "id",
+            "timestamp",
+            "content",
+            "role",
+            "cause_by",
+            "sent_from",
+            "send_to",
+            "metadata",
+        }
+        allowed = required | {"instruct_content"}
+        if not required <= set(data) or not set(data) <= allowed:
+            raise ValueError("message payload fields are not canonical")
+        for field in ("id", "timestamp", "content", "role", "cause_by", "sent_from"):
+            if type(data[field]) is not str:
+                raise ValueError(f"message {field} must be a string")
+        if not data["id"]:
+            raise ValueError("message id must not be empty")
+        send_to = data["send_to"]
+        if (
+            type(send_to) is not list
+            or not send_to
+            or any(type(item) is not str or not item for item in send_to)
+            or len(send_to) != len(set(send_to))
+        ):
+            raise ValueError("message send_to must contain unique non-empty strings")
+        metadata = data["metadata"]
+        if type(metadata) is not dict or any(type(key) is not str for key in metadata):
+            raise ValueError("message metadata must be an object with string keys")
+        frozen_metadata = freeze_json(metadata, path="message.metadata")
+        instruct_content = data.get("instruct_content")
+        if instruct_content is not None:
+            if type(instruct_content) is not dict:
+                raise ValueError("message instruct_content must be an object")
+            freeze_json(instruct_content, path="message.instruct_content")
+        return cls(
+            id=data["id"],
+            timestamp=data["timestamp"],
+            content=data["content"],
+            instruct_content=instruct_content,
+            role=data["role"],
+            cause_by=data["cause_by"],
+            sent_from=data["sent_from"],
+            send_to=set(send_to),
+            metadata=thaw_json(frozen_metadata),
+        )
 
     @staticmethod
-    def load(val):
-        """Convert the json string to object."""
+    def load(val: str) -> "Message":
+        """Strictly decode the canonical durable JSON representation."""
+        if type(val) is not str or not val:
+            raise ValueError("message payload must be a non-empty JSON string")
         try:
             return Message.from_dict(json.loads(val))
-        except JSONDecodeError:
-            pass
-        return None
+        except JSONDecodeError as exc:
+            raise ValueError("message payload is not valid JSON") from exc
 
     def add_metadata(self, key: str, value: str):
         self.metadata[key] = value

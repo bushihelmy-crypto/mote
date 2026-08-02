@@ -80,7 +80,10 @@ class DefaultToolCallPolicy:
     @staticmethod
     def _install_extensions(
         extensions: tuple[ToolCallPolicyExtensionSpec, ...],
-    ) -> tuple[tuple[ToolCallPolicyExtensionSpec, ...], tuple[_InstalledExtension, ...],]:
+    ) -> tuple[
+        tuple[ToolCallPolicyExtensionSpec, ...],
+        tuple[_InstalledExtension, ...],
+    ]:
         sealed = tuple(extensions)
         identities: set[str] = set()
         installed: list[_InstalledExtension] = []
@@ -134,7 +137,7 @@ class DefaultToolCallPolicy:
             return permission_decision
 
         trace.append(ToolPolicyTraceEntry(step="final_authorization", disposition="allow"))
-        return ToolCallDecision.allow(arguments, trace=tuple(trace))
+        return ToolCallDecision.allow(intent.identity.with_arguments(arguments), arguments, trace=tuple(trace))
 
     async def _apply_hook(
         self,
@@ -152,7 +155,7 @@ class DefaultToolCallPolicy:
                     {
                         "tool_name": intent.tool_name,
                         "tool_input": arguments,
-                        "tool_use_id": intent.tool_call_id,
+                        "identity": intent.identity,
                     },
                     permission_mode=self._permission_mode,
                 ),
@@ -162,29 +165,53 @@ class DefaultToolCallPolicy:
             trace.append(
                 ToolPolicyTraceEntry(
                     step="pre_tool_use_hook",
-                    disposition="failed_open",
+                    disposition="deny",
                     detail="timeout",
                 )
             )
-            return None
-        except Exception as exc:  # noqa: BLE001 -- advisory extension fails open
+            return ToolCallDecision.deny(
+                intent.identity.with_arguments(arguments),
+                arguments,
+                "control hook timed out",
+                trace=tuple(trace),
+            )
+        except Exception as exc:  # noqa: BLE001 -- control hooks fail closed
             trace.append(
                 ToolPolicyTraceEntry(
                     step="pre_tool_use_hook",
-                    disposition="failed_open",
+                    disposition="deny",
                     detail=type(exc).__name__,
                 )
             )
-            return None
+            return ToolCallDecision.deny(
+                intent.identity.with_arguments(arguments),
+                arguments,
+                "control hook failed",
+                trace=tuple(trace),
+            )
+
+        for fact in outcome.authorization_facts:
+            trace.append(
+                ToolPolicyTraceEntry(
+                    step=f"hook_command:{fact.handler_id}",
+                    disposition=fact.disposition,
+                )
+            )
 
         if outcome.updated_args is not None:
             if not isinstance(outcome.updated_args, dict):
                 trace.append(
                     ToolPolicyTraceEntry(
                         step="pre_tool_use_hook",
-                        disposition="failed_open",
+                        disposition="deny",
                         detail="invalid argument rewrite",
                     )
+                )
+                return ToolCallDecision.deny(
+                    intent.identity.with_arguments(arguments),
+                    arguments,
+                    "control hook returned an invalid argument rewrite",
+                    trace=tuple(trace),
                 )
             else:
                 rewritten_fields = tuple(sorted(set(arguments) | set(outcome.updated_args)))
@@ -208,6 +235,7 @@ class DefaultToolCallPolicy:
                 )
             )
             return ToolCallDecision.deny(
+                intent.identity.with_arguments(arguments),
                 arguments,
                 reason,
                 terminate=outcome.stop,
@@ -255,6 +283,7 @@ class DefaultToolCallPolicy:
                     )
                 )
                 return ToolCallDecision.deny(
+                    intent.identity.with_arguments(arguments),
                     arguments,
                     reason,
                     trace=tuple(trace),
@@ -269,6 +298,7 @@ class DefaultToolCallPolicy:
                     )
                 )
                 return ToolCallDecision.deny(
+                    intent.identity.with_arguments(arguments),
                     arguments,
                     reason,
                     trace=tuple(trace),
@@ -283,6 +313,7 @@ class DefaultToolCallPolicy:
                     )
                 )
                 return ToolCallDecision.deny(
+                    intent.identity.with_arguments(arguments),
                     arguments,
                     reason,
                     trace=tuple(trace),
@@ -338,7 +369,9 @@ class DefaultToolCallPolicy:
                     detail="timeout",
                 )
             )
-            return ToolCallDecision.deny(arguments, reason, trace=tuple(trace))
+            return ToolCallDecision.deny(
+                intent.identity.with_arguments(arguments), arguments, reason, trace=tuple(trace)
+            )
         except Exception as exc:  # noqa: BLE001 -- security gate fails closed
             reason = "permission policy could not evaluate the request (error); denied for safety."
             trace.append(
@@ -348,7 +381,9 @@ class DefaultToolCallPolicy:
                     detail=type(exc).__name__,
                 )
             )
-            return ToolCallDecision.deny(arguments, reason, trace=tuple(trace))
+            return ToolCallDecision.deny(
+                intent.identity.with_arguments(arguments), arguments, reason, trace=tuple(trace)
+            )
 
         if decision.behavior == "deny":
             reason = decision.message or decision.reason.detail or "blocked before tool use"
@@ -361,6 +396,7 @@ class DefaultToolCallPolicy:
                 )
             )
             return ToolCallDecision.deny(
+                intent.identity.with_arguments(arguments),
                 arguments,
                 reason,
                 terminate=terminate,
@@ -503,13 +539,15 @@ class DefaultToolResultPolicy:
                         ),
                         "tool_response": safe_output,
                         "success": intent.execution_success,
-                        "error": self._sanitize_hook_value(
-                            dict(intent.error),
-                            trace,
-                        )
-                        if intent.error is not None
-                        else None,
-                        "tool_use_id": intent.tool_call_id,
+                        "error": (
+                            self._sanitize_hook_value(
+                                dict(intent.error),
+                                trace,
+                            )
+                            if intent.error is not None
+                            else None
+                        ),
+                        "identity": intent.identity,
                     },
                 ),
                 timeout=self._timeout,
@@ -632,26 +670,20 @@ def build_tool_call_policy(
     hook_manager: Optional[HookManager] = None,
     extensions: tuple[ToolCallPolicyExtensionSpec, ...] = (),
     require_permission: bool = False,
+    permission_engine: PermissionEngine | None = None,
 ) -> DefaultToolCallPolicy:
     """Build the domain policy at an explicit composition root."""
 
-    permission_engine = None
-    permission_mode = None
-    if permission_config is not None or require_permission:
-        config = permission_config or PermissionConfig(mode="bypass")
-        permission_mode = config.mode
-        ask_user = None
-        get_cwd: Optional[Callable[[], str]] = None
-        if role is not None:
-            capabilities = role.tool_capabilities()
-            ask_user = capabilities.get("request_approval")
-            get_cwd = capabilities.get("get_cwd")
-        sandbox = SandboxGuard(config.sandbox, get_cwd=get_cwd) if config.sandbox is not None else None
-        permission_engine = PermissionEngine(
-            mode=config.mode,
-            store=RuleStore.from_config(config),
-            ask_user=ask_user,
-            sandbox=sandbox,
+    permission_mode = (
+        (permission_config or PermissionConfig(mode="bypass")).mode
+        if permission_config is not None or require_permission
+        else None
+    )
+    if permission_engine is None:
+        permission_engine = build_permission_engine(
+            permission_config,
+            role=role,
+            require_permission=require_permission,
         )
     return DefaultToolCallPolicy(
         hook_manager=hook_manager,
@@ -661,9 +693,35 @@ def build_tool_call_policy(
     )
 
 
+def build_permission_engine(
+    permission_config: Optional[PermissionConfig],
+    *,
+    role: ToolCapabilityProvider | None = None,
+    require_permission: bool = False,
+) -> PermissionEngine | None:
+    """Build the one canonical permission state shared by governed effects."""
+    if permission_config is None and not require_permission:
+        return None
+    config = permission_config or PermissionConfig(mode="bypass")
+    ask_user = None
+    get_cwd: Optional[Callable[[], str]] = None
+    if role is not None:
+        capabilities = role.tool_capabilities()
+        ask_user = capabilities.get("request_approval")
+        get_cwd = capabilities.get("get_cwd")
+    sandbox = SandboxGuard(config.sandbox, get_cwd=get_cwd) if config.sandbox is not None else None
+    return PermissionEngine(
+        mode=config.mode,
+        store=RuleStore.from_config(config),
+        ask_user=ask_user,
+        sandbox=sandbox,
+    )
+
+
 __all__ = [
     "DEFAULT_TOOL_POLICY_TIMEOUT",
     "DefaultToolCallPolicy",
+    "build_permission_engine",
     "DefaultToolResultPolicy",
     "build_tool_call_policy",
     "build_tool_result_policy",

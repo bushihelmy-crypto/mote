@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
+from mote.product.extensions.sources import ExtensionKind, ExtensionSource, ExtensionSourcePolicy
 from mote.product.skills.audit import audit_skill_body
 from mote.product.skills.markdown import MarkdownMetaParser
 from mote.product.skills.skill_definition import SkillDefinition
@@ -28,9 +29,11 @@ class SkillPool:
         builtin_dir: Optional[Path] = None,
         *,
         source_dirs: Optional[list[Path]] = None,
+        source_policy: ExtensionSourcePolicy,
     ):
         self._skills: dict[str, SkillDefinition] = {}
         self._parser = MarkdownMetaParser()
+        self._source_policy = source_policy
         # ``source_dirs`` (lowest-priority first) is the canonical input; the
         # ``builtin_dir`` kwarg is an accepted single-layer alternative.
         if source_dirs is not None:
@@ -56,8 +59,8 @@ class SkillPool:
     def load_all(self):
         """Load every skill discovered across all source directories."""
         self._skills.clear()
-        for skill_dir in self._scan_available().values():
-            self._load_skill_from_dir(skill_dir)
+        for source in self._scan_available().values():
+            self._load_skill_from_source(source)
 
     def load_by_names(self, names: list[str]):
         """Load specific skills by name from the source directories.
@@ -68,12 +71,12 @@ class SkillPool:
         self._skills.clear()
         available = self._scan_available()
         for name in names:
-            skill_dir = available.get(name)
-            if skill_dir is None:
+            source = available.get(name)
+            if source is None:
                 continue
-            self._load_skill_from_dir(skill_dir)
+            self._load_skill_from_source(source)
 
-    def _scan_available(self) -> dict[str, Path]:
+    def _scan_available(self) -> dict[str, ExtensionSource]:
         """Map each skill directory name to its path across all source dirs.
 
         Directories are scanned lowest-priority first, so a higher-priority
@@ -81,7 +84,7 @@ class SkillPool:
         under an underscore-prefixed directory are skipped. Physical source
         directories are de-duplicated by realpath.
         """
-        available: dict[str, Path] = {}
+        available: dict[str, ExtensionSource] = {}
         seen_roots: set[str] = set()
         for root in self._source_dirs:
             if not root.is_dir():
@@ -93,21 +96,22 @@ class SkillPool:
             if key in seen_roots:
                 continue
             seen_roots.add(key)
-            for skill_md in sorted(root.rglob("SKILL.md")):
+            sources = self._source_policy.admitted_files(ExtensionKind.SKILL, sorted(root.rglob("SKILL.md")))
+            for source in sources:
+                skill_md = source.canonical_path
                 parent_parts = skill_md.relative_to(root).parts[:-1]
                 if any(part.startswith("_") for part in parent_parts):
                     continue
-                available[skill_md.parent.name] = skill_md.parent
+                available[skill_md.parent.name] = source
         return available
 
-    def _load_skill_from_dir(self, skill_dir: Path):
+    def _load_skill_from_source(self, source: ExtensionSource) -> None:
         """Parse a SKILL.md into a SkillDefinition and register it."""
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            return
+        skill_md = source.canonical_path
+        skill_dir = skill_md.parent
 
         try:
-            doc = self._parser.parse(skill_md)
+            doc = self._parser.parse_text(source.content.decode("utf-8"), source_path=skill_md)
             meta = doc.metadata
             skill = SkillDefinition(
                 name=meta.get("name", skill_dir.name),

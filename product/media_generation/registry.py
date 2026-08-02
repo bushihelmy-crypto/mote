@@ -3,24 +3,37 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+from types import MappingProxyType
+from typing import ClassVar, Literal, TypeAlias
 
-from mote.runtime.errors import ToolNotConfiguredError
+from mote.contracts.service import MediaGenerationResult, MediaGenerationSpec
+from mote.contracts.tool.errors import ToolNotConfiguredError
+from mote.product.config.multimodal import (
+    AudioGenerationConfig,
+    ImageGenerationConfig,
+    MusicGenerationConfig,
+    VideoGenerationConfig,
+)
+
+MediaKind: TypeAlias = Literal["image", "audio", "music", "video"]
+MediaProviderConfig: TypeAlias = (
+    ImageGenerationConfig | AudioGenerationConfig | MusicGenerationConfig | VideoGenerationConfig
+)
 
 
 class MediaProvider(ABC):
     """One media backend whose methods each perform at most one lifecycle wire."""
 
-    kind: ClassVar[str] = ""
+    kind: ClassVar[MediaKind]
     provider: ClassVar[str] = ""
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: MediaProviderConfig) -> None:
         self._config = config
 
     @abstractmethod
     async def start_once(
         self,
-        item: dict[str, Any],
+        item: MediaGenerationSpec,
         *,
         idempotency_key: str,
         timeout_seconds: float,
@@ -32,20 +45,20 @@ class MediaProvider(ABC):
     async def poll_once(
         self,
         operation_id: str,
-        state: dict[str, Any],
+        filename: str,
         *,
         timeout_seconds: float,
-    ) -> dict[str, Any] | None:
+    ) -> MediaGenerationResult | None:
         """Poll once; return a completed asset or ``None`` while pending."""
         raise NotImplementedError
 
     async def reconcile_once(
         self,
-        item: dict[str, Any],
+        item: MediaGenerationSpec,
         *,
         idempotency_key: str,
         timeout_seconds: float,
-    ) -> tuple[str, dict[str, Any] | None] | None:
+    ) -> tuple[str, MediaGenerationResult | None] | None:
         """Recover a submit whose response was lost, when the vendor supports it."""
         return None
 
@@ -63,20 +76,24 @@ class MediaProviderRegistry:
     """Isolated map ``(kind, name) -> MediaProvider subclass``."""
 
     def __init__(self) -> None:
-        self.providers: dict[tuple[str, str], type[MediaProvider]] = {}
+        self._providers: dict[tuple[MediaKind, str], type[MediaProvider]] = {}
 
-    def register(self, kind: str, name: str, provider_cls: type[MediaProvider]) -> None:
+    @property
+    def snapshot(self) -> MappingProxyType[tuple[MediaKind, str], type[MediaProvider]]:
+        return MappingProxyType(self._providers)
+
+    def register(self, kind: MediaKind, name: str, provider_cls: type[MediaProvider]) -> None:
         key = (kind, name)
-        existing = self.providers.get(key)
+        existing = self._providers.get(key)
         if existing is not None and existing is not provider_cls:
             raise ValueError(f"Media provider {key!r} is already registered by {existing!r}")
-        self.providers[key] = provider_cls
+        self._providers[key] = provider_cls
 
-    def get_provider(self, kind: str, name: str) -> type[MediaProvider]:
+    def get_provider(self, kind: MediaKind, name: str) -> type[MediaProvider]:
         try:
-            return self.providers[(kind, name)]
+            return self._providers[(kind, name)]
         except KeyError as e:
-            available = sorted(n for (k, n) in self.providers if k == kind)
+            available = sorted(n for (k, n) in self._providers if k == kind)
             raise ToolNotConfiguredError(
                 f"No media provider {name!r} registered for kind {kind!r}. "
                 f"Set multimodal.{kind}_generation.provider to one of: {available}."
@@ -84,16 +101,15 @@ class MediaProviderRegistry:
 
     def create(
         self,
-        kind: str,
-        config: Any,
+        kind: MediaKind,
+        config: MediaProviderConfig,
     ) -> MediaProvider:
         """Construct one provider from this explicit catalog and resolved config."""
 
-        name = getattr(config, "provider", "openai") or "openai"
-        return self.get_provider(kind, name)(config)
+        return self.get_provider(kind, config.provider)(config)
 
 
-def media_provider(kind: str, name: str):
+def media_provider(kind: MediaKind, name: str):
     """Declare provider identity without mutating a process-global catalog.
 
     Also stamps ``cls.kind`` / ``cls.provider`` so the decorator args are the
@@ -111,6 +127,8 @@ def media_provider(kind: str, name: str):
 
 __all__ = [
     "MediaProvider",
+    "MediaProviderConfig",
+    "MediaKind",
     "MediaProviderRegistry",
     "media_provider",
 ]

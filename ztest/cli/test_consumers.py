@@ -557,14 +557,14 @@ async def test_human_channel_request_approval_routes_to_selector():
 
 
 @pytest.mark.asyncio
-async def test_human_channel_request_approval_no_selector_denies():
-    # A port with no decide_approval selector fails closed (deny).
+async def test_human_channel_rejects_port_without_approval_capability():
+    # Missing typed capabilities are composition errors, not fallback paths.
     port = FakePort()
     env = PortHumanChannel(port)
     from mote.contracts.interaction import ApprovalRequest
 
-    choice = await env.request_approval(ApprovalRequest(tool_name="Write"))
-    assert choice == "deny"
+    with pytest.raises(AttributeError, match="decide_approval"):
+        await env.request_approval(ApprovalRequest(tool_name="Write"))
 
 
 @pytest.mark.asyncio
@@ -650,47 +650,11 @@ async def test_human_channel_askuserquestion_multiline_free_text_verbatim():
 
 
 @pytest.mark.asyncio
-async def test_human_channel_askuserquestion_degrades_without_ask_questions():
-    # A port that predates ``ask_questions`` degrades per-question through the
-    # plain ``ask``, still building STRUCTURED answers (no block-split / pairing).
-    from mote.contracts.interaction import AskUserQuestionAnswers
-
-    class DegradePort(FakePort):
-        def __init__(self, replies):
-            super().__init__()
-            self._replies = list(replies)
-            self.asked = []
-
-        async def ask(self, ctx, question, options=None, multi=False):
-            self.asked.append((question, options, multi))
-            return self._replies.pop(0)
-
-    port = DegradePort(["Blue", "custom text"])
+async def test_human_channel_rejects_port_without_structured_question_capability():
+    port = FakePort(answer="Red")
     env = PortHumanChannel(port, ctx="C")
-    result = await env.ask_user_question(
-        _questions(
-            _q("Color?", "C", [("Red", ""), ("Blue", "")]),
-            _q("Notes?", "N", [("A", ""), ("B", "")]),
-        )
-    )
-    assert isinstance(result, AskUserQuestionAnswers)
-    # Q1 answer matched a label → selected; Q2 answer was free text.
-    assert result.answers[0].selected == ["Blue"]
-    assert result.answers[0].free_text == ""
-    assert result.answers[1].selected == []
-    assert result.answers[1].free_text == "custom text"
-
-
-@pytest.mark.asyncio
-async def test_human_channel_degrade_falls_back_to_2arg_ask():
-    # A port whose ``ask`` only accepts (ctx, question) still degrades cleanly.
-    from mote.contracts.interaction import AskUserQuestionAnswers
-
-    port = FakePort(answer="Red")  # 2-arg ask, no options kwarg
-    env = PortHumanChannel(port, ctx="C")
-    result = await env.ask_user_question(_questions(_q("Pick", "P", [("Red", ""), ("Blue", "")])))
-    assert isinstance(result, AskUserQuestionAnswers)
-    assert result.answers[0].selected == ["Red"]
+    with pytest.raises(AttributeError, match="ask_questions"):
+        await env.ask_user_question(_questions(_q("Pick", "P", [("Red", ""), ("Blue", "")])))
 
 
 @pytest.mark.asyncio
@@ -699,11 +663,10 @@ async def test_human_channel_reply_is_empty():
     assert await env.reply_to_user("anything") == ""
 
 
-def test_human_channel_is_inert_for_team_surface():
+def test_human_channel_does_not_expose_team_environment_surface():
     env = PortHumanChannel(FakePort())
-    assert env.desc == ""
-    assert env.roles == {}
-    assert env.role_names() == []
-    # no-ops must not raise
-    env.set_addresses(object(), object())
-    env.publish_message(object())
+    assert not hasattr(env, "desc")
+    assert not hasattr(env, "roles")
+    assert not hasattr(env, "role_names")
+    assert not hasattr(env, "set_addresses")
+    assert not hasattr(env, "publish_message")

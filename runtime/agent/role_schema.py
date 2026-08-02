@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
+from mote.contracts.config.base import ConfigModel
 from mote.contracts.model.topology import DefaultRoute, RouteId
 from mote.kernel.inference.prompts import CMD_PROMPT, ROLE_INFO, SYSTEM_PROMPT
 from mote.runtime.config.hook import HookConfig
@@ -18,7 +19,7 @@ from mote.runtime.file_watch.config import FileWatchConfig
 from mote.runtime.tools.permission.config import PermissionConfig
 
 
-class BrowserClientCert(BaseModel):
+class BrowserClientCert(ConfigModel):
     """One client TLS certificate for mutual-TLS (mTLS) login on an origin.
 
     Mirrors Playwright's ``new_context(client_certificates=[...])`` entry: an
@@ -42,7 +43,7 @@ class BrowserClientCert(BaseModel):
     passphrase: str = ""
 
 
-class RoleSchema(BaseModel):
+class RoleSchema(ConfigModel):
     """Agent definition plus Runtime deployment and reliability policy."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from mote.contracts.model import (
     CanonicalModelResponse,
-    EndpointCapabilities,
     EndpointDescriptor,
     GenerateOutput,
+    ResolvedEndpointCapabilities,
     ResponseMode,
 )
 from mote.contracts.model.profile import profile_for
@@ -37,7 +37,7 @@ class FakeModelGateway:
             provider="test",
             model=model,
             base_url_identity="https://test.invalid",
-            capabilities=EndpointCapabilities(
+            capabilities=ResolvedEndpointCapabilities(
                 supports_native_schema=model_profile.supports_native_structured_output,
                 supports_server_web_search=model_profile.supports_web_search,
                 supports_vision=model_profile.supports_vision,
@@ -111,7 +111,7 @@ class _FakeRuntimeCompositionLease:
         self.runtime_generation_id = RuntimeGenerationId("runtime-test")
         self.topology_revision = "topology-test"
         self.default_model = type(
-            "DefaultModelMetadata",
+            "DefaultModelView",
             (),
             {"model": gateway.profile.model},
         )()

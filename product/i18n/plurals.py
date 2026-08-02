@@ -9,10 +9,11 @@ locale is a new rule function registered here (data, not new call-site code),
 never a change to the callers. Bounded YAGNI: we do not pre-ship rules for
 languages we don't yet translate.
 
-Zero dependencies. This is the human-locale sibling of ``common/text/plural.py``
+Zero dependencies. This serves only the Product-owned human locale surface
 (which stays deliberately English-only for *model*-facing text); the two never
 mix so the "model text = English" invariant is preserved.
 """
+
 from __future__ import annotations
 
 from typing import Callable, Dict

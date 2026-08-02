@@ -1,11 +1,13 @@
 """Composition-root coverage for ToolCallPolicy extensions."""
+
 from __future__ import annotations
 
 from mote.contracts.authorization import PermissionFacts
 from mote.contracts.ports.tool.policy import ToolCallPolicyExtensionSpec
 from mote.contracts.tool.policy import ToolCallInspection, ToolCallIntent
 from mote.kernel.output import text_output_contract
-from mote.runtime.agent import AgentDependencies, AgentWiring, Role
+from mote.product.agents.factory import CodingAgentFactory
+from mote.runtime.agent import AgentWiring, Role
 from mote.runtime.tools.permission import ToolCallInspector
 
 
@@ -27,11 +29,9 @@ def test_role_seals_declared_tool_policy_extension_manifest() -> None:
         return extension
 
     spec = ToolCallPolicyExtensionSpec("deployment-gate", build)
-    dependencies = AgentDependencies(
-        deps=None,
-        output_contract=text_output_contract(),
+    dependencies = CodingAgentFactory(
         tool_policy_extensions=(spec,),
-    )
+    ).dependencies(deps=None, output_contract=text_output_contract())
     first = Role(wiring=AgentWiring.for_dependencies(dependencies))
     second = Role(wiring=AgentWiring.for_dependencies(dependencies))
 

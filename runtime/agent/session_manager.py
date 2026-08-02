@@ -22,9 +22,9 @@ from typing import TYPE_CHECKING
 
 from mote.contracts.conversation.fields import RESOURCE_ID, RESOURCE_KIND, RESOURCE_STICKY
 from mote.contracts.tool import parse_toolset_manifest
+from mote.runtime.agent.errors import SessionResumeIdentityError
 from mote.runtime.agent.role_state import RoleState
 from mote.runtime.durable import reconcile_think_journal
-from mote.runtime.errors import SessionResumeIdentityError
 from mote.runtime.session import list_sessions as _list_sessions
 from mote.runtime.session.attribution import HunkAttribution
 from mote.runtime.session.fork import fork
@@ -144,10 +144,10 @@ class RoleSessionManager:
     @staticmethod
     def _role_identity(role: "Role") -> str:
         """The stable identity string recorded in ``session_meta.role_class``."""
-        type_id = role.role_type_id
-        if not type_id:
-            raise SessionResumeIdentityError("role has no stable persistence type id")
-        return type_id
+        try:
+            return role.residency_definition_id
+        except (TypeError, ValueError) as exc:
+            raise SessionResumeIdentityError("role has no stable persistence definition identity") from exc
 
     def validate_identity(self, meta: Mapping[str, object]) -> None:
         """Refuse to resume a session recorded by a different Role class.
@@ -170,7 +170,10 @@ class RoleSessionManager:
             )
 
         recorded_toolsets = meta["toolset_manifest"]
-        expected_manifest = toolset_manifest(self._role.wiring.dependencies.toolsets)
+        projection = self._role.wiring.dependencies.component_projection
+        if projection is None:
+            raise RuntimeError("Agent composition requires a Product component projection")
+        expected_manifest = toolset_manifest(projection.action().toolsets)
         actual_manifest = parse_toolset_manifest(recorded_toolsets)
         if actual_manifest != expected_manifest:
             expected = [identity.to_payload() for identity in expected_manifest]

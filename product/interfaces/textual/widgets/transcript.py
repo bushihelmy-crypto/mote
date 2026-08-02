@@ -253,10 +253,10 @@ class AssistantBlock(FoldableRow):
 
 
 class ToolCallWidget(FoldableRow):
-    """One tool invocation + its result, keyed by ``tool_use_id``.
+    """One tool invocation + its result, keyed by canonical invocation id.
 
     Built from the ``ToolCallStarted`` event; :meth:`complete` folds in the
-    matching ``ToolCallCompleted`` (correlated by ``tool_use_id`` in the app) so
+    matching ``ToolCallCompleted`` (correlated by invocation id in the app) so
     the started line, optional body, result summary and structured detail
     (diff / table) render together as one transcript row.
 
@@ -272,7 +272,7 @@ class ToolCallWidget(FoldableRow):
 
     def __init__(self, ev: Any, *, expanded: bool = False, **kwargs: Any) -> None:
         super().__init__(expanded=expanded, **kwargs)
-        self.tool_use_id: Optional[str] = getattr(ev, "tool_use_id", None)
+        self.invocation_id = str(ev.identity.invocation_id)
         self._started = ev
         self._completed: Any = None
         self._blink = False
@@ -365,7 +365,7 @@ class ToolGroupWidget(FoldableRow):
     etc.), handled in the app. Collapsed, this row shows the shared
     ``tool_group_summary_text`` one-liner; expanded (``ctrl+o``), it renders each
     tool via the shared :func:`build_tool_parts` so the detail matches a standalone
-    ``ToolCallWidget``. Entries correlate their completion by ``tool_use_id``.
+    ``ToolCallWidget``. Entries correlate completion by invocation id.
     """
 
     def __init__(self, *, expanded: bool = False, **kwargs: Any) -> None:
@@ -379,9 +379,9 @@ class ToolGroupWidget(FoldableRow):
         self._rebuild()
 
     def complete(self, ev: Any) -> None:
-        tid = getattr(ev, "tool_use_id", None)
+        tid = str(ev.identity.invocation_id)
         for entry in self._entries:
-            if getattr(entry[0], "tool_use_id", None) == tid:
+            if str(entry[0].identity.invocation_id) == tid:
                 entry[1] = ev
                 break
         self._rebuild()
@@ -526,7 +526,7 @@ class MediaRow(SelectableStatic):
     """
 
     def __init__(self, ev: Any, **kwargs: Any) -> None:
-        self.tool_use_id: Optional[str] = getattr(ev, "tool_use_id", None)
+        self.invocation_id = str(ev.identity.invocation_id)
         label = getattr(ev, "media_kind", None) or "media"
         ref = getattr(ev, "ref", None) or ""
         caption = media_caption(ev)
@@ -573,7 +573,7 @@ class FileDiffRow(FoldableRow):
 
     The normal Edit/Write path folds the diff *into* its :class:`ToolCallWidget`
     (so the invocation + change are one select/fold unit); this standalone row is
-    the fallback for a ``FileDiffBlock`` whose ``tool_use_id`` matched no mounted
+    the fallback for a ``FileDiffBlock`` whose invocation id matched no mounted
     tool widget. A future media-capable host could mount an interactive
     side-by-side from the same ``old``/``new`` facts instead of the synthesized
     diff — the block carries the fact, not a pre-formatted diff string.

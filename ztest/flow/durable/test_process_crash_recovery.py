@@ -69,7 +69,7 @@ if scenario.startswith("effect-"):
     asyncio.run(effect_crash())
 
 if scenario == "think-after-result":
-    journal = InferenceJournal(JsonlBackend(RunJournal("session", SessionWorkspace(root=str(root))))
+    journal = InferenceJournal(JsonlBackend(RunJournal("session", SessionWorkspace(root=str(root)))))
     step_id = journal.begin_think()
     journal.complete_think(step_id, InferenceResult(content="carried-result"))
     os._exit(91)

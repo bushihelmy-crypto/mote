@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for mote.runtime.context.turn.format.wrap_system_reminder."""
+"""Tests for the canonical context marker wrapper."""
+
 from __future__ import annotations
 
-from mote.runtime.context.turn import wrap_system_reminder
+from mote.runtime.context.markers import wrap_system_reminder
 
 
 class TestWrapSystemReminder:

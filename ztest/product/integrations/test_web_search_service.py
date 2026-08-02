@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from types import MappingProxyType
+
 import pytest
 
 from mote.contracts.model import WebSearchHit
-from mote.contracts.model.failover import EndpointCapabilities, EndpointDescriptor
+from mote.contracts.model.failover import EndpointDescriptor, ResolvedEndpointCapabilities
 from mote.contracts.model.invocation import ResolvedModelResponse, WebSearchHitOutput, WebSearchOutput
-from mote.contracts.service import ServiceExecutionSemantics, ServiceInvocation
+from mote.contracts.model.topology import TaskRoute
+from mote.contracts.service import ServiceExecutionSemantics, ServiceInvocation, WebSearchPayload, WebSearchResult
 from mote.product.config.web_search import WebSearchConfig
 from mote.product.web_search.registry import SearchBackend, builtin_search_backend_registry
 from mote.product.web_search.service import WebSearchServiceEndpointResolver, build_web_search_service_snapshot
@@ -21,13 +24,13 @@ class _ModelGateway:
             provider="anthropic",
             model="search-model",
             base_url_identity="https://model.example",
-            capabilities=EndpointCapabilities(supports_server_web_search=True),
+            capabilities=ResolvedEndpointCapabilities(supports_server_web_search=True),
             credential_pool_id="model-credentials",
             lifecycle_revision="model-revision",
         )
 
     def supports_route(self, route_id: str) -> bool:
-        return route_id == "web_search"
+        return route_id == TaskRoute(name="web_search")
 
     def route_profile(self, route_id: str):
         return self.profile if self.supports_route(route_id) else None
@@ -67,12 +70,11 @@ def _invocation(service_call_id: str = "service-call") -> ServiceInvocation:
         service_call_id=service_call_id,
         route_id="web.search",
         capability="web.search",
-        payload={
-            "query": "python",
-            "allowed_domains": ["python.org"],
-            "blocked_domains": [],
-            "max_uses": 8,
-        },
+        payload=WebSearchPayload(
+            query="python",
+            allowed_domains=("python.org",),
+            max_uses=8,
+        ),
         semantics=ServiceExecutionSemantics.PURE,
         idempotency_key=f"key-{service_call_id}",
     )
@@ -100,7 +102,23 @@ async def test_provider_backend_uses_stable_model_logical_call() -> None:
     assert second is not None and second.kind == "completed"
     assert len(model_gateway.model_call_ids) == 2
     assert model_gateway.model_call_ids[0] == model_gateway.model_call_ids[1]
-    assert first.response.value["hits"][0]["url"] == "https://example.com/result"
+    assert isinstance(first.response.value, WebSearchResult)
+    assert first.response.value.hits[0].url == "https://example.com/result"
+
+
+@pytest.mark.asyncio
+async def test_web_search_adapter_rejects_invalid_wire_before_provider_call() -> None:
+    model_gateway = _ModelGateway()
+    config = WebSearchConfig()
+    snapshot = build_web_search_service_snapshot(config, model_gateway)
+    endpoint = snapshot.endpoints[0]
+    adapter = WebSearchServiceEndpointResolver(config, builtin_search_backend_registry(), model_gateway).resolve(
+        endpoint, snapshot.credential_slots[0][1][0]
+    )
+    assert adapter is not None
+    with pytest.raises(ValueError, match="max_uses"):
+        WebSearchPayload.model_validate({"query": "python", "max_uses": True})
+    assert model_gateway.model_call_ids == []
 
 
 @pytest.mark.asyncio
@@ -132,7 +150,10 @@ async def test_direct_backend_retries_only_failed_pure_wire(tmp_path) -> None:
     resolved = await gateway.execute(_invocation("direct-search"))
 
     assert FlakySearch.calls == 2
-    assert resolved.response.value["hits"] == [{"title": "Recovered", "url": "https://example.com", "snippet": ""}]
+    assert isinstance(resolved.response.value, WebSearchResult)
+    assert [hit.model_dump() for hit in resolved.response.value.hits] == [
+        {"title": "Recovered", "url": "https://example.com", "snippet": ""}
+    ]
 
 
 def test_snapshot_is_a_secret_free_web_search_route() -> None:
@@ -146,3 +167,19 @@ def test_snapshot_is_a_secret_free_web_search_route() -> None:
     assert snapshot.group_for_route("web.search") is not None
     assert snapshot.endpoints[0].capability == "web.search"
     assert "private-key" not in repr(snapshot)
+
+
+def test_web_search_registry_is_typed_and_immutable() -> None:
+    registry = builtin_search_backend_registry()
+    assert isinstance(registry.backends, MappingProxyType)
+    with pytest.raises(TypeError, match="validated WebSearchConfig"):
+        registry.create(object())  # type: ignore[reportArgumentType]
+
+    class WrongIdentity(SearchBackend):
+        name = "declared"
+
+        async def search(self, query, *, allowed_domains=None, blocked_domains=None):
+            return []
+
+    with pytest.raises(ValueError, match="identity"):
+        registry.register("different", WrongIdentity)

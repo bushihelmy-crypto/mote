@@ -44,6 +44,7 @@ class SharedSessionCredential(FrozenContract):
     session_id: str = Field(min_length=1)
     protocol_version: int = Field(ge=1)
     socket_generation: str = Field(min_length=1)
+    application_id: str = Field(min_length=1, max_length=256)
     caller: CallerIncarnation
     principal: InferencePrincipal
     issued_at: datetime

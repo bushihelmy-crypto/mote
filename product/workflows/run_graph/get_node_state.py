@@ -16,19 +16,20 @@ from __future__ import annotations
 
 import json
 
-from mote.orchestration.background_tasks.model import BgStatus
-from mote.runtime.errors import ToolError
+from mote.contracts.tool.errors import ToolError
+from mote.contracts.workflow.identity import WorkflowDefinitionId, WorkflowRunId, WorkflowRunReference
+from mote.orchestration.workflows.types import WorkflowNodeStatus
+from mote.product.workflows.agent_context import resolve_agent_workflows
 from mote.runtime.tools.base_tool import BaseTool
-from mote.runtime.tools.capability_types import GetBgPool
 from mote.runtime.tools.text_normalization import collapse_whitespace
 
-_MSG_UNKNOWN_TASK = "Unknown task_id: {task_id}"
+_MSG_UNKNOWN_RUN = "Unknown Workflow run_id: {run_id}"
 _MSG_NO_RUN_STATE = (
-    "Task {task_id} ({command_name}) is status {status}; it has no per-node " "state (not a graph pipeline)."
+    "Workflow run {run_id} ({command_name}) is status {status}; it has no per-node " "state (not a graph pipeline)."
 )
 _MSG_NODE_NOT_FOUND = "Node '{node_name}' not found in graph. Available: {available}"
 _MSG_UNKNOWN_FIELD = "Unknown state field(s): {fields}. Available: {available}"
-_MSG_NO_SNAPSHOT = "Task {task_id} has no state snapshot to read fields from."
+_MSG_NO_SNAPSHOT = "Workflow run {run_id} has no state snapshot to read fields from."
 _MSG_LIST_AS_STRING = (
     "Expected a list, got a JSON string: {value}. Pass a real array "
     '(e.g. ["findings", "report"]), not a stringified one.'
@@ -152,7 +153,7 @@ def _record_header(rec, *, self_loop: bool = False) -> str:
             line += f" ({rec.attempts} activations — laps, not retries)"
         else:
             line += f" (attempts {rec.attempts})"
-    if rec.status == BgStatus.FAILED and rec.last_error:
+    if rec.status == WorkflowNodeStatus.FAILED and rec.last_error:
         line += f" — error: {rec.last_error}"
     if rec.last_route_key:
         line += f" — route: {rec.last_route_key}"
@@ -161,16 +162,12 @@ def _record_header(rec, *, self_loop: bool = False) -> str:
 
 class GetNodeState(BaseTool):
     name = "GetNodeStates"
-    aliases = ["get_node_state"]
-    requires = ("get_bg_pool",)
-
-    # Injected from Role by bind(): Role.get_bg_pool.
-    get_bg_pool: GetBgPool
 
     async def call(
         self,
         *,
-        task_id: str,
+        run_id: str,
+        definition_id: str,
         nodes: str | list[str] | None = None,
         fields: str | list[str] | None = None,
     ) -> str:
@@ -192,7 +189,8 @@ class GetNodeState(BaseTool):
         decide which nodes to re-run, skip, or override.
 
         Args:
-            task_id: The task ID to inspect (e.g. "bg_3").
+            run_id: The durable Workflow run ID to inspect.
+            definition_id: The immutable Workflow definition identity returned with the run.
             nodes: Optional node name(s) to drill into. Omit for a status
                 overview of all nodes; pass a name or list of names to get those
                 nodes' description, inputs and outputs only.
@@ -200,21 +198,20 @@ class GetNodeState(BaseTool):
                 of (e.g. ["findings", "report"]). Reads the task's state
                 snapshot; takes precedence over ``nodes``.
         """
-        pool = self.get_bg_pool()
-        meta = pool.get_task_info(task_id)
+        workflows = resolve_agent_workflows()
+        meta = workflows.view(WorkflowRunReference(WorkflowRunId(run_id), WorkflowDefinitionId(definition_id)))
         if meta is None:
-            raise ToolError(_MSG_UNKNOWN_TASK.format(task_id=task_id))
+            raise ToolError(_MSG_UNKNOWN_RUN.format(run_id=run_id))
 
         wanted_fields = _as_list(fields)
         if wanted_fields:
-            out = self._render_fields(task_id, meta, wanted_fields)
-            pool.mark_retrieved(task_id)
+            out = self._render_fields(run_id, meta, wanted_fields)
             return out
 
-        run_state = pool.get_run_state(task_id)
+        run_state = meta.run_state
         if run_state is None:
             return _MSG_NO_RUN_STATE.format(
-                task_id=task_id,
+                run_id=run_id,
                 command_name=meta.command_name,
                 status=meta.status.value,
             )
@@ -224,21 +221,19 @@ class GetNodeState(BaseTool):
 
         requested = _as_list(nodes)
         if not requested:
-            out = self._render_overview(task_id, meta, run_state, graph)
-            pool.mark_retrieved(task_id)
+            out = self._render_overview(run_id, meta, run_state, graph)
             return out
 
         if graph is not None:
             for n in requested:
                 if n not in graph._nodes:
                     raise ToolError(_MSG_NODE_NOT_FOUND.format(node_name=n, available=list(graph._nodes.keys())))
-        out = self._render_details(task_id, meta, run_state, graph, requested)
-        pool.mark_retrieved(task_id)
+        out = self._render_details(run_id, meta, run_state, graph, requested)
         return out
 
-    def _render_overview(self, task_id, meta, run_state, graph=None) -> str:
+    def _render_overview(self, run_id, meta, run_state, graph=None) -> str:
         lines = [
-            f"Task {task_id} ({meta.command_name}) — status: {meta.status.value}",
+            f"Workflow run {run_id} ({meta.command_name}) — status: {meta.status.value}",
             "nodes:",
         ]
         for rec in run_state.records.values():
@@ -252,9 +247,9 @@ class GetNodeState(BaseTool):
         )
         return "\n".join(lines)
 
-    def _render_details(self, task_id, meta, run_state, graph, requested) -> str:
+    def _render_details(self, run_id, meta, run_state, graph, requested) -> str:
         state = meta.state_snapshot
-        blocks = [f"Task {task_id} ({meta.command_name}) — status: {meta.status.value}"]
+        blocks = [f"Workflow run {run_id} ({meta.command_name}) — status: {meta.status.value}"]
         for n in requested:
             rec = run_state.get(n)
             self_loop = _is_self_loop_node(graph, n)
@@ -319,11 +314,11 @@ class GetNodeState(BaseTool):
             return None
         return _preview_value(value, limit=_INLINE_PREVIEW_LIMIT, collapse=True)
 
-    def _render_fields(self, task_id, meta, requested) -> str:
+    def _render_fields(self, run_id, meta, requested) -> str:
         """Dump the full current value of the requested state snapshot fields."""
         state = meta.state_snapshot
         if state is None:
-            return _MSG_NO_SNAPSHOT.format(task_id=task_id)
+            return _MSG_NO_SNAPSHOT.format(run_id=run_id)
         valid = set(getattr(type(state), "model_fields", {}) or {})
         unknown = [f for f in requested if f not in valid and getattr(state, f, _NO_FIELD) is _NO_FIELD]
         if unknown:
@@ -333,7 +328,7 @@ class GetNodeState(BaseTool):
                     available=", ".join(sorted(valid)) or "(none declared)",
                 )
             )
-        blocks = [f"Task {task_id} ({meta.command_name}) — state fields:"]
+        blocks = [f"Workflow run {run_id} ({meta.command_name}) — state fields:"]
         for field in requested:
             value = getattr(state, field, _NO_FIELD)
             if value is _NO_FIELD:

@@ -9,13 +9,15 @@ come back as ``AskUserQuestionAnswers`` with ``selected`` labels + ``free_text``
 kept in separate fields — no text rendering / parsing). CapRole fakes the
 structured channel with scriptable answers.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from mote.contracts.interaction import AskUserQuestionAnswer, AskUserQuestionAnswers
+from mote.contracts.tool.errors import ToolError
 from mote.product.toolsets.builtin.human import AskUser, AskUserQuestion, ReplyToUser
-from mote.runtime.tools.tool_result import ToolError, ToolResult
+from mote.runtime.tools.tool_result import ToolResult
 
 from .conftest import CapRole, bind, run
 
@@ -69,9 +71,11 @@ class TestAskUserQuestionSingle:
         assert isinstance(result, ToolResult)
         assert '"Pick"="Blue"' in result.output
         assert "User has answered your questions" in result.output
-        # The structured answers ride along on ``data`` (does not enter history).
-        assert isinstance(result.data, AskUserQuestionAnswers)
-        assert result.data.answers[0].selected == ["Blue"]
+        # The structured answers ride along in the canonical JSON payload.
+        assert result.payload is not None
+        payload = result.payload.materialize()
+        assert isinstance(payload, dict)
+        assert payload["answers"][0]["selected"] == ["Blue"]
         # The tool passed typed AskUserQuestionItem models through the channel.
         items = role.ask_question_items[0]
         assert items[0].question == "Pick"
@@ -82,7 +86,10 @@ class TestAskUserQuestionSingle:
         tool = bind(AskUserQuestion(), role)
         result = _call(tool, questions=[_q("Pick", "P", [("Red", ""), ("Blue", "")])])
         assert '"Pick"="Green please"' in result.output
-        assert result.data.answers[0].free_text == "Green please"
+        assert result.payload is not None
+        payload = result.payload.materialize()
+        assert isinstance(payload, dict)
+        assert payload["answers"][0]["free_text"] == "Green please"
 
     def test_multiselect_joins_labels(self, workspace):
         role = CapRole()
@@ -125,8 +132,11 @@ class TestAskUserQuestionMulti:
                 _q("Size?", "S", [("Small", ""), ("Large", "")]),
             ],
         )
-        assert result.data.answers[0].free_text == "line one\nline two\nline three"
-        assert result.data.answers[1].selected == ["Large"]
+        assert result.payload is not None
+        payload = result.payload.materialize()
+        assert isinstance(payload, dict)
+        assert payload["answers"][0]["free_text"] == "line one\nline two\nline three"
+        assert payload["answers"][1]["selected"] == ["Large"]
         assert '"Size?"="Large"' in result.output
 
     def test_numeric_free_text_stays_free_text(self, workspace):
@@ -135,7 +145,10 @@ class TestAskUserQuestionMulti:
         role.ask_answers = _answers(("How many?", [], "42"))
         tool = bind(AskUserQuestion(), role)
         result = _call(tool, questions=[_q("How many?", "Q", [("One", ""), ("Two", "")])])
-        assert result.data.answers[0].free_text == "42"
+        assert result.payload is not None
+        payload = result.payload.materialize()
+        assert isinstance(payload, dict)
+        assert payload["answers"][0]["free_text"] == "42"
         assert '"How many?"="42"' in result.output
 
 

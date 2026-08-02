@@ -7,9 +7,10 @@ from typing import ClassVar, Optional
 
 from mote.contracts.file import FileOperationError, SearchOutputMode, SearchResult, SearchRow
 from mote.contracts.tool.effects import ToolEffect
+from mote.contracts.tool.errors import ToolError
+from mote.contracts.tool.result import json_tool_payload
 from mote.product.toolsets.builtin._paths import base_cwd, resolve_path, resolve_permission_path
 from mote.product.toolsets.constants import GLIMPSE_EXTENSIONS, GLIMPSE_RECORD_LIMIT, SEARCH_TIMEOUT
-from mote.runtime.errors import ToolError
 from mote.runtime.file_paths import display_path
 from mote.runtime.presentation import count_noun, plural
 from mote.runtime.tools.base_tool import BaseTool
@@ -158,7 +159,7 @@ class Search(BaseTool):
                 base=base,
                 line_numbers=line_numbers,
             ),
-            data=self._data(result),
+            payload=json_tool_payload(self._data(result)),
         )
 
     def _record_glimpses(self, result: SearchResult) -> None:

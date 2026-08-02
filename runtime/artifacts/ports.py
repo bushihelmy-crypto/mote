@@ -3,31 +3,28 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from typing import Protocol, Sequence
+from typing import Protocol, Sequence, runtime_checkable
 
 from mote.contracts.artifact import ArtifactContentRef
 
 
 class ArtifactRootSource(Protocol):
-    def artifact_roots(self) -> Sequence[ArtifactContentRef]:
-        ...
+    def artifact_roots(self) -> Sequence[ArtifactContentRef]: ...
 
 
+@runtime_checkable
 class ArtifactPinSource(Protocol):
     def freeze_artifact_pins(
         self,
-    ) -> AbstractContextManager[Sequence[ArtifactContentRef]]:
-        ...
+    ) -> AbstractContextManager[Sequence[ArtifactContentRef]]: ...
 
 
 class ArtifactReservationJournal(Protocol):
-    def recover_artifact_reservations(self) -> None:
-        ...
+    def recover_artifact_reservations(self) -> None: ...
 
 
 class ArtifactMetadataSource(Protocol):
-    def prune_artifact_metadata(self, reachable: Sequence[ArtifactContentRef]) -> None:
-        ...
+    def prune_artifact_metadata(self, reachable: Sequence[ArtifactContentRef]) -> None: ...
 
 
 __all__ = [

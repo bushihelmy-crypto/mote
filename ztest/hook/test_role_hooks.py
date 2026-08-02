@@ -18,7 +18,7 @@ from mote.contracts.output import RunRejected, RunRejectionKind
 from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
 from mote.runtime.agent import AgentWiring, Role
 from mote.runtime.agent.role_schema import RoleSchema
-from mote.runtime.events.telemetry import TelemetryBinding
+from mote.runtime.events.telemetry import AllTelemetryBinding
 from mote.runtime.hook.types import HookOutcome
 
 
@@ -52,10 +52,10 @@ class _EventCapture:
 @pytest_asyncio.fixture
 async def role_in_tmp(tmp_path, monkeypatch):
     from mote.kernel.output import text_output_contract
+    from mote.product.agents.factory import CodingAgentFactory
     from mote.product.paths import default_runtime_paths
-    from mote.runtime.agent import AgentDependencies
     from mote.runtime.models.clients.context import Context
-    from mote.ztest.model_fakes import FakeModelGateway, offline_config
+    from mote.ztest.model_fakes import FakeApplicationComposition, FakeModelGateway, offline_config
 
     monkeypatch.setattr("mote.runtime.session.log._default_base_dir", lambda: tmp_path)
     # This suite exercises hook wiring, not the advisory whole-repo cold index.
@@ -68,32 +68,31 @@ async def role_in_tmp(tmp_path, monkeypatch):
         "mote.runtime.context.turn.sources.git.collect_git_state",
         no_git_snapshot,
     )
-    context = Context(
-        config=offline_config(),
-        provider_factory=lambda config: _OfflineLLM(config.model),
+    context = Context()
+    config = offline_config()
+    config = config.model_copy(
+        update={
+            "secrets": config.secrets.model_copy(
+                update={
+                    "vault_path": str(tmp_path / "vault.json"),
+                    "secrets_config_path": str(tmp_path / "secrets_config.json"),
+                }
+            )
+        }
     )
-    context.model_gateway = FakeModelGateway(_OfflineLLM("test"))
-    original_vault_path = context.config.secrets.vault_path
-    original_config_path = context.config.secrets.secrets_config_path
-    context.config.secrets.vault_path = str(tmp_path / "vault.json")
-    context.config.secrets.secrets_config_path = str(tmp_path / "secrets_config.json")
+    composition = FakeApplicationComposition(FakeModelGateway(_OfflineLLM("test")))
     paths = default_runtime_paths(
         user_config_root=tmp_path / "config",
         workspace_root=tmp_path / "workspace",
     )
     role = Role(
+        config=config,
         role_schema=RoleSchema(name="Hooked", generate_title=False),
         wiring=AgentWiring.for_context(
             context,
-            dependencies=AgentDependencies(
-                deps=None,
-                output_contract=text_output_contract(),
-                user_config_root=paths.user_config_root,
-                session_workspace_root=paths.session_workspace_root,
-                browser_profiles_root=paths.browser_profiles_root,
-                sandbox_ca_root=paths.sandbox_ca_root,
-                secrets_root=paths.secrets_root,
-                oauth_root=paths.oauth_root,
+            application_composition=composition,
+            dependencies=CodingAgentFactory(paths=paths).dependencies(
+                deps=None, output_contract=text_output_contract()
             ),
         ),
     )
@@ -106,8 +105,6 @@ async def role_in_tmp(tmp_path, monkeypatch):
     finally:
         await role.cleanup()
         await context.aclose()
-        context.config.secrets.vault_path = original_vault_path
-        context.config.secrets.secrets_config_path = original_config_path
 
 
 @pytest.mark.asyncio
@@ -149,15 +146,13 @@ async def test_user_prompt_submit_injects_context(role_in_tmp):
 async def test_prompt_rejection_never_enters_history_or_starts_flow(role_in_tmp):
     raw_secret = "deny-boundary-secret"
     capture = _EventCapture()
-    handle = await role_in_tmp.telemetry.subscribe(
-        TelemetryBinding(
-            TelemetrySubscriptionSpec(
-                identity=TelemetryIdentity("mote.test.role_hook_prompt_rejection"),
-                capacity=16,
-                overflow=TelemetryOverflow.DROP_NEWEST,
-            ),
-            capture,
-        )
+    handle = await role_in_tmp.telemetry.subscribe_all(
+        TelemetrySubscriptionSpec(
+            identity=TelemetryIdentity("mote.test.role_hook_prompt_rejection"),
+            capacity=16,
+            overflow=TelemetryOverflow.DROP_NEWEST,
+        ),
+        capture,
     )
     role_in_tmp.register_hook(
         "UserPromptSubmit",
@@ -171,7 +166,7 @@ async def test_prompt_rejection_never_enters_history_or_starts_flow(role_in_tmp)
         pytest.fail("PromptPolicy rejection must not construct a flow engine")
 
     role_in_tmp._components._graph.seed(role_in_tmp._components._execution_engine_factory_key, forbidden_flow)
-    history_before = role_in_tmp.context_manager.get()
+    history_before = list(role_in_tmp.state.context.messages)
 
     result = await role_in_tmp.run(with_message=(f'use <secret name="denied_token">{raw_secret}</secret> now'))
     await role_in_tmp.telemetry.drain()
@@ -179,7 +174,7 @@ async def test_prompt_rejection_never_enters_history_or_starts_flow(role_in_tmp)
     assert isinstance(result, RunRejected)
     assert result.kind is RunRejectionKind.PROMPT_ADMISSION
     assert raw_secret not in repr(result)
-    assert role_in_tmp.context_manager.get() == history_before
+    assert role_in_tmp.state.context.messages == history_before
     rejected = [e for e in capture.events if isinstance(e, PromptRejectedEvent)]
     assert len(rejected) == 1
     assert not any(isinstance(e, UserPromptSubmitEvent) for e in capture.events)
@@ -192,15 +187,13 @@ async def test_prompt_rejection_never_enters_history_or_starts_flow(role_in_tmp)
 async def test_secret_policy_failure_withholds_prompt_before_role_boundary(role_in_tmp, monkeypatch):
     raw_secret = "vault-failure-secret"
     capture = _EventCapture()
-    handle = await role_in_tmp.telemetry.subscribe(
-        TelemetryBinding(
-            TelemetrySubscriptionSpec(
-                identity=TelemetryIdentity("mote.test.role_hook_secret_failure"),
-                capacity=16,
-                overflow=TelemetryOverflow.DROP_NEWEST,
-            ),
-            capture,
-        )
+    handle = await role_in_tmp.telemetry.subscribe_all(
+        TelemetrySubscriptionSpec(
+            identity=TelemetryIdentity("mote.test.role_hook_secret_failure"),
+            capacity=16,
+            overflow=TelemetryOverflow.DROP_NEWEST,
+        ),
+        capture,
     )
     store = role_in_tmp.prompt_policy._secret_store
     assert store is not None
@@ -213,7 +206,7 @@ async def test_secret_policy_failure_withholds_prompt_before_role_boundary(role_
 
     monkeypatch.setattr(store, "add_session_secret", fail_capture)
     role_in_tmp._components._graph.seed(role_in_tmp._components._execution_engine_factory_key, forbidden_flow)
-    history_before = role_in_tmp.context_manager.get()
+    history_before = list(role_in_tmp.state.context.messages)
 
     result = await role_in_tmp.run(with_message=f"use <secret>{raw_secret}</secret> now")
     await role_in_tmp.telemetry.drain()
@@ -221,7 +214,7 @@ async def test_secret_policy_failure_withholds_prompt_before_role_boundary(role_
     assert isinstance(result, RunRejected)
     assert result.terminate is True
     assert raw_secret not in repr(result)
-    assert role_in_tmp.context_manager.get() == history_before
+    assert role_in_tmp.state.context.messages == history_before
     rejected = [e for e in capture.events if isinstance(e, PromptRejectedEvent)]
     assert len(rejected) == 1
     assert rejected[0].redacted_excerpt.startswith("[prompt withheld")
@@ -260,7 +253,14 @@ async def test_global_hooks_json_engages_manager(tmp_path, monkeypatch):
     import json
     from dataclasses import replace
 
+    from mote.contracts.tool.identity import (
+        ToolAttemptOrdinal,
+        ToolInvocationId,
+        ToolInvocationIdentity,
+        tool_arguments_digest,
+    )
     from mote.product.config.adapters.hooks import load_global_hooks
+    from mote.product.extensions.sources import ExtensionKind, ExtensionSourcePolicy
     from mote.product.paths import default_runtime_paths, mote_layered_files
     from mote.runtime.models.clients.context import Context
 
@@ -274,7 +274,7 @@ async def test_global_hooks_json_engages_manager(tmp_path, monkeypatch):
                     "PreToolUse": [
                         {
                             "matcher": "Bash",
-                            "handlers": [{"type": "command", "command": "exit 2"}],
+                            "handlers": [{"type": "command", "id": "deny", "argv": ["/bin/sh", "-c", "exit 2"]}],
                         }
                     ]
                 }
@@ -283,12 +283,31 @@ async def test_global_hooks_json_engages_manager(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     paths = default_runtime_paths(user_config_root=home)
-    dependencies = replace(
-        AgentWiring.defaults().dependencies,
-        hook_config=load_global_hooks(
-            mote_layered_files("hooks.json", tmp_path, user_config_root=paths.user_config_root)
+    source_policy = ExtensionSourcePolicy(
+        user_root=home,
+        builtin_roots=(tmp_path,),
+    )
+    from mote.contracts.agent import ApprovedDeclaration
+    from mote.kernel.output import text_output_contract
+    from mote.product.agents.factory import CodingAgentFactory
+
+    hook_sources = source_policy.admitted_files(
+        ExtensionKind.HOOK,
+        mote_layered_files(
+            "hooks.json",
+            tmp_path,
+            user_config_root=paths.user_config_root,
         ),
     )
+    hook_config = load_global_hooks(hook_sources)
+    assert hook_config is not None
+    dependencies = CodingAgentFactory(
+        paths=paths,
+        hooks=ApprovedDeclaration(
+            hook_config,
+            tuple(source.approved_identity() for source in hook_sources),
+        ),
+    ).dependencies(deps=None, output_contract=text_output_contract())
 
     role = Role(
         role_schema=RoleSchema(name="Global"),
@@ -300,7 +319,20 @@ async def test_global_hooks_json_engages_manager(tmp_path, monkeypatch):
 
     # And the loaded command hook actually fires: a matched Bash tool blocks
     # (the `exit 2` handler signals deny).
-    outcome = await role.hook_manager.fire("PreToolUse", {"tool_name": "Bash"})
+    arguments: dict[str, object] = {}
+    identity = ToolInvocationIdentity(
+        ToolInvocationId("role-hook-test"),
+        ToolAttemptOrdinal(1),
+        "role-hook-definition",
+        1,
+        tool_arguments_digest(arguments),
+        "role-hook-owner",
+        "role-hook-run",
+    )
+    outcome = await role.hook_manager.fire(
+        "PreToolUse",
+        {"identity": identity, "tool_name": "Bash", "tool_input": arguments},
+    )
     assert outcome.behavior == "deny"
 
     # An unmatched tool selects no handler → EMPTY (no block).

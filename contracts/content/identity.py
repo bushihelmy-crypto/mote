@@ -26,8 +26,8 @@ class ContentIdentity:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "digest", ContentDigest(self.digest))
-        if type(self.size) is not int or self.size < 0:
-            raise ValueError("content size must be a non-negative integer")
+        if type(self.size) is not int or not 0 <= self.size < (1 << 63):
+            raise ValueError("content size must be an unsigned 63-bit integer")
 
 
 __all__ = ["ContentDigest", "ContentIdentity", "DigestAlgorithm"]

@@ -24,7 +24,7 @@ from mote.contracts.ports.events.journal import AppendResult
 from mote.runtime.events.journal import LocalEventJournal
 from mote.runtime.persistence import DiskWriter
 from mote.runtime.persistence.async_io import run_disk_io
-from mote.runtime.session.codec import encode_session_event, session_stream_id
+from mote.runtime.session.codec import decode_session_event, encode_session_event, session_stream_id
 from mote.runtime.session.events import SessionEvent, SessionMetaEvent
 from mote.runtime.session.layout import SessionLayout
 from mote.runtime.telemetry.logging import log_class
@@ -96,6 +96,11 @@ class SessionLog:
     def event_journal(self) -> LocalEventJournal:
         return self._journal
 
+    @property
+    def committed_version(self) -> int:
+        self._ensure_current_schema()
+        return self._version
+
     def bind_async_sink(
         self,
         sink: Callable[[SessionEvent], Awaitable[AppendResult]],
@@ -160,7 +165,25 @@ class SessionLog:
         """Yield a fully verified committed snapshot in stream order."""
 
         self._ensure_current_schema()
-        return self._journal.iter_committed(self._stream_id)
+        return self._iter_identity_verified()
+
+    def _iter_identity_verified(
+        self,
+    ) -> Iterator[EventEnvelope[Mapping[str, JsonValue]]]:
+        saw_meta = False
+        for envelope in self._journal.iter_committed(self._stream_id):
+            if envelope.session_id != self.session_id:
+                raise RuntimeError("Session envelope identity does not match its stream")
+            event = decode_session_event(envelope)
+            if isinstance(event, SessionMetaEvent):
+                if saw_meta or envelope.sequence != 1:
+                    raise RuntimeError("Session metadata must be the unique first fact")
+                if event.session_id != self.session_id:
+                    raise RuntimeError("Session metadata identity does not match its stream")
+                saw_meta = True
+            elif not saw_meta:
+                raise RuntimeError("Session stream is missing its first metadata fact")
+            yield envelope
 
     def _ensure_current_schema(self) -> None:
         if self._schema_checked:

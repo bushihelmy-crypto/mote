@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Tests for mote.runtime.agent.role.Role (construction, serialization, properties,
 capabilities, messaging, and the async human/sleep helpers)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -43,24 +44,26 @@ from mote.runtime.agent.component_keys import (
 )
 from mote.runtime.agent.components import dedupe_tools
 from mote.runtime.agent.control import set_control
+from mote.runtime.agent.errors import RoleContextNotSetError
 from mote.runtime.agent.execution import any_to_str
-from mote.runtime.errors import RoleContextNotSetError
 from mote.runtime.services import EngineServices
 from mote.runtime.tools.execution_context import bind_tool_call_id
-from mote.ztest.model_fakes import bind_fake_runtime
+from mote.ztest.model_fakes import bind_fake_runtime, offline_config
 
 from .conftest import FakeContextManager, FakeEnv, FakeLLM
 
 coding_agent_factory = CodingAgentFactory()
 
 
-def build_test_role(*, name, role_schema, services):
+def build_test_role(*, name, role_schema, services, config=None):
+    from mote.ztest.model_fakes import offline_config
+
     dependencies = coding_agent_factory.dependencies(
         deps=None,
         output_contract=text_output_contract(),
         command_protocol=role_schema.command_protocol,
     )
-    return coding_agent_factory.root_builder(Role).build(
+    role = coding_agent_factory.root_builder(Role).build(
         RootAgentRequest(
             name=name,
             role_schema=role_schema,
@@ -68,13 +71,15 @@ def build_test_role(*, name, role_schema, services):
             wiring=AgentWiring(services=services, dependencies=dependencies),
         )
     )
+    role.config = config or offline_config()
+    return role
 
 
 def _wiring_with_gateway(llm, *, dependencies=None):
     from mote.runtime.models.clients.context import Context
-    from mote.ztest.model_fakes import FakeApplicationComposition, FakeModelGateway, offline_config
+    from mote.ztest.model_fakes import FakeApplicationComposition, FakeModelGateway
 
-    context = Context(config=offline_config())
+    context = Context()
     return AgentWiring.for_context(
         context,
         dependencies=dependencies,
@@ -172,59 +177,17 @@ class TestAddressInit:
 
 
 # =============================================================================
-# Serialization
+# Residency replacement
 # =============================================================================
-class TestSerialization:
-    def test_dump_shape(self):
-        r = Role(name="Alice", profile="Shipper")
-        data = r.dump()
-        assert data["type_id"] == "mote.agent.role.v1"
-        assert data["role_schema"]["name"] == "Alice"
-        assert data["role_schema"]["profile"] == "Shipper"
-        assert "state" in data
-
-    def test_round_trip_via_load(self):
+class TestResidencyReplacement:
+    def test_blueprint_round_trip_uses_trusted_definition(self):
         r = Role(name="Alice", profile="Shipper", tools=["Read"])
-        restored = Role.load(r.dump())
+        restored = r.incarnation_blueprint().build(r.export_residency_state(session_history_is_durable=False))
         assert isinstance(restored, Role)
         assert restored.name == "Alice"
         assert restored.role_schema.profile == "Shipper"
         assert restored.role_schema.tools == ["Read"]
-
-    def test_round_trip_preserves_session_id(self):
-        r = Role(name="Alice")
-        restored = Role.load(r.dump())
         assert restored.session_id == r.session_id
-
-    def test_load_missing_type_id_raises(self):
-        with pytest.raises(ValueError):
-            Role.load({"state": {}, "role_schema": {}})
-
-    def test_load_unknown_class_raises(self):
-        with pytest.raises(TypeError):
-            Role.load({"type_id": "no.such.type.v1"})
-
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            {"type_id": "mote.agent.role.v1", "state": {}},
-            {"type_id": "mote.agent.role.v1", "role_schema": {}},
-            {
-                "type_id": "mote.agent.role.v1",
-                "role_schema": {},
-                "state": {},
-                "legacy": {},
-            },
-        ],
-    )
-    def test_load_requires_canonical_snapshot_shape(self, payload):
-        with pytest.raises(ValueError, match="exactly"):
-            Role.load(payload)
-
-    @pytest.mark.parametrize("type_id", [None, "", 1])
-    def test_load_rejects_invalid_type_id(self, type_id):
-        with pytest.raises(ValueError, match="type_id"):
-            Role.load({"type_id": type_id, "role_schema": {}, "state": {}})
 
 
 # =============================================================================
@@ -250,10 +213,10 @@ class TestProperties:
         r = Role(name="X", config="injected-config")
         assert r.config == "injected-config"
 
-    def test_config_falls_back_to_context(self, context):
+    def test_config_does_not_fall_back_to_context(self, context):
         r = Role(name="X", wiring=AgentWiring.for_context(context))
-        # context.config is the real Config; just assert delegation works.
-        assert r.config is context.config
+        with pytest.raises(RuntimeError, match="explicit typed runtime configuration"):
+            _ = r.config
 
     def test_config_setter(self):
         r = Role(name="X")
@@ -822,9 +785,10 @@ class TestToolSearchWiring:
         # reveal; it appears in the searchable menu. Pin the master
         # switch on BEFORE building (the deferred set is fixed at build time) —
         # a sibling test mutates the shared config cache off.
-        context.config.tools.tool_search.enabled = True
+        config = offline_config()
+        config.tools.tool_search.enabled = True
         schema = RoleSchema(name="X", tools=["Read", "DeviceUse"], deferred_tools=["DeviceUse"])
-        r = build_test_role(name="X", role_schema=schema, services=EngineServices(context=context))
+        r = build_test_role(name="X", role_schema=schema, services=EngineServices(context=context), config=config)
         assert "DeviceUse" in r._components.executor._tools  # bound
         assert "DeviceUse" in r.list_deferred_tools()  # searchable in the menu
 
@@ -838,27 +802,6 @@ class TestTurnContextRegistry:
     CONSTRUCTED only when (toggle on) AND (WebBrowser equipped), and RENDERS only
     on a turn where WebBrowser was recently used."""
 
-    @pytest.fixture(autouse=True)
-    def _restore_shared_config(self, context):
-        # ``Context().config`` is the process-cached singleton, so a mutation here
-        # would leak into later tests (and a prior test's mutation into ours).
-        # Snapshot the fields this class touches and restore them after each test.
-        tc = context.config.context.turn_context
-        ts = context.config.tools.tool_search
-        saved = (
-            list(tc.disabled),
-            tc.credential_index,
-            ts.enabled,
-            list(tc.credential_keys),
-            dict(tc.credential_values),
-        )
-        yield
-        tc.disabled = list(saved[0])
-        tc.credential_index = saved[1]
-        ts.enabled = saved[2]
-        tc.credential_keys = list(saved[3])
-        tc.credential_values = dict(saved[4])
-
     @staticmethod
     def _xml_role(context):
         # XML path keeps the deferred-tool menu as a normally-on source to filter.
@@ -868,7 +811,7 @@ class TestTurnContextRegistry:
             deferred_tools=["WebBrowser"],
             command_protocol="xml",
         )
-        built = Role(name="X", role_schema=schema, wiring=AgentWiring.for_context(context))
+        built = Role(name="X", role_schema=schema, wiring=AgentWiring.for_context(context), config=offline_config())
         bind_fake_runtime(built, FakeLLM())
         return built
 
@@ -878,6 +821,7 @@ class TestTurnContextRegistry:
             name="X",
             role_schema=RoleSchema(name="X", tools=list(tools)),
             wiring=AgentWiring.for_context(context),
+            config=offline_config(),
         )
         bind_fake_runtime(built, FakeLLM())
         return built
@@ -1288,19 +1232,11 @@ class TestFrameworkProperties:
         r = Role(name="X")
         assert r.session_id == r.state.session_id
 
-    def test_env_property_and_setter(self):
+    def test_routing_binding_registers_addresses(self):
         r = Role(name="X")
-        assert r.env is None
         env = FakeEnv()
-        r.set_env(env)
-        assert r.env is env
-        # set_env registers addresses with the env
+        r.bind_routing(env)
         assert env.set_addresses_calls
-
-    def test_set_env_none_does_not_register(self):
-        r = Role(name="X")
-        r.set_env(None)
-        assert r.env is None
 
     def test_is_idle_true_when_buffer_empty(self):
         assert Role(name="X").is_idle is True
@@ -1318,7 +1254,7 @@ class TestFrameworkProperties:
     def test_set_addresses_with_env_propagates(self):
         r = Role(name="X")
         env = FakeEnv()
-        r.set_env(env)
+        r.bind_routing(env)
         env.set_addresses_calls.clear()
         r.set_addresses({"only"})
         assert env.set_addresses_calls[-1][1] == {"only"}
@@ -1388,6 +1324,7 @@ class _InlineForkControl:
         from mote.contracts.agent import AgentConstructionRequest, SpawnContext
 
         request = AgentConstructionRequest(
+            logical_agent_id="child-agent",
             parent_session_id=spec.parent_id,
             child_identity="skill-fork-test",
             child_path="skill_fork",
@@ -1718,7 +1655,7 @@ class TestMessaging:
     def test_publish_to_other_with_env_routes_to_env(self):
         r = Role(name="Alice")
         env = FakeEnv()
-        r.set_env(env)
+        r.bind_routing(env)
         msg = Message(content="x", send_to={"Bob"})
         r.publish_message(msg)
         assert env.published == [msg]
@@ -1731,7 +1668,7 @@ class TestMessaging:
     def test_publish_aimessage_gets_agent_tag(self):
         r = Role(name="Alice", profile="Eng")
         env = FakeEnv()
-        r.set_env(env)
+        r.bind_routing(env)
         msg = AIMessage(content="x", send_to={"Bob"})
         r.publish_message(msg)
         assert env.published[0].agent == r.role_schema.display_name
@@ -1747,13 +1684,13 @@ class TestHumanChannel:
 
     def test_ask_user_without_env(self):
         r = Role(name="X")
-        assert "Not in MoteEnv" in asyncio.run(r.ask_user("hello?"))
+        assert "No human interaction" in asyncio.run(r.ask_user("hello?"))
 
     def test_ask_user_returns_env_response(self):
         r = Role(name="Alice")
         env = FakeEnv()
         env.human_response = "blue"
-        r.set_env(env)
+        r.bind_human_interaction(env)
         assert asyncio.run(r.ask_user("favourite colour?")) == "blue"
         assert env.human_questions[0] == ("favourite colour?", "Alice")
 
@@ -1762,7 +1699,7 @@ class TestHumanChannel:
         r._set_active(True)
         env = FakeEnv()
         env.human_response = "please stop"
-        r.set_env(env)
+        r.bind_human_interaction(env)
         out = asyncio.run(r.ask_user("continue?"))
         assert "encountered a problem" in out
         assert r._is_active() is False
@@ -1773,12 +1710,12 @@ class TestHumanChannel:
 
     def test_reply_to_user_without_env(self):
         r = Role(name="X")
-        assert "Not in MoteEnv" in asyncio.run(r.reply_to_user("hi"))
+        assert "No human interaction" in asyncio.run(r.reply_to_user("hi"))
 
     def test_reply_to_user_delegates(self):
         r = Role(name="Alice")
         env = FakeEnv()
-        r.set_env(env)
+        r.bind_human_interaction(env)
         assert asyncio.run(r.reply_to_user("done")) == "delivered"
         assert env.human_replies[0] == ("done", "Alice")
 

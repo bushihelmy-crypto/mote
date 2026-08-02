@@ -1,6 +1,6 @@
 from pydantic import Field
 
-from mote.product.config.base import ConfigModel
+from mote.contracts.config.base import ConfigModel
 
 
 class MCPConfig(ConfigModel):

@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import inspect
 import json
+import uuid
 from string import Template
-from typing import ClassVar
+from typing import ClassVar, Protocol, runtime_checkable
 
 from pydantic import TypeAdapter
 
-from mote.contracts.agent import Lifecycle, SpawnPlan
+from mote.contracts.agent import Lifecycle, RunnableAgent, SpawnPlan
 from mote.contracts.conversation import UserMessage
+from mote.contracts.output import RunResult
 from mote.contracts.ports.agent.catalog import SpawnableAgentCatalog
 from mote.kernel.tools.docstrings import description_body
 from mote.product.toolsets.builtin.agent_prompts import AGENT_TASK_PROMPT
 from mote.runtime.agent.control import spawn_and_run
 from mote.runtime.telemetry.logging import logger
 from mote.runtime.tools.base_tool import BaseTool
+from mote.runtime.tools.execution_context import current_authorized_invocation
 
 # Complete model-facing message sentences, hoisted to module-top templates so the
 # wording lives in one place (fill via ``.format(...)`` at the return site).
@@ -24,6 +27,36 @@ _MSG_PROMPT_EMPTY = "Error: 'prompt' cannot be empty."
 _MSG_UNKNOWN_AGENT = "Error: unknown agent_type '{agent_type}'. Available: {available}"
 _MSG_SPAWN_FAILED = "Error: could not spawn agent '{agent_type}' (agent limit reached)."
 _MSG_NO_SUMMARY = "Agent finished without a final summary."
+
+
+class _CommandLowerer(Protocol):
+    def lower(self, text: str) -> str: ...
+
+
+@runtime_checkable
+class _SpawnMessageAgent(Protocol):
+    command_channel: _CommandLowerer
+
+
+class _SpawnRouterConfig(Protocol):
+    spawn_routing: bool
+
+
+class _SpawnConfig(Protocol):
+    router: _SpawnRouterConfig
+
+
+class _SpawnRouter(Protocol):
+    routing_enabled: bool
+
+    async def seed_session(self, session_id: str, prompt: str) -> None: ...
+
+
+@runtime_checkable
+class _SpawnRoutingAgent(Protocol):
+    session_id: str
+    config: _SpawnConfig
+    router: _SpawnRouter
 
 
 class Agent(BaseTool):
@@ -87,7 +120,7 @@ class Agent(BaseTool):
         # rolls its cost up to the parent. The handle always tears the child down
         # (its own terminal/kernel PTY, LSP servers, file-watch loop — all
         # session-scoped OS resources that leak if dropped without cleanup()).
-        def build_message(agent):
+        def build_message(agent: RunnableAgent[str]) -> UserMessage:
             task_brief = Template(AGENT_TASK_PROMPT).safe_substitute(
                 parent_name=self.session_id,
                 context=context or "(no additional context)",
@@ -97,9 +130,14 @@ class Agent(BaseTool):
             # child's own channel so it receives its protocol's surface syntax
             # (e.g. native agents never see <end></end>). A build-time assert in
             # the lowerer fails loudly on any unlowered symbol.
+            if not isinstance(agent, _SpawnMessageAgent):
+                raise TypeError("spawned Agent does not publish command lowering")
             return UserMessage(content=agent.command_channel.lower(task_brief))
 
+        invocation = current_authorized_invocation()
+        request_id = uuid.uuid4().hex if invocation is None else str(invocation.identity.invocation_id)
         spec = SpawnPlan(
+            request_id=request_id,
             definition=definition,
             nickname=agent_type,
             agent_role=agent_type,
@@ -107,11 +145,13 @@ class Agent(BaseTool):
             lifecycle=Lifecycle.EPHEMERAL,
         )
 
-        async def _seed(role):
+        async def _seed(role: RunnableAgent[str]) -> None:
             # Spawn-time seed floor: decide an initial tier from this first
             # prompt and record it as a raise-only floor for the child's step
             # routing. ``getattr`` guards keep this a safe no-op for rule-based
             # children (no ``seed_session``), independent of the config switch.
+            if not isinstance(role, _SpawnRoutingAgent):
+                raise TypeError("spawned Agent does not publish routing preparation")
             if not role.config.router.spawn_routing:
                 return
             # Seed is only ever *consumed* by a child that runs step routing.
@@ -129,7 +169,7 @@ class Agent(BaseTool):
             await role.router.seed_session(role.session_id, prompt)
 
         report = await spawn_and_run(spec, build_message, on_spawn=_seed)
-        if report is None:
+        if not isinstance(report, RunResult):
             return _MSG_SPAWN_FAILED.format(agent_type=agent_type)
         output = report.output
         if isinstance(output, str):

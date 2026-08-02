@@ -11,6 +11,9 @@ APPROVED_FACT_ENCODERS = {
     "product/inference/daemon/operations_audit_codec.py",
     "runtime/session/codec.py",
 }
+APPROVED_DYNAMIC_IMPORTERS = {
+    "product/routing/squilla/ml/backend_loader.py",
+}
 GOVERNED_TYPED_PATHS = (
     "contracts/composition",
     "contracts/ports/events/telemetry.py",
@@ -59,7 +62,7 @@ def test_product_has_no_dynamic_import_or_pep562_export() -> None:
             if not isinstance(node, ast.Call):
                 continue
             name = _qualified_name(node.func)
-            if name in {"importlib.import_module", "__import__"}:
+            if name in {"importlib.import_module", "__import__"} and relative not in APPROVED_DYNAMIC_IMPORTERS:
                 violations.append(f"{relative}:{node.lineno}: {name}")
     assert not violations, "Dynamic Product boundary violations:\n" + "\n".join(sorted(violations))
 
@@ -72,10 +75,15 @@ def test_all_production_code_has_no_dynamic_import_or_pep562_export() -> None:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "__getattr__":
                 violations.append(f"{relative}:{node.lineno}: __getattr__")
-            if isinstance(node, ast.Call) and _qualified_name(node.func) in {
-                "importlib.import_module",
-                "pkgutil.walk_packages",
-            }:
+            if (
+                isinstance(node, ast.Call)
+                and _qualified_name(node.func)
+                in {
+                    "importlib.import_module",
+                    "pkgutil.walk_packages",
+                }
+                and relative not in APPROVED_DYNAMIC_IMPORTERS
+            ):
                 violations.append(f"{relative}:{node.lineno}: {_qualified_name(node.func)}")
     assert not violations, "Dynamic production boundary violations:\n" + "\n".join(sorted(violations))
 

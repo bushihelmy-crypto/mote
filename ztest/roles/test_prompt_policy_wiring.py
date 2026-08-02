@@ -30,11 +30,11 @@ def test_prompt_policy_extension_factory_runs_once_per_role():
     )
     first = Role(
         name="first",
-        wiring=AgentWiring.for_context(Context(config=offline_config()), dependencies=dependencies),
+        wiring=AgentWiring.for_context(Context(), dependencies=dependencies),
     )
     second = Role(
         name="second",
-        wiring=AgentWiring.for_context(Context(config=offline_config()), dependencies=dependencies),
+        wiring=AgentWiring.for_context(Context(), dependencies=dependencies),
     )
 
     assert created == []

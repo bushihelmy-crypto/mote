@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from mote.contracts.config.model.routing import AgentRouterConfig, RouterConfig, SemanticRouteConfig
-from mote.contracts.model.failover import EndpointCapabilities, EndpointDescriptor
+from mote.contracts.model.failover import EndpointDescriptor, ResolvedEndpointCapabilities
 from mote.contracts.model.topology import SemanticRoute
 from mote.runtime.models.routing.catalog import build_route_catalog
 
@@ -10,23 +10,23 @@ class Gateway:
     def __init__(self) -> None:
         self.profile_requests: list[str] = []
 
-    def supports_route(self, route_id: str) -> bool:
-        return route_id in {"interactive.low", "interactive.strong", "summary"}
+    def supports_route(self, route_id: SemanticRoute) -> bool:
+        return route_id.name in {"interactive.low", "interactive.strong", "summary"}
 
-    def route_profile(self, route_id: str) -> EndpointDescriptor:
-        self.profile_requests.append(route_id)
+    def route_profile(self, route_id: SemanticRoute) -> EndpointDescriptor:
+        self.profile_requests.append(route_id.name)
         return EndpointDescriptor(
-            endpoint_id=f"{route_id}-endpoint",
+            endpoint_id=f"{route_id.name}-endpoint",
             transport="test",
             provider="test",
-            model=route_id,
+            model=route_id.name,
             base_url_identity="test://models",
-            capabilities=EndpointCapabilities(context_tokens=100_000),
+            capabilities=ResolvedEndpointCapabilities(context_tokens=100_000),
             credential_pool_id="test",
             lifecycle_revision="1",
         )
 
-    def route_profiles(self, route_id: str) -> tuple[EndpointDescriptor, ...]:
+    def route_profiles(self, route_id: SemanticRoute) -> tuple[EndpointDescriptor, ...]:
         return (self.route_profile(route_id),)
 
 

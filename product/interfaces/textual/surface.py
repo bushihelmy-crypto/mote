@@ -27,6 +27,7 @@ from typing import Any
 from textual.css.query import NoMatches
 from textual.widgets import Static
 
+from mote.contracts.activity import ActivityKind, ActivityNodeState, ActivityOutcome, ActivityTopology
 from mote.product.interfaces.textual.widgets import (
     ActivityWidget,
     ApprovalMarkerRow,
@@ -106,17 +107,17 @@ class TextualSurface(BaseSurface):
         self._app._close_block()
         widget = ToolCallWidget(ev, expanded=self._app._tools_expanded)
         self._app._mount(widget)
-        if widget.tool_use_id:
-            self._app._tool_widgets[widget.tool_use_id] = widget
+        if widget.invocation_id:
+            self._app._tool_widgets[widget.invocation_id] = widget
             # Keep a reference PAST completion so a structured FileDiffBlock
             # (Edit/Write) folds its diff into this row (see render_file_diff).
-            self._app._diff_targets[widget.tool_use_id] = widget
-            self._app._media_targets[widget.tool_use_id] = widget
+            self._app._diff_targets[widget.invocation_id] = widget
+            self._app._media_targets[widget.invocation_id] = widget
 
     def tool_completed(self, ev: Any, fold: FoldMode, truncation: Truncation) -> None:
         self._app._close_block()
-        tid = getattr(ev, "tool_use_id", None)
-        widget = self._app._tool_widgets.pop(tid, None) if tid else None
+        tid = str(ev.identity.invocation_id)
+        widget = self._app._tool_widgets.pop(tid, None)
         if widget is not None:
             # The completion folds into the widget; its body + full output live
             # behind ctrl+o now (every standalone tool folds), so a separate
@@ -135,14 +136,13 @@ class TextualSurface(BaseSurface):
 
     def add_to_group(self, ev: Any) -> None:
         self._app._tool_group.add_started(ev)
-        tid = getattr(ev, "tool_use_id", None)
-        if tid:
-            self._app._grouped_tool_ids[tid] = self._app._tool_group
-            self._app._media_targets[tid] = self._app._tool_group
+        tid = str(ev.identity.invocation_id)
+        self._app._grouped_tool_ids[tid] = self._app._tool_group
+        self._app._media_targets[tid] = self._app._tool_group
 
     def complete_in_group(self, ev: Any) -> None:
-        tid = getattr(ev, "tool_use_id", None)
-        group = self._app._grouped_tool_ids.pop(tid, None) if tid else None
+        tid = str(ev.identity.invocation_id)
+        group = self._app._grouped_tool_ids.pop(tid, None)
         if group is not None:
             group.complete(ev)
 
@@ -152,7 +152,13 @@ class TextualSurface(BaseSurface):
         self._app._tool_group = None
 
     # -- nested orchestration (run_graph / sub-agent / bg task) --
-    def open_activity(self, scope: Any, activity_kind: str, label: str, topology: Any) -> None:
+    def open_activity(
+        self,
+        scope: Any,
+        activity_kind: ActivityKind,
+        label: str,
+        topology: ActivityTopology | None,
+    ) -> None:
         # One live widget per scope, keyed so scoped pings/child tool calls route
         # to the right subtree even when several activities nest or run in parallel.
         self._app._close_block()
@@ -175,7 +181,13 @@ class TextualSurface(BaseSurface):
         if widget is not None:
             widget.complete_child(ev)
 
-    def close_activity(self, scope: Any, outcome: str, node_states: Any, summary: str) -> None:
+    def close_activity(
+        self,
+        scope: Any,
+        outcome: ActivityOutcome,
+        node_states: tuple[ActivityNodeState, ...],
+        summary: str,
+    ) -> None:
         # Freeze the widget to the self-sufficient outcome tree, then drop the
         # live handle (a replayed transcript re-renders straight off node_states).
         widget = self._app._activity_widgets.pop(tuple(scope), None)
@@ -187,8 +199,8 @@ class TextualSurface(BaseSurface):
         self._app._close_block()
         media = MediaRow(ev)
         self._app._mount(media)
-        tid = getattr(ev, "tool_use_id", None)
-        owner = self._app._media_targets.get(tid) if tid else None
+        tid = str(ev.identity.invocation_id)
+        owner = self._app._media_targets.get(tid)
         if owner is not None:
             self._app._linked_media.setdefault(owner, []).append(media)
             self._app._media_owners[media] = owner
@@ -204,8 +216,8 @@ class TextualSurface(BaseSurface):
         # Fold the diff INTO its owning tool row (Edit/Write) so the invocation +
         # change are one select/fold unit; fall back to a standalone FileDiffRow
         # when no tool widget owns it (e.g. an unmatched/idless change).
-        tid = getattr(ev, "tool_use_id", None)
-        widget = self._app._diff_targets.get(tid) if tid else None
+        tid = str(ev.identity.invocation_id)
+        widget = self._app._diff_targets.get(tid)
         if widget is not None:
             widget.set_file_diff(ev)
             return

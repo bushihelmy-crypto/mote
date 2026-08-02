@@ -3,12 +3,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List
 
+import httpx  # type: ignore[reportMissingImports]  # runtime dependency has no Pyright-visible package metadata
 from fastmcp import Client  # type: ignore[reportMissingImports]
 
+from mote.contracts.tool.errors import ToolNotFoundError
 from mote.contracts.tool.transport import MCPTransportType
 from mote.runtime.config.mcp import MCPServerConfig
-from mote.runtime.errors import ToolNotFoundError
 from mote.runtime.telemetry.logging import logger
+from mote.runtime.tools.definition_compiler import compile_tool_source_identity
 from mote.runtime.tools.mcp.oauth import build_mcp_auth
 from mote.runtime.tools.mcp.types import DiscoveredMcpTool
 
@@ -47,6 +49,7 @@ class UniversalMCP:
         self.state: MCPInitState = MCPInitState.UNCONFIGURED
         self._servers = list(servers or [])
         self._oauth_root = oauth_root
+        self._auth_by_server: dict[str, httpx.Auth | None] = {}
 
     async def initialize(
         self,
@@ -64,6 +67,7 @@ class UniversalMCP:
         self._tool_registry.clear()
         self.initialized_servers.clear()
         self.initialization_errors.clear()
+        self._auth_by_server.clear()
 
         if servers is None:
             # MCP servers are defined in their own ``mcp_config.json`` (the
@@ -72,13 +76,21 @@ class UniversalMCP:
             servers = list(self._servers)
             if server_names is not None:
                 servers = [server for server in servers if server.name in server_names]
-            for server in servers:
-                if server.oauth is not None:
-                    server.oauth.storage_root = self._oauth_root
-
         if not servers:
             self.state = MCPInitState.UNCONFIGURED
             return
+
+        normalized: list[MCPServerConfig] = []
+        for server in servers:
+            if server.oauth is not None:
+                oauth = server.oauth.model_copy(update={"storage_root": self._oauth_root})
+                server = server.model_copy(update={"oauth": oauth})
+            normalized.append(server)
+        # Authentication is candidate compilation, not a per-server discovery
+        # fallback. Any declared-auth failure aborts before the first client or
+        # network request is constructed.
+        self._auth_by_server = {server.name: build_mcp_auth(server) for server in normalized}
+        servers = normalized
 
         for server_config in servers:
             server_name = server_config.name
@@ -98,6 +110,17 @@ class UniversalMCP:
                                 name=namespaced_name,
                                 description=tool.description or "",
                                 input_schema=tool.inputSchema or {"type": "object", "properties": {}},
+                                source_identity=(
+                                    compile_tool_source_identity(
+                                        "mcp",
+                                        {
+                                            "server": server_name,
+                                            "transport": server_config.type.value,
+                                            "endpoint": identifier,
+                                            "tool": tool.name,
+                                        },
+                                    )
+                                ),
                                 aliases=tuple(aliases),
                             ),
                             server_config=server_config,
@@ -115,9 +138,7 @@ class UniversalMCP:
         self.state = (
             MCPInitState.READY
             if self._tool_registry
-            else MCPInitState.FAILED
-            if self.initialization_errors
-            else MCPInitState.UNCONFIGURED
+            else (MCPInitState.FAILED if self.initialization_errors else MCPInitState.UNCONFIGURED)
         )
 
     async def call_tool(self, tool_name: str, parameters: Dict[str, Any]) -> str:
@@ -192,7 +213,7 @@ class UniversalMCP:
             # A remote server may require an OAuth bearer; STDIO (local process)
             # has no HTTP auth surface, so auth is SSE-only. build_mcp_auth
             # returns None when no oauth is configured (unauthenticated client).
-            return Client(server_config.url, auth=build_mcp_auth(server_config))
+            return Client(server_config.url, auth=self._auth_by_server[server_config.name])
         return Client(
             {
                 "mcpServers": {

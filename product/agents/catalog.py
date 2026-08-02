@@ -1,77 +1,82 @@
-"""Immutable runtime view of spawnable Agent definitions."""
+"""Canonical compiler for immutable spawnable-Agent catalogs."""
 
 from __future__ import annotations
 
 import hashlib
-import inspect
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from types import MappingProxyType
+from typing import ClassVar, Generic, Protocol, TypeVar
 
-from mote.contracts.agent import AgentConstructionRequest, BaseAgent, RunnableAgent, SpawnableAgentDefinition
+from mote.contracts.agent import AgentConstructionRequest, RunnableAgent, SpawnableAgentDefinition
 from mote.contracts.ports.agent.factory import AgentFactory
-from mote.runtime.agent.base import BaseRole
+from mote.runtime.agent.role_state import RoleState
+from mote.runtime.agent.wiring import AgentWiring
 
 OutputT = TypeVar("OutputT")
+
+_CATALOG_SCHEMA = "mote.agent-catalog/v1"
+
+
+class SpawnableTextAgentClass(Protocol):
+    __name__: str
+    agent_name: ClassVar[str]
+    aliases: ClassVar[list[str]]
+    description: ClassVar[str]
+    definition_version: ClassVar[str]
+    definition_id: ClassVar[str]
+    definition_source_path: ClassVar[str]
+    definition_source_digest: ClassVar[str]
+
+    def __call__(self, *, state: RoleState, wiring: AgentWiring[None, str]) -> RunnableAgent[str]: ...
+
+    def get_schema(self) -> dict: ...
 
 
 @dataclass(frozen=True, slots=True)
 class _ClassBoundBuilder:
-    factory: AgentFactory
-    agent_type: type[BaseAgent]
+    factory: AgentFactory[SpawnableTextAgentClass]
+    agent_type: SpawnableTextAgentClass
 
     def build(self, request: AgentConstructionRequest) -> RunnableAgent[str]:
         return self.factory.child_builder(self.agent_type).build(request)
 
 
-@dataclass(frozen=True, slots=True)
 class AgentCatalog(Generic[OutputT]):
-    """Immutable, versioned snapshot consumed by the spawn control plane."""
+    """Immutable snapshot produced exclusively by :func:`compile_agent_catalog`."""
 
-    version: str
-    _definitions: tuple[SpawnableAgentDefinition[OutputT], ...]
+    __slots__ = ("_definitions", "_namespace", "version")
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        raise TypeError("AgentCatalog snapshots must be created by compile_agent_catalog()")
 
     @classmethod
-    def from_types(cls, types: Iterable[type[BaseAgent]], factory: AgentFactory) -> "AgentCatalog[str]":
-        unique: dict[str, type[BaseAgent]] = {}
-        aliases: dict[str, str] = {}
-        for agent_type in types:
-            if not issubclass(agent_type, BaseRole):
-                raise TypeError(f"agent catalog entry '{agent_type.__name__}' must subclass BaseRole")
-            name = getattr(agent_type, "agent_name", "") or agent_type.__name__
-            existing = unique.get(name)
-            if existing is not None and existing is not agent_type:
-                raise ValueError(f"agent name '{name}' is declared more than once")
-            unique[name] = agent_type
-            for alias in getattr(agent_type, "aliases", ()):
-                owner = aliases.get(alias)
-                if owner is not None and owner != name:
-                    raise ValueError(f"agent alias '{alias}' belongs to both '{owner}' and '{name}'")
-                aliases[alias] = name
-        ordered = tuple(unique[name] for name in sorted(unique))
-        identity = "\n".join(_agent_type_identity(agent_type) for agent_type in ordered)
-        version = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
-        return AgentCatalog(
-            version=version,
-            _definitions=tuple(
-                SpawnableAgentDefinition(
-                    name=agent_type.agent_name,
-                    aliases=tuple(agent_type.aliases),
-                    description=(agent_type.description.strip() or (agent_type.__doc__ or "").strip()),
-                    version=agent_type.definition_version,
-                    builder=_ClassBoundBuilder(factory, agent_type),
-                )
-                for agent_type in ordered
-            ),
-        )
+    def _compiled(
+        cls,
+        *,
+        version: str,
+        definitions: tuple[SpawnableAgentDefinition[OutputT], ...],
+        namespace: dict[str, SpawnableAgentDefinition[OutputT]],
+    ) -> "AgentCatalog[OutputT]":
+        catalog = object.__new__(cls)
+        catalog.version = version
+        catalog._definitions = definitions
+        catalog._namespace = MappingProxyType(namespace)
+        return catalog
+
+    @classmethod
+    def from_types(
+        cls,
+        types: Iterable[SpawnableTextAgentClass],
+        factory: AgentFactory[SpawnableTextAgentClass],
+    ) -> "AgentCatalog[str]":
+        return compile_agent_catalog(_definition_from_type(agent_type, factory) for agent_type in types)
 
     def get(self, name: str) -> SpawnableAgentDefinition[OutputT] | None:
-        for definition in self._definitions:
-            if name == definition.name or name in definition.aliases:
-                return definition
-        return None
+        return self._namespace.get(name)
 
-    def agent_type(self, name: str) -> type[BaseAgent] | None:
+    def agent_type(self, name: str) -> SpawnableTextAgentClass | None:
         """Product-only root-construction metadata; never exposed downstream."""
 
         definition = self.get(name)
@@ -82,7 +87,7 @@ class AgentCatalog(Generic[OutputT]):
     def all_agents(self) -> dict[str, SpawnableAgentDefinition[OutputT]]:
         return {definition.name: definition for definition in self._definitions}
 
-    def declared_types(self) -> tuple[type[BaseAgent], ...]:
+    def declared_types(self) -> tuple[SpawnableTextAgentClass, ...]:
         """Return Product-private declarations for immutable recomposition."""
 
         return tuple(
@@ -93,44 +98,80 @@ class AgentCatalog(Generic[OutputT]):
 
     def with_types(
         self: "AgentCatalog[str]",
-        types: Iterable[type[BaseAgent]],
-        factory: AgentFactory,
+        types: Iterable[SpawnableTextAgentClass],
+        factory: AgentFactory[SpawnableTextAgentClass],
     ) -> "AgentCatalog[str]":
-        """Return a new snapshot containing existing and newly declared agents."""
+        """Compile a new snapshot from this snapshot and additional declarations."""
 
-        additions = AgentCatalog.from_types(types, factory)
-        definitions: list[SpawnableAgentDefinition[str]] = [*self._definitions]
-        owners = {key: definition.name for definition in definitions for key in (definition.name, *definition.aliases)}
-        for definition in additions._definitions:
-            for key in (definition.name, *definition.aliases):
-                owner = owners.get(key)
-                if owner is not None:
-                    raise ValueError(f"agent name or alias '{key}' conflicts with '{owner}'")
-            definitions.append(definition)
-            for key in (definition.name, *definition.aliases):
-                owners[key] = definition.name
-        identity = "\n".join(
-            f"{definition.name}:{definition.version}" for definition in sorted(definitions, key=lambda item: item.name)
-        )
-        return AgentCatalog(
-            version=hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16],
-            _definitions=tuple(definitions),
-        )
+        additions = tuple(_definition_from_type(agent_type, factory) for agent_type in types)
+        return compile_agent_catalog((*self._definitions, *additions))
 
 
-def _agent_type_identity(agent_type: type[BaseAgent]) -> str:
-    try:
-        source = inspect.getsource(agent_type)
-    except (OSError, TypeError):
-        source = ""
-    source_digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
-    return ":".join(
-        (
-            getattr(agent_type, "agent_name", "") or agent_type.__name__,
-            str(getattr(agent_type, "definition_version", "1")),
-            source_digest,
+def compile_agent_catalog(
+    definitions: Iterable[SpawnableAgentDefinition[OutputT]],
+) -> AgentCatalog[OutputT]:
+    """Validate, canonically order, and content-address a complete catalog."""
+
+    ordered = tuple(sorted(definitions, key=_definition_sort_key))
+    namespace: dict[str, SpawnableAgentDefinition[OutputT]] = {}
+    canonical_payload: list[dict[str, object]] = []
+    for definition in ordered:
+        aliases = tuple(sorted(definition.aliases))
+        keys = (definition.name, *aliases)
+        if not definition.name:
+            raise ValueError("agent canonical name must not be empty")
+        if not definition.version:
+            raise ValueError(f"agent definition '{definition.name}' must have an identity")
+        if any(not key for key in keys):
+            raise ValueError(f"agent definition '{definition.name}' contains an empty alias")
+        if len(set(keys)) != len(keys):
+            raise ValueError(f"agent definition '{definition.name}' repeats a name or alias")
+        for key in keys:
+            owner = namespace.get(key)
+            if owner is not None:
+                raise ValueError(
+                    f"agent name or alias '{key}' belongs to both " f"'{owner.name}' and '{definition.name}'"
+                )
+            namespace[key] = definition
+        canonical_payload.append(
+            {
+                "aliases": aliases,
+                "description": definition.description,
+                "definition_id": definition.version,
+                "name": definition.name,
+            }
         )
+    encoded = json.dumps(
+        {"definitions": canonical_payload, "schema": _CATALOG_SCHEMA},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    version = f"sha256-{hashlib.sha256(encoded).hexdigest()}"
+    return AgentCatalog._compiled(version=version, definitions=ordered, namespace=namespace)
+
+
+def _definition_from_type(
+    agent_type: SpawnableTextAgentClass,
+    factory: AgentFactory[SpawnableTextAgentClass],
+) -> SpawnableAgentDefinition[str]:
+    name = agent_type.agent_name or agent_type.__name__
+    return SpawnableAgentDefinition(
+        name=name,
+        aliases=tuple(agent_type.aliases),
+        description=(agent_type.description.strip() or (agent_type.__doc__ or "").strip()),
+        version=agent_type.definition_version,
+        builder=_ClassBoundBuilder(factory, agent_type),
     )
 
 
-__all__ = ["AgentCatalog"]
+def _definition_sort_key(definition: SpawnableAgentDefinition[OutputT]) -> tuple[str, tuple[str, ...], str, str]:
+    return (
+        definition.name,
+        tuple(sorted(definition.aliases)),
+        definition.description,
+        definition.version,
+    )
+
+
+__all__ = ["AgentCatalog", "compile_agent_catalog"]

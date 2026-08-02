@@ -20,9 +20,10 @@ from mote.contracts.runtime import RuntimeAccessMode, RuntimeProjectionIntent
 from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
 from mote.contracts.surface import CanvasDocument, CanvasOperation
 from mote.contracts.tool.effects import ToolEffect
+from mote.contracts.tool.errors import ToolError
+from mote.contracts.tool.result import json_tool_payload
 from mote.product.toolsets.builtin._paths import resolve_path
 from mote.product.toolsets.builtin.runtime_action import is_handoff_action, run_handoff_action
-from mote.runtime.errors import ToolError
 from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
 from mote.runtime.projections import artifact_representation_set_digest
 from mote.runtime.tools.base_tool import BaseTool
@@ -139,7 +140,7 @@ class Canvas(BaseTool):
                     f"{document.model_dump_json()}"
                 ),
                 success=handoff_result.success,
-                data=document,
+                payload=json_tool_payload(document.model_dump(mode="json")),
             )
         if action:
             raise ToolError(_MSG_UNKNOWN_ACTION.format(action=action))
@@ -157,7 +158,7 @@ class Canvas(BaseTool):
 
         try:
             typed_operations = [
-                operation if isinstance(operation, CanvasOperation) else CanvasOperation.model_validate(operation)
+                (operation if isinstance(operation, CanvasOperation) else CanvasOperation.model_validate(operation))
                 for operation in operations or []
             ]
         except Exception as exc:  # noqa: BLE001 — convert boundary validation to a tool error
@@ -287,7 +288,7 @@ class Canvas(BaseTool):
             output += " Exported: " + ", ".join(local_paths.values()) + "."
         return ToolResult(
             output=output,
-            data=document,
+            payload=json_tool_payload(document.model_dump(mode="json")),
             media=(
                 [
                     ToolMedia(

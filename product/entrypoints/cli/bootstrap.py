@@ -12,18 +12,18 @@ swap only the consumer set + port; the spine is untouched (§4 template).
 
 from __future__ import annotations
 
-import asyncio
 import os
 from pathlib import Path
 from typing import Any, List, Optional
 
 from mote.orchestration.automation.cron.service import CronService
-from mote.product.automation import AgentTriggerAdapter
+from mote.product.automation import AgentTriggerAdapter, system_timezone_name
 from mote.product.composition.application import Application
-from mote.product.composition.container import ProductContainer
-from mote.product.composition.model_reload import ApplicationReloadCoordinator
-from mote.product.composition.model_startup import install_initial_application_composition
-from mote.product.config.bootstrap import ensure_mote_home
+from mote.product.composition.bootstrap import (
+    ApplicationBuildRequest,
+    activate_application,
+    prepare_application_sources,
+)
 from mote.product.entrypoints.cli import backend
 from mote.product.i18n import negotiate_and_set
 from mote.product.interaction.commands.catalog import default_registry as default_command_registry
@@ -34,47 +34,13 @@ from mote.product.interfaces.terminal.port import TerminalPort
 from mote.product.paths import default_runtime_paths
 from mote.product.presentation.projection.base import BaseProjector
 from mote.product.presentation.projection.projector import ViewProjector
-from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleResource
+from mote.runtime.clock import SystemClock
 from mote.runtime.engine import EngineAgentRequest
-from mote.runtime.models.failover import LocalModelCallJournal, model_call_journal_root
-from mote.runtime.services import EngineServices
 
 _CONSUMER_BUILDERS = {
     "structured": build_structured_consumer,
     "terminal": build_terminal_consumer,
 }
-
-
-async def _install_model_composition(config, container, context, paths):
-    composition = await install_initial_application_composition(
-        config,
-        providers=container.providers,
-        oauth_root=paths.oauth_root,
-        cost_tracker=context.cost_manager,
-        admission_controller=context.model_operator,
-        model_call_journal=LocalModelCallJournal(model_call_journal_root(paths.workspace_root)),
-    )
-    try:
-        application_lease = await composition.acquire()
-        try:
-            runtime_lease = await application_lease.acquire_runtime()
-            try:
-                backend.configure_service_gateway(
-                    context,
-                    config,
-                    model_profile_gateway=runtime_lease.gateway,
-                    media_providers=container.media_providers,
-                    search_backends=container.search_backends,
-                    paths=paths,
-                )
-            finally:
-                await runtime_lease.aclose()
-        finally:
-            await application_lease.aclose()
-    except BaseException:
-        await composition.aclose()
-        raise
-    return composition
 
 
 def _build_consumers(config: Any, active: list[str]) -> list[Any]:
@@ -90,7 +56,7 @@ def _build_consumers(config: Any, active: list[str]) -> list[Any]:
     return consumers
 
 
-def build_engine(
+async def build_engine(
     *,
     model: Optional[str] = None,
     tools: Optional[List[str]] = None,
@@ -107,10 +73,7 @@ def build_engine(
     # First-run scaffolding: seed ~/.mote with editable config templates before
     # anything reads it. Idempotent + best-effort — never overwrites, never raises.
     paths = default_runtime_paths()
-    ensure_mote_home(
-        paths.user_config_root,
-        package_dir=paths.package_data_root,
-    )
+    prepare_application_sources(paths)
 
     if config is None:
         config = backend.load_config(model, paths=paths)
@@ -122,58 +85,18 @@ def build_engine(
     # Default to the shell's launch directory so every Product catalog is
     # snapshotted against the same workspace the Agent will execute in.
     resolved_cwd = cwd or os.getcwd()
-    container = ProductContainer.standard(config, cwd=Path(resolved_cwd), paths=paths)
-    context = backend.build_context(
-        config,
-        providers=container.providers,
-        media_providers=container.media_providers,
-        search_backends=container.search_backends,
-        paths=paths,
-    )
-    composition = asyncio.run(_install_model_composition(config, container, context, paths))
-    services = EngineServices(
-        context=context,
-        resources=(
-            *container.lifecycle_resources(),
-            LifecycleResource(
-                "application-composition",
-                LifecyclePhase.CLOSE_RESOURCES,
-                composition.aclose,
-            ),
-        ),
-        application_composition=composition,
-        application_reloader=ApplicationReloadCoordinator(
-            composition=composition,
-            load_config=lambda: backend.load_config(model, paths=paths),
-            providers=container.providers,
-            oauth_root=paths.oauth_root,
-            cost_tracker=context.cost_manager,
-            admission_controller=context.model_operator,
-            model_call_journal=LocalModelCallJournal(model_call_journal_root(paths.workspace_root)),
-        ),
-    )
-
-    def role_factory(request):
-        """Build a role sharing this app's config + context (initial / new / resume / typed)."""
-        return backend.build_role(
-            services=services,
-            agent_factory=container.agent_factory,
-            agent_catalog=container.agents,
-            name=request.name,
-            tools=tools,
-            cwd=resolved_cwd,
-            agent_type=request.agent_type,
-            session_id=request.session_id,
+    return await activate_application(
+        ApplicationBuildRequest(
+            config=config,
+            paths=paths,
+            cwd=Path(resolved_cwd),
+            tools=tuple(tools) if tools else None,
+            reload_config=lambda: backend.load_config(model, paths=paths),
         )
-
-    return Application(
-        container=container,
-        services=services,
-        agent_factory=role_factory,
     )
 
 
-def build_app(
+async def build_app(
     *,
     model: Optional[str] = None,
     tools: Optional[List[str]] = None,
@@ -197,7 +120,7 @@ def build_app(
     # Shared engine construction (config / context / role_factory) — the exact
     # same bundle a multi-session server builds from, so the two hosts can never
     # drift. All side effects (scaffolding, locale) run once inside build_engine.
-    eng = build_engine(model=model, tools=tools, cwd=cwd, name=name, config=config)
+    eng = await build_engine(model=model, tools=tools, cwd=cwd, name=name, config=config)
     config = eng.config
     paths = eng.container.paths
     role_factory = eng.agent
@@ -218,6 +141,8 @@ def build_app(
         AgentTriggerAdapter(control, default_target=session_id),
         session_id=session_id,
         base_dir=str(paths.workspace_root / ".agent_schedules"),
+        default_timezone_name=system_timezone_name(),
+        clock_source=SystemClock(),
     )
 
     return SessionDriver(
@@ -235,10 +160,4 @@ def build_app(
     )
 
 
-def run_app(**kwargs) -> None:
-    """Build the app and run it to completion (blocking)."""
-    driver = build_app(**kwargs)
-    asyncio.run(driver.run())
-
-
-__all__ = ["build_app", "run_app"]
+__all__ = ["build_app", "build_engine"]

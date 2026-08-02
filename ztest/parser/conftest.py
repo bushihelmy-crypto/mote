@@ -17,6 +17,7 @@ collaborators, all of which are duck-typed here so the tests stay offline:
 
 ``executed_command`` builds the per-command dict ``record_turn`` consumes.
 """
+
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -25,6 +26,7 @@ import pytest
 
 from mote.contracts.conversation import Message
 from mote.contracts.model.inference import InferenceResult
+from mote.contracts.model.invocation import CanonicalToolCall
 from mote.kernel.commands.contracts import ExecutedCommand
 
 
@@ -35,7 +37,7 @@ class FakeThinkEngine:
         self,
         *,
         content: str = "",
-        tool_calls: Optional[list[dict]] = None,
+        tool_calls: Optional[list[CanonicalToolCall]] = None,
         done: bool = True,
     ):
         self.result = InferenceResult(content=content, tool_calls=tool_calls)

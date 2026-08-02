@@ -37,6 +37,7 @@ import os
 from types import SimpleNamespace
 from typing import Any, List, Optional, Tuple
 
+from mote.contracts.activity import ActivityKind, ActivityNodeState, ActivityOutcome, ActivityTopology
 from mote.product.i18n import keys as K
 from mote.product.i18n import t
 from mote.product.presentation.rich_rendering.builders import CONTENT_INDENT as _CONTENT_INDENT
@@ -219,7 +220,13 @@ class TerminalSurface(BaseSurface):
     # ------------------------------------------------------------------
     # nested activity (a run_graph orchestration; a sub-agent / bg task)
     # ------------------------------------------------------------------
-    def open_activity(self, scope: Any, activity_kind: str, label: str, topology: Any) -> None:
+    def open_activity(
+        self,
+        scope: Any,
+        activity_kind: ActivityKind,
+        label: str,
+        topology: ActivityTopology | None,
+    ) -> None:
         # Print the declared topology once as a permanent block, then remember this
         # scope as the current tail so its live progress can animate below it.
         self._end_stream()
@@ -254,7 +261,13 @@ class TerminalSurface(BaseSurface):
             getattr(ev, "headline", "") or "",
         )
 
-    def close_activity(self, scope: Any, outcome: str, node_states: Any, summary: str) -> None:
+    def close_activity(
+        self,
+        scope: Any,
+        outcome: ActivityOutcome,
+        node_states: tuple[ActivityNodeState, ...],
+        summary: str,
+    ) -> None:
         # Wipe the transient progress line, then print the self-sufficient outcome
         # tree as a permanent block.
         self._clear_activity_live()

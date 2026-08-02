@@ -7,6 +7,7 @@ Covers: non-repo / empty cwd -> None; branch read filesystem-first from
 list; the short-TTL cache; and that any failure degrades to None rather than
 raising. Uses a real throwaway git repo in tmp_path.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -191,11 +192,11 @@ async def test_collect_never_raises_on_git_failure(tmp_path, monkeypatch):
     async def _boom(*args, **kwargs):
         raise RuntimeError("git exploded")
 
-    # The underlying aexecute blowing up is exactly what _git is designed to
+    # The fixed argv runner blowing up is exactly what _git is designed to
     # swallow (best-effort on the prompt-build path). collect must degrade to
     # zero counts / no commits rather than raise; branch is still read
     # filesystem-first from HEAD (which exists once initialised).
-    monkeypatch.setattr(collector, "aexecute", _boom)
+    monkeypatch.setattr(collector, "run_fixed_argv", _boom)
     state = await collect_git_state(repo)
     assert state is not None
     assert state.staged == 0 and state.unstaged == 0 and state.untracked == 0

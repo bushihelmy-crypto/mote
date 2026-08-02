@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -52,6 +53,7 @@ class InterAgentCommunication(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    communication_id: str = Field(default_factory=lambda: uuid4().hex, min_length=1)
     author: AgentPath
     recipient: AgentPath
     attachments: list[object] = Field(default_factory=list)
@@ -87,7 +89,7 @@ class InterAgentCommunication(BaseModel):
 
     def to_message(self) -> UserMessage:
         """Materialize this communication as a ``UserMessage`` for delivery."""
-        msg = UserMessage(content=self.content, sent_from=self.author.as_str())
+        msg = UserMessage(id=self.communication_id, content=self.content, sent_from=self.author.as_str())
         msg.add_metadata(MAILBOX_AUTHOR_PATH, self.author.as_str())
         msg.add_metadata(MAILBOX_RECIPIENT_PATH, self.recipient.as_str())
         msg.add_metadata(MAILBOX_KIND, self.kind.value)
@@ -99,9 +101,11 @@ class InterAgentCommunication(BaseModel):
 class _MailboxItem:
     """An enqueued item: the message plus its trigger-turn flag."""
 
-    __slots__ = ("message", "trigger_turn")
+    __slots__ = ("sequence", "delivery_id", "message", "trigger_turn")
 
-    def __init__(self, message: Message, trigger_turn: bool):
+    def __init__(self, sequence: int, delivery_id: str, message: Message, trigger_turn: bool):
+        self.sequence = sequence
+        self.delivery_id = delivery_id
         self.message = message
         self.trigger_turn = trigger_turn
 
@@ -115,27 +119,41 @@ class Mailbox:
     sets ``_data_event`` but never the wake event.
     """
 
-    def __init__(self):
+    def __init__(self, owner_agent_id: str):
+        if type(owner_agent_id) is not str or not owner_agent_id:
+            raise ValueError("mailbox owner_agent_id must be a non-empty string")
+        self.owner_agent_id = owner_agent_id
         self._items: list[_MailboxItem] = []
+        self._next_sequence = 1
         self._data_event = asyncio.Event()
+
+    def _append(self, message: Message, trigger_turn: bool, *, delivery_id: str | None = None) -> None:
+        delivery_id = delivery_id or str(message.id)
+        if not delivery_id:
+            raise ValueError("mailbox message delivery identity is required")
+        self._items.append(_MailboxItem(self._next_sequence, delivery_id, message, trigger_turn))
+        self._next_sequence += 1
+        self._data_event.set()
 
     # ------------------------------------------------------------------
     # Enqueue
     # ------------------------------------------------------------------
-    def enqueue(self, message: Message, *, mode: DeliveryMode = DeliveryMode.TRIGGER_TURN) -> None:
+    def enqueue(
+        self, message: Message, *, mode: DeliveryMode = DeliveryMode.TRIGGER_TURN, delivery_id: str | None = None
+    ) -> None:
         """Enqueue a raw message with the given delivery mode."""
         publication_id = message.metadata.get("output_publication_id")
         if publication_id and any(
             item.message.metadata.get("output_publication_id") == publication_id for item in self._items
         ):
             return
-        self._items.append(_MailboxItem(message, mode is DeliveryMode.TRIGGER_TURN))
-        self._data_event.set()
+        if delivery_id is not None and any(item.delivery_id == delivery_id for item in self._items):
+            return
+        self._append(message, mode is DeliveryMode.TRIGGER_TURN, delivery_id=delivery_id)
 
     def enqueue_communication(self, communication: InterAgentCommunication) -> None:
         """Enqueue an :class:`InterAgentCommunication` (trigger flag from the comm)."""
-        self._items.append(_MailboxItem(communication.to_message(), communication.trigger_turn))
-        self._data_event.set()
+        self._append(communication.to_message(), communication.trigger_turn)
 
     # ------------------------------------------------------------------
     # Drain (turn boundary only)
@@ -150,6 +168,25 @@ class Mailbox:
         self._items.clear()
         self._data_event.clear()
         return drained
+
+    def drain_for_processing(self) -> tuple[List[Message], tuple[str, ...]]:
+        messages = [item.message for item in self._items]
+        delivery_ids = tuple(item.delivery_id for item in self._items)
+        self._items.clear()
+        self._data_event.clear()
+        return messages, delivery_ids
+
+    def restore_processing(self, messages: List[Message], delivery_ids: tuple[str, ...]) -> None:
+        """Restore an unaccepted turn batch without losing its wake authority."""
+        if len(messages) != len(delivery_ids) or not messages:
+            raise ValueError("mailbox processing batch is invalid")
+        restored = [
+            _MailboxItem(index, delivery_id, message, index == len(messages))
+            for index, (message, delivery_id) in enumerate(zip(messages, delivery_ids, strict=True), start=1)
+        ]
+        self._items = [*restored, *self._items]
+        self._next_sequence = max(self._next_sequence, len(restored) + 1)
+        self._data_event.set()
 
     # ------------------------------------------------------------------
     # Introspection
@@ -167,19 +204,79 @@ class Mailbox:
     # ------------------------------------------------------------------
     # Persistence helpers (used by ResidencyStore)
     # ------------------------------------------------------------------
-    def dump(self) -> list[dict]:
-        """Serialize pending items to a plain list of ``{message, trigger_turn}``."""
-        return [{"message": item.message.dump(), "trigger_turn": item.trigger_turn} for item in self._items]
+    def dump(self) -> dict[str, Any]:
+        """Serialize pending items to the canonical Mailbox v1 envelope."""
+        return {
+            "schema": "mote.agent-mailbox/v1",
+            "schema_version": 1,
+            "owner_agent_id": self.owner_agent_id,
+            "next_sequence": self._next_sequence,
+            "items": [
+                {
+                    "sequence": item.sequence,
+                    "delivery_id": item.delivery_id,
+                    "message": item.message.dump(),
+                    "trigger_turn": item.trigger_turn,
+                }
+                for item in self._items
+            ],
+        }
 
     @staticmethod
-    def load(data: Optional[list[dict]]) -> "Mailbox":
-        """Rebuild a mailbox from :meth:`dump` output."""
-        mailbox = Mailbox()
-        for entry in data or []:
+    def load(data: object, *, expected_owner_agent_id: str) -> "Mailbox":
+        """Strictly rebuild a mailbox from the canonical v1 envelope."""
+        if type(data) is not dict or set(data) != {
+            "schema",
+            "schema_version",
+            "owner_agent_id",
+            "next_sequence",
+            "items",
+        }:
+            raise ValueError("mailbox envelope fields are not canonical")
+        assert isinstance(data, dict)
+        if data["schema"] != "mote.agent-mailbox/v1" or type(data["schema_version"]) is not int:
+            raise ValueError("mailbox schema is unsupported")
+        if data["schema_version"] != 1:
+            raise ValueError("mailbox schema version is unsupported")
+        owner = data["owner_agent_id"]
+        if type(owner) is not str or not owner or owner != expected_owner_agent_id:
+            raise ValueError("mailbox owner identity mismatch")
+        next_sequence = data["next_sequence"]
+        if type(next_sequence) is not int or next_sequence < 1:
+            raise ValueError("mailbox next_sequence is invalid")
+        items = data["items"]
+        if type(items) is not list:
+            raise ValueError("mailbox items must be a list")
+        mailbox = Mailbox(owner)
+        seen_sequences: set[int] = set()
+        seen_deliveries: set[str] = set()
+        previous_sequence = 0
+        for entry in items:
+            if type(entry) is not dict or set(entry) != {
+                "sequence",
+                "delivery_id",
+                "message",
+                "trigger_turn",
+            }:
+                raise ValueError("mailbox item fields are not canonical")
+            sequence = entry["sequence"]
+            delivery_id = entry["delivery_id"]
+            if type(sequence) is not int or sequence < 1 or sequence >= next_sequence:
+                raise ValueError("mailbox item sequence is invalid")
+            if sequence in seen_sequences or sequence <= previous_sequence:
+                raise ValueError("mailbox item sequences must be unique and ordered")
+            if type(delivery_id) is not str or not delivery_id or delivery_id in seen_deliveries:
+                raise ValueError("mailbox delivery identity is invalid or duplicated")
+            if type(entry["trigger_turn"]) is not bool:
+                raise ValueError("mailbox trigger_turn must be a boolean")
             msg = Message.load(entry["message"])
-            if msg is None:
-                continue
-            mailbox._items.append(_MailboxItem(msg, bool(entry.get("trigger_turn"))))
+            if msg is None or str(msg.id) != delivery_id:
+                raise ValueError("mailbox message delivery identity mismatch")
+            mailbox._items.append(_MailboxItem(sequence, delivery_id, msg, entry["trigger_turn"]))
+            seen_sequences.add(sequence)
+            seen_deliveries.add(delivery_id)
+            previous_sequence = sequence
+        mailbox._next_sequence = next_sequence
         if mailbox._items:
             mailbox._data_event.set()
         return mailbox

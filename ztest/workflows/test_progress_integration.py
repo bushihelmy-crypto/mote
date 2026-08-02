@@ -14,28 +14,28 @@ announced "image generation complete" while the image node was only ever
 
 * A node that only reaches ``running`` MUST NOT produce any
   ``node_completed`` / ``success`` push.
-* A graph whose nodes never all finish MUST NOT produce a ``task success``
+* A graph whose nodes never all finish MUST NOT produce a ``Workflow succeeded``
   terminal push.
 * A cancelled node pushes ``cancelled`` — never ``success``.
 * Positive control: a graph that genuinely completes records a
   ``node_completed`` on disk (proving the harness captures real successes, so
   the negatives above are meaningful, not vacuous) — but does NOT push it. Node
   success is progress, not a decision, so it is disk-only; the whole-task
-  ``task success`` terminal is delivered once by ``pool._on_done`` (also not by
+  ``Workflow succeeded`` terminal is delivered once by ``pool._on_done`` (also not by
   the writer). The writer's only mid-flight push is a node *failure*.
 """
+
 from __future__ import annotations
 
 import asyncio
 
 from mote.contracts.conversation import MessagePriority, MessageQueue
-from mote.orchestration.background_tasks.delivery import (
-    make_progress_writer,
-    reset_progress_writer,
-    set_progress_writer,
-)
-from mote.orchestration.workflows import END, START, BgStatus, WorkflowBuilder
+from mote.contracts.task.lifecycle import BackgroundTaskOwner, LocalTaskReference
+from mote.contracts.task.models import AttemptId, TaskId
+from mote.orchestration.background_tasks.delivery import make_progress_sink
+from mote.orchestration.workflows import END, START, NoOutput, WorkflowBuilder, WorkflowNodeStatus
 from mote.orchestration.workflows.engine import _run_driver, _run_one_node
+from mote.orchestration.workflows.events import reset_progress_sink, set_progress_sink
 from mote.orchestration.workflows.types import GraphRunState
 
 from .conftest import S, gated_node, sync_node
@@ -64,9 +64,13 @@ class _Harness:
 
     def writer(self):
         """A progress writer that appends to disk and delivers to the buffer."""
-        return make_progress_writer(
+        return make_progress_sink(
             self.disk.append,
-            task_id="bg_1",
+            reference=LocalTaskReference(
+                BackgroundTaskOwner("process", "agent", "incarnation"),
+                TaskId("bg_1"),
+                AttemptId(1),
+            ),
             deliver=self._deliver,
         )
 
@@ -77,8 +81,8 @@ class _Harness:
 
 def _media_graph(node_fn) -> WorkflowBuilder:
     """A one-node ``media`` graph: START -> image -> END."""
-    g = WorkflowBuilder("media", state_schema=S)
-    g.add_node("image", node_fn)
+    g = WorkflowBuilder("media", state_schema=S, output=NoOutput)
+    g.add_node("image", node_fn, implementation_id="test.progress.image/v1")
     g.add_edge(START, "image")
     g.add_edge("image", END)
     return g
@@ -93,13 +97,13 @@ def test_completed_graph_records_success_on_disk_without_pushing():
     h = _Harness()
 
     async def _run():
-        g = _media_graph(sync_node(lambda s: "video.mp4", field="image"))
+        g = _media_graph(sync_node(lambda s: "video.mp4", field="image")).build()._graph
         state = g.state_schema(x=1)
-        token = set_progress_writer(h.writer())
+        token = set_progress_sink(h.writer())
         try:
             await _run_driver(g, state, execute_nodes=["image"], initial_params={"x": 1})
         finally:
-            reset_progress_writer(token)
+            reset_progress_sink(token)
 
     asyncio.run(_run())
 
@@ -112,9 +116,9 @@ def test_completed_graph_records_success_on_disk_without_pushing():
     # pushed here: neither the node completion nor the whole-task terminal (the
     # latter is delivered once by pool._on_done, not the writer).
     assert "node_completed" not in blob
-    assert "task success" not in blob
+    assert "Workflow succeeded" not in blob
     # The whole-task terminal's rich DAG snapshot still lands on disk.
-    assert any("task success" in line for line in h.disk)
+    assert any("Workflow succeeded" in line for line in h.disk)
 
 
 # ---------------------------------------------------------------------------
@@ -127,9 +131,9 @@ def test_stuck_running_node_never_reports_completion():
 
     async def _run():
         gate = asyncio.Event()  # never released while we snapshot
-        g = _media_graph(gated_node(gate, lambda s: "video.mp4", field="image"))
+        g = _media_graph(gated_node(gate, lambda s: "video.mp4", field="image")).build()._graph
         state = g.state_schema(x=1)
-        token = set_progress_writer(h.writer())
+        token = set_progress_sink(h.writer())
         try:
             driver = asyncio.create_task(_run_driver(g, state, execute_nodes=["image"], initial_params={"x": 1}))
             # Wait until the node has reported RUNNING (it blocks on the gate
@@ -143,7 +147,7 @@ def test_stuck_running_node_never_reports_completion():
             gate.set()
             await driver
         finally:
-            reset_progress_writer(token)
+            reset_progress_sink(token)
         return contents
 
     mid = asyncio.run(_run())
@@ -153,7 +157,7 @@ def test_stuck_running_node_never_reports_completion():
     # node success/failure haven't happened) — and in particular NOTHING claims
     # the node or the task finished.
     assert "node_completed" not in blob
-    assert "task success" not in blob
+    assert "Workflow succeeded" not in blob
     assert "[image] success" not in blob
     # The node did report RUNNING on disk, but never SUCCESS at the time of snapshot.
     assert any("[image] running" in line for line in h.disk)
@@ -164,10 +168,10 @@ def test_cancelled_node_pushes_cancelled_not_success():
 
     async def _run():
         gate = asyncio.Event()  # never released → node stays running until cancelled
-        g = _media_graph(gated_node(gate, lambda s: "video.mp4", field="image"))
+        g = _media_graph(gated_node(gate, lambda s: "video.mp4", field="image")).build()._graph
         state = g.state_schema(x=1)
         run_state = GraphRunState.for_graph(g)
-        token = set_progress_writer(h.writer())
+        token = set_progress_sink(h.writer())
         try:
             node_task = asyncio.create_task(_run_one_node("image", state, g, set(), run_state))
             for _ in range(200):
@@ -180,7 +184,7 @@ def test_cancelled_node_pushes_cancelled_not_success():
             except asyncio.CancelledError:
                 pass
         finally:
-            reset_progress_writer(token)
+            reset_progress_sink(token)
         return g, state, run_state
 
     g, state, run_state = asyncio.run(_run())
@@ -196,5 +200,5 @@ def test_cancelled_node_pushes_cancelled_not_success():
     assert not any("[image] success" in line for line in h.disk)
     assert not any("node_completed" in line for line in h.disk)
     # Run-state status reflects the cancel; it never produced a result.
-    assert run_state.get("image").status == BgStatus.CANCELLED
+    assert run_state.get("image").status == WorkflowNodeStatus.CANCELLED
     assert getattr(state, "image", None) is None

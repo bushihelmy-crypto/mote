@@ -30,6 +30,7 @@ Key pieces:
   listing at a tmp dir so ``rollout.jsonl`` never escapes into the real
   workspace.
 """
+
 from __future__ import annotations
 
 from collections import deque
@@ -38,7 +39,8 @@ from typing import Any, Optional, Sequence, Union
 
 import pytest
 
-from mote.contracts.model import LLMResponse, LLMToolCall
+from mote.contracts.model import CanonicalToolCall, LLMResponse
+from mote.product.agents.factory import CodingAgentFactory
 from mote.runtime.agent.component_keys import ROUTER
 
 # ---------------------------------------------------------------------------
@@ -82,7 +84,7 @@ class ScriptedLLM:
         calls = []
         for name, args in turn:
             self._call_no += 1
-            calls.append(LLMToolCall(id=f"call_{self._call_no}", name=name, arguments=dict(args)))
+            calls.append(CanonicalToolCall(id=f"call_{self._call_no}", name=name, arguments=dict(args)))
         return LLMResponse(content="", tool_calls=calls)
 
     async def aask(self, msg, system_msgs=None, stream=True, **kwargs) -> str:
@@ -163,7 +165,7 @@ def context():
     from mote.product.config.schema import Config
     from mote.runtime.models.clients.context import Context
 
-    return Context(config=Config(models=ShortcutModelsConfig(default=ProductEndpointInput(model="test"))))
+    return Context()
 
 
 def build_role(
@@ -208,17 +210,10 @@ def build_role(
         role_schema=schema,
         wiring=AgentWiring.for_context(
             context,
-            dependencies=AgentDependencies(
+            dependencies=CodingAgentFactory(paths=paths).dependencies(
                 deps=None,
                 output_contract=output_contract or text_output_contract(),
                 toolsets=builtin_toolsets(),
-                background_task_pool_builder=build_background_task_pool,
-                user_config_root=paths.user_config_root,
-                session_workspace_root=paths.session_workspace_root,
-                browser_profiles_root=paths.browser_profiles_root,
-                sandbox_ca_root=paths.sandbox_ca_root,
-                secrets_root=paths.secrets_root,
-                oauth_root=paths.oauth_root,
             ),
         ),
     )

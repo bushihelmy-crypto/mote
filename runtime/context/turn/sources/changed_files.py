@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.contracts.events.file.observation import FileChangedEvent
+from mote.contracts.events.file.observation import FileChangedEvent, FileMutatedEvent
 from mote.contracts.file.identity import FileChangeAttribution, FileChangeKind
 from mote.contracts.ports.conversation.turn_context import TurnContextPriority
 from mote.runtime.file_paths import display_path
@@ -21,7 +21,7 @@ class ChangedFilesContextSource:
     def __init__(self) -> None:
         self._pending: dict[str, FileChangedEvent] = {}
 
-    async def handle(self, event: object) -> None:
+    async def handle(self, event: FileChangedEvent | FileMutatedEvent) -> None:
         if isinstance(event, FileChangedEvent) and event.attribution is FileChangeAttribution.EXTERNAL:
             self._pending[event.path] = event
 

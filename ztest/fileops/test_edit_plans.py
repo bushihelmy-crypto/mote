@@ -6,8 +6,9 @@ import multiprocessing
 
 import pytest
 
+from mote.contracts.content.identity import ContentIdentity
 from mote.contracts.events.file.facts import FileEditPlanStoredEvent
-from mote.contracts.file import ContentIdentity, CreateMutation, MutationSet, ReplaceMutation, TextViewMode
+from mote.contracts.file import CreateMutation, MutationSet, ReplaceMutation, TextViewMode
 from mote.contracts.file.errors import SnapshotDurabilityError, StaleSnapshotError
 from mote.runtime.fileops.edit_plans import (
     MAX_EDIT_PLAN_MANIFEST_BYTES,

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
+from mote.contracts.config.base import ConfigModel
 from mote.contracts.tool.output_markers import PERSISTED_OUTPUT_CLOSE, PERSISTED_OUTPUT_OPEN
 
 # ---------------------------------------------------------------------------
@@ -29,7 +30,7 @@ BYTES_PER_TOKEN: int = 4
 PREVIEW_SIZE_BYTES: int = 2_000
 
 # XML-ish envelope wrapping a persisted tool result's inline preview. The literal
-# is owned by the marker authority (``common/text/markers.py``); aliased here under
+# is owned by the Runtime context marker authority; aliased here under
 # the historical ``*_TAG`` names the executor already imports.
 PERSISTED_OUTPUT_OPEN_TAG: str = PERSISTED_OUTPUT_OPEN
 PERSISTED_OUTPUT_CLOSE_TAG: str = PERSISTED_OUTPUT_CLOSE
@@ -58,7 +59,7 @@ COMPRESSION_MIN_OUTPUT_CHARS: int = 2_000
 COMPRESSION_MAX_INPUT_CHARS: int = 2_000_000
 
 
-class ToolResultLimitConfig(BaseModel):
+class ToolResultLimitConfig(ConfigModel):
     """Knobs for per-tool result limiting (the tool-execution scope).
 
     Self-contained so :class:`ToolExecutor` needs no dependency on the
@@ -77,7 +78,7 @@ class ToolResultLimitConfig(BaseModel):
     compression_max_input_chars: int = COMPRESSION_MAX_INPUT_CHARS
 
 
-class RunJournalConfig(BaseModel):
+class RunJournalConfig(ConfigModel):
     """Knobs for the EXTERNAL-tool-effect idempotency ledger (crash-replay guard).
 
     Sibling of :class:`ToolResultLimitConfig`: a pure-data, tool-execution-scope
@@ -92,7 +93,7 @@ class RunJournalConfig(BaseModel):
     enabled: bool = True
 
 
-class LoopGuardConfig(BaseModel):
+class LoopGuardConfig(ConfigModel):
     """Knobs for the tool-call loop guard (repeated-failure / no-progress detector).
 
     Sibling of :class:`RunJournalConfig`: a pure-data, tool-execution-scope
@@ -126,7 +127,7 @@ class LoopGuardConfig(BaseModel):
     no_progress_threshold: int = 3
 
 
-class ActivityConfig(BaseModel):
+class ActivityConfig(ConfigModel):
     """Per-seam Temporal activity retry/timeout policy (Tier 2 only).
 
     One instance per durable seam (tool / think / timer): mote's three
@@ -159,7 +160,7 @@ class ActivityConfig(BaseModel):
     non_retryable_error_types: list[str] = Field(default_factory=list)
 
 
-class TemporalConfig(BaseModel):
+class TemporalConfig(ConfigModel):
     """Connection + per-seam activity policy for the opt-in Temporal backend.
 
     Consulted ONLY when :class:`DurableConfig` selects ``backend="temporal"``;
@@ -184,7 +185,7 @@ class TemporalConfig(BaseModel):
     timer_activity: ActivityConfig = Field(default_factory=ActivityConfig)
 
 
-class DurableConfig(BaseModel):
+class DurableConfig(ConfigModel):
     """Selects the durable-execution backend for the run's replay-safe steps.
 
     Orthogonal to :class:`RunJournalConfig` (which guards EXTERNAL-tool
@@ -216,7 +217,7 @@ class DurableConfig(BaseModel):
     temporal: TemporalConfig = Field(default_factory=TemporalConfig)
 
 
-class ToolSearchConfig(BaseModel):
+class ToolSearchConfig(ConfigModel):
     """Master switch for the Tool Search subsystem (deferred-tool discovery).
 
     Sibling of :class:`ToolResultLimitConfig` / :class:`RunJournalConfig`: a

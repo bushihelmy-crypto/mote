@@ -15,7 +15,7 @@ from mote.contracts.file.errors import (
 )
 from mote.contracts.file.views import FileTextView, ReadCursorKind, ReadViewStatus, TextViewMode
 from mote.runtime.fileops.identity import path_token
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository, ArtifactWriteScope
+from mote.runtime.fileops.mutation.artifacts import ArtifactWriteScope, FileMutationArtifactRepository
 from mote.runtime.fileops.read_cursors import OpenReadCursor, ReadCursorStore
 from mote.runtime.fileops.resource_limits import MAX_MATERIALIZED_TEXT_BYTES
 from mote.runtime.fileops.text_layout import text_page
@@ -38,7 +38,7 @@ class TextViewService:
     def __init__(
         self,
         *,
-        artifacts: ArtifactRepository,
+        artifacts: FileMutationArtifactRepository,
         cursors: ReadCursorStore,
         sources: TextSourceService,
     ) -> None:

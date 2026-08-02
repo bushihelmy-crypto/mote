@@ -7,12 +7,14 @@ each is resolved to concrete files on disk. The integer value of
 :class:`ConfigSource` *is* the precedence (higher wins), so the merge order is
 data, not branching logic (mirrors codex's ``ConfigLayerSource::precedence``).
 
-All layers are wired: DEFAULT/SYSTEM/USER/PROJECT/WORKDIR/PROFILE/ENV/CLI_FLAG/
+All layers are wired: DEFAULT/SYSTEM/USER/WORKDIR/PROFILE/ENV/CLI_FLAG/
 PROGRAMMATIC. Numeric gaps are left between values so future layers slot in
 without renumbering existing ones.
 """
+
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -36,7 +38,6 @@ class ConfigSource(IntEnum):
     DEFAULT = 0  # pydantic field defaults (no file)
     SYSTEM = 10  # /etc/mote/config.yaml (+ config.d/*.yaml) — managed
     USER = 20  # ~/.mote/config.yaml
-    PROJECT = 30  # trusted repo/installation config (mote/config.yaml)
     WORKDIR = 35  # <cwd>/.mote/config.yaml — UNTRUSTED, credentials stripped
     PROFILE = 40  # ~/.mote/<name>.config.yaml — named overlay, trusted
     ENV = 50  # MOTE_*/MOTE_* environment variables
@@ -55,16 +56,47 @@ class ConfigSource(IntEnum):
         return self is not ConfigSource.WORKDIR
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class SourceIdentity:
+    """Stable identity of one resolved config file within a discovery pass."""
+
+    canonical_path: Path
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True, slots=True)
 class SourceFile:
     """A concrete config file resolved to a particular source layer."""
 
     source: ConfigSource
     path: Path
+    identity: SourceIdentity
+    trusted: bool
 
 
 def _existing(paths: Sequence[Optional[Path]]) -> List[Path]:
     return [p for p in paths if p is not None and p.is_file()]
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _descriptor(source: ConfigSource, path: Path, *, trusted_root: Path | None) -> SourceFile:
+    canonical = path.resolve(strict=True)
+    stat = canonical.stat()
+    identity = SourceIdentity(canonical, stat.st_dev, stat.st_ino)
+    trusted = False
+    if source is not ConfigSource.WORKDIR and trusted_root is not None:
+        canonical_root = trusted_root.resolve(strict=True)
+        expected_owner = 0 if source in {ConfigSource.SYSTEM, ConfigSource.MANAGED} else os.getuid()
+        trusted = _within(canonical, canonical_root) and stat.st_uid == expected_owner and stat.st_mode & 0o022 == 0
+    return SourceFile(source=source, path=canonical, identity=identity, trusted=trusted)
 
 
 def profile_path(profile: str, user_config_root: Path) -> Path:
@@ -77,50 +109,54 @@ def discover_source_files(
     *,
     profile: Optional[str] = None,
     user_config_root: Path | None = None,
-    source_root: Path | None = None,
 ) -> List[SourceFile]:
     """Resolve every config file that exists, in ascending precedence order.
 
     A single source may map to multiple files. They are listed low->high so a
     later file overrides an earlier one within the same source band. The trusted
-    PROJECT band is the user's ``mote/config.yaml``.
+    USER files are accepted only from their canonical Product-owned root.
 
     When ``profile`` is given, ``~/.mote/<profile>.config.yaml`` is added
     as a trusted PROFILE layer (above WORKDIR, below ENV) — a named overlay
     that selectively overrides the base config (mirrors codex profiles).
     """
     cwd = Path(cwd) if cwd is not None else Path.cwd()
-    source_root = source_root or cwd
-    files: List[SourceFile] = []
+    candidates: List[SourceFile] = []
 
     # SYSTEM: base file then drop-in dir (config.d/*.yaml, sorted alphabetically).
     for p in _existing([_SYSTEM_CONFIG_DIR / CONFIG_FILE_NAME]):
-        files.append(SourceFile(ConfigSource.SYSTEM, p))
+        candidates.append(_descriptor(ConfigSource.SYSTEM, p, trusted_root=_SYSTEM_CONFIG_DIR))
     sys_d = _SYSTEM_CONFIG_DIR / "config.d"
     if sys_d.is_dir():
         for p in sorted(sys_d.glob("*.yaml")):
-            files.append(SourceFile(ConfigSource.SYSTEM, p))
+            candidates.append(_descriptor(ConfigSource.SYSTEM, p, trusted_root=_SYSTEM_CONFIG_DIR))
 
     # USER: ~/.mote/config.yaml.
     user_files = [user_config_root / CONFIG_FILE_NAME] if user_config_root is not None else []
     for p in _existing(user_files):
-        files.append(SourceFile(ConfigSource.USER, p))
-
-    # PROJECT (trusted): the user's mote/config.yaml.
-    for p in _existing([source_root / CONFIG_FILE_NAME]):
-        files.append(SourceFile(ConfigSource.PROJECT, p))
+        candidates.append(_descriptor(ConfigSource.USER, p, trusted_root=user_config_root))
 
     # WORKDIR (untrusted): <cwd>/.mote/config.yaml.
     for p in _existing([cwd / _WORKDIR_CONFIG_SUBDIR / CONFIG_FILE_NAME]):
-        files.append(SourceFile(ConfigSource.WORKDIR, p))
+        candidates.append(_descriptor(ConfigSource.WORKDIR, p, trusted_root=None))
 
     # PROFILE (trusted): named overlay ~/.mote/<profile>.config.yaml.
     if profile and user_config_root is not None:
         for p in _existing([profile_path(profile, user_config_root)]):
-            files.append(SourceFile(ConfigSource.PROFILE, p))
+            candidates.append(_descriptor(ConfigSource.PROFILE, p, trusted_root=user_config_root))
 
     # MANAGED (trusted, highest): admin policy that overrides every other layer.
     for p in _existing([_SYSTEM_CONFIG_DIR / MANAGED_CONFIG_FILE_NAME]):
-        files.append(SourceFile(ConfigSource.MANAGED, p))
+        candidates.append(_descriptor(ConfigSource.MANAGED, p, trusted_root=_SYSTEM_CONFIG_DIR))
 
-    return files
+    # A physical file has one effective descriptor.  Aliases always collapse to
+    # the least trusted candidate; equal-trust aliases keep the lower precedence
+    # so a caller-controlled path cannot promote an existing file.
+    selected: dict[tuple[int, int], SourceFile] = {}
+    for candidate in candidates:
+        key = (candidate.identity.device, candidate.identity.inode)
+        current = selected.get(key)
+        rank = (candidate.trusted, int(candidate.source))
+        if current is None or rank < (current.trusted, int(current.source)):
+            selected[key] = candidate
+    return sorted(selected.values(), key=lambda item: int(item.source))

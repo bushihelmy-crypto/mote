@@ -33,11 +33,11 @@ from mote.runtime.fileops.resource_limits import ARTIFACT_HARD_LIMIT_BYTES, ARTI
 from mote.runtime.fileops.transactions import ScopedMutationArtifacts
 from mote.runtime.session.events import MessageEvent, SessionMetaEvent
 from mote.runtime.session.log import SessionLog
-from mote.ztest.fileops_factory import ArtifactRepository
+from mote.ztest.fileops_factory import FileMutationArtifactRepository
 
 
 def _components(root, session_id="session"):
-    artifacts = ArtifactRepository(
+    artifacts = FileMutationArtifactRepository(
         root / "artifacts",
         hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
     )
@@ -152,6 +152,26 @@ def test_replace_records_prepared_and_committed_around_publish(tmp_path):
     assert record.status == TransactionStatus.COMMITTED
     assert record.mutation_set.mutations[0].before == snapshot
     assert record.mutation_set.mutations[0].after.digest == result.versions[0].digest
+
+
+def test_resume_returns_existing_settlement_without_rebuilding_mutation(tmp_path):
+    target = tmp_path / "target.txt"
+    target.write_bytes(b"before")
+    coordinator, reader, _, _ = _components(tmp_path)
+    snapshot = _capture(coordinator, reader, target, tmp_path)
+    factory = _mutation_factory(coordinator, tmp_path)
+    scope = _mutation_scope(coordinator, len(b"after"))
+    with scope:
+        mutation_set = factory.mutation_set(
+            source="GenerateMedia:image:0",
+            transaction_id="stable-publication",
+            mutations=(factory.replacement(snapshot, b"after", scope=scope),),
+        )
+        committed = coordinator.commit(mutation_set, ScopedMutationArtifacts(scope))
+
+    assert coordinator.resume("stable-publication") == committed
+    assert coordinator.resume("missing") is None
+    assert target.read_bytes() == b"after"
 
 
 def test_create_and_delete_use_the_same_durable_protocol(tmp_path):
@@ -487,7 +507,7 @@ class _PausingJournal(DurableFileOperationsJournal):
 def _crash_transaction(root_text: str, crash_stage: str) -> None:
     root = Path(root_text)
     target = root / "target.txt"
-    artifacts = ArtifactRepository(
+    artifacts = FileMutationArtifactRepository(
         root / "artifacts",
         hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
     )
@@ -538,7 +558,7 @@ def _crash_transaction(root_text: str, crash_stage: str) -> None:
 def _crash_create_or_delete(root_text: str, operation: str) -> None:
     root = Path(root_text)
     target = root / "target.txt"
-    artifacts = ArtifactRepository(
+    artifacts = FileMutationArtifactRepository(
         root / "artifacts",
         hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
     )
@@ -619,7 +639,7 @@ def _pause_distinct_replace(
     outcomes,
 ) -> None:
     root = Path(root_text)
-    artifacts = ArtifactRepository(
+    artifacts = FileMutationArtifactRepository(
         root / "artifacts",
         hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
     )

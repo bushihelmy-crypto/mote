@@ -12,11 +12,11 @@ from mote.runtime.fileops.identity import name_identity, present_version
 from mote.runtime.fileops.metadata import capture_metadata
 from mote.runtime.fileops.metadata_manifest import PreservedMetadata, encode_metadata_manifest
 from mote.runtime.fileops.publisher import AtomicPublisher
-from mote.ztest.fileops_factory import ArtifactRepository
+from mote.ztest.fileops_factory import FileMutationArtifactRepository
 
 
 def _publisher(tmp_path):
-    store = ArtifactRepository(
+    store = FileMutationArtifactRepository(
         tmp_path / "artifacts",
         hard_limit_bytes=1024 * 1024,
     )

@@ -8,12 +8,13 @@ the coarse :class:`PermissionMode` stances and the interactive ``ask`` path:
 * ``acceptEdits`` / ``bypass`` auto-allow a mutating tool with no allow rule.
 * ``plan`` / ``dontAsk`` block a mutating tool (the latter fails closed).
 * an ``ask`` rule routes through the Role's ``request_approval`` capability ->
-  ``MoteEnv.ask_user`` -> the human-input channel; a "yes" runs the tool and a
+  the injected human interaction port; a "yes" runs the tool and a
   "no" denies it.
 
 Only the LLM (scripted) and, for the ask tests, the human-input channel are
 faked; the permission engine, tools and filesystem are all real.
 """
+
 from __future__ import annotations
 
 import os
@@ -21,7 +22,6 @@ import os
 import pytest
 
 from mote.product.interaction.approvals import parse_approval_response, render_approval_prompt
-from mote.product.interaction.mote_env import MoteEnv
 from mote.runtime.tools.permission.config import PermissionConfig
 
 pytestmark = pytest.mark.asyncio
@@ -125,12 +125,22 @@ async def test_allow_rule_overrides_plan(make_role, tmp_path):
 
 
 def _human_input(reply: str):
-    """Make ``MoteEnv.ask_user`` resolve to a fixed human reply."""
+    """Make the test interaction port resolve to a fixed human reply."""
 
     async def _fake(question):  # signature matches get_human_input(question)
         return reply
 
     return _fake
+
+
+class _ApprovalHuman:
+    def __init__(self, reply, approval_prompt, approval_parser):
+        self._reply = reply
+        self._approval_prompt = approval_prompt
+        self._approval_parser = approval_parser
+
+    async def request_approval(self, request, *, sent_from):
+        return self._approval_parser(await self._reply(self._approval_prompt(request)))
 
 
 async def test_ask_rule_approved_runs_tool(make_role, tmp_path, monkeypatch):
@@ -143,14 +153,7 @@ async def test_ask_rule_approved_runs_tool(make_role, tmp_path, monkeypatch):
         turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "approved"})], "done"],
     )
     # request_approval needs an env channel.
-    env = MoteEnv(
-        residency_dir=tmp_path / "residency",
-        sessions_dir=tmp_path / "sessions",
-        human_input=human_input,
-        approval_prompt=render_approval_prompt,
-        approval_parser=parse_approval_response,
-    )
-    env.add_role(role)
+    role.bind_human_interaction(_ApprovalHuman(human_input, render_approval_prompt, parse_approval_response))
 
     await role.run(with_message="write with approval")
 
@@ -168,14 +171,7 @@ async def test_ask_rule_denied_blocks_tool(make_role, tmp_path, monkeypatch):
         permissions=PermissionConfig(mode="default", ask=["Edit"]),
         turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "rejected"})], "done"],
     )
-    env = MoteEnv(
-        residency_dir=tmp_path / "residency",
-        sessions_dir=tmp_path / "sessions",
-        human_input=human_input,
-        approval_prompt=render_approval_prompt,
-        approval_parser=parse_approval_response,
-    )
-    env.add_role(role)
+    role.bind_human_interaction(_ApprovalHuman(human_input, render_approval_prompt, parse_approval_response))
 
     await role.run(with_message="write but get denied")
 
@@ -193,7 +189,7 @@ async def test_ask_without_env_fails_closed(make_role, tmp_path):
         permissions=PermissionConfig(mode="default", ask=["Edit"]),
         turns=[[("Edit", {"file_path": target, "old_string": "", "new_string": "no-channel"})], "done"],
     )
-    # Deliberately NOT added to an env: state.env is None.
+    # Deliberately no human interaction capability is bound.
 
     await role.run(with_message="write with no approval channel")
 

@@ -10,8 +10,8 @@ from mote.product.toolsets.builtin.device_use import DeviceUse
 from mote.product.toolsets.builtin.python import Python
 from mote.product.toolsets.builtin.terminal import Terminal
 from mote.product.toolsets.builtin.web_browser import WebBrowser
-from mote.runtime.interactive import RuntimeHost
 from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
+from mote.runtime.interactive.host import RuntimeHost
 
 
 @pytest.mark.parametrize(

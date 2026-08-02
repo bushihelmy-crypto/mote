@@ -5,7 +5,8 @@ from __future__ import annotations
 from mote.contracts.output.policy import RunCompletionPolicyContribution
 from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicyExtensionSpec
 from mote.kernel.output import text_output_contract
-from mote.runtime.agent import AgentDependencies, AgentWiring, Role
+from mote.product.agents.factory import CodingAgentFactory
+from mote.runtime.agent import AgentWiring, Role
 from mote.runtime.models.clients.context import Context
 from mote.ztest.model_fakes import offline_config
 
@@ -22,18 +23,16 @@ def test_run_completion_policy_extension_factory_runs_once_per_role():
         created.append(extension)
         return extension
 
-    dependencies = AgentDependencies(
-        deps=None,
-        output_contract=text_output_contract(),
+    dependencies = CodingAgentFactory(
         run_completion_policy_extensions=(RunCompletionPolicyExtensionSpec("organization", factory),),
-    )
+    ).dependencies(deps=None, output_contract=text_output_contract())
     first = Role(
         name="first",
-        wiring=AgentWiring.for_context(Context(config=offline_config()), dependencies=dependencies),
+        wiring=AgentWiring.for_context(Context(), dependencies=dependencies),
     )
     second = Role(
         name="second",
-        wiring=AgentWiring.for_context(Context(config=offline_config()), dependencies=dependencies),
+        wiring=AgentWiring.for_context(Context(), dependencies=dependencies),
     )
 
     assert created == []

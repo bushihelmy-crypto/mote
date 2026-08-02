@@ -14,8 +14,7 @@ FILE_CHANGED_EVENT = "FileChanged"
 
 
 class _TelemetryEmitter(Protocol):
-    async def emit(self, event: object) -> None:
-        ...
+    async def emit(self, event: FileChangedEvent) -> None: ...
 
 
 @log_class(level="DEBUG")

@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
+from mote.contracts.config.runtime_client import RuntimeClientActivationSpec
 from mote.contracts.ports.model.operator import ModelOperatorControl
 from mote.contracts.ports.service.gateway import ServiceGateway
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleResource, LifecycleStack, LifecycleState
@@ -31,7 +30,7 @@ class Context(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    config: Any = Field(default=None)
+    activation: RuntimeClientActivationSpec = Field(default_factory=RuntimeClientActivationSpec)
     cost_manager: CostTracker = Field(default_factory=CostTracker)
     # Fleet-wide rate-limit quota (provider account state, last-write-wins per
     # endpoint) — the ``/usage`` limit side, counterpart to ``cost_manager``.
@@ -54,10 +53,8 @@ class Context(BaseModel):
             self.disk_writer.aclose,
             phase=DURABILITY_CLOSE_PHASE,
         )
-        if self.config is None:
-            return self
-        self.health_registry.set_config(self.config.resilience.to_breaker_config())
-        self._langfuse = LangfuseRuntime.from_config(self.config.observability.langfuse)
+        self.health_registry.set_config(self.activation.breaker)
+        self._langfuse = LangfuseRuntime.from_config(self.activation.langfuse)
         self._lifecycle.register_close(
             "observability:langfuse",
             self._langfuse.aclose,

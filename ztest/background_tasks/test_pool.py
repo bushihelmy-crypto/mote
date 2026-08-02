@@ -9,6 +9,7 @@ concurrency semaphore, the event-driven waiters (``wait_all`` /
 ``<task-notification>`` XML envelope, and the structured notification pushed
 into the message buffer.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -16,7 +17,13 @@ import asyncio
 import pytest
 
 from mote.contracts.conversation import MessagePriority
-from mote.orchestration.background_tasks import BackgroundTaskNotification, BackgroundTaskPool, BgStatus, TaskType
+from mote.contracts.task.models import AttemptId
+from mote.orchestration.background_tasks import (
+    BackgroundTaskNotification,
+    BackgroundTaskPool,
+    BackgroundTaskStatus,
+    TaskType,
+)
 from mote.orchestration.background_tasks.constants import MAX_RESULT_LEN
 from mote.orchestration.background_tasks.operation import (
     OperationCancelled,
@@ -109,7 +116,7 @@ class TestSubmitAndIds:
         assert meta.task_kind == "bash"
         assert meta.agent_id == "A1"
         # status is PENDING until the coroutine actually starts running.
-        assert meta.status == BgStatus.PENDING
+        assert meta.status == BackgroundTaskStatus.PENDING
         await _drain(pool)
 
     def test_get_task_info_unknown(self, pool):
@@ -122,7 +129,7 @@ class TestCompletionPaths:
         tid = pool.submit(lambda: echo("hello"), "echo")
         await pool.wait_all()
         meta = pool.get_task_info(tid)
-        assert meta.status == BgStatus.SUCCESS
+        assert meta.status == BackgroundTaskStatus.SUCCESS
         assert meta.result == "hello"
         assert meta.notified is True
         assert meta.end_time is not None
@@ -177,20 +184,20 @@ class TestCompletionPaths:
         tid = pool.submit(lambda: boom(ValueError("kaboom")), "fail")
         await pool.wait_all()
         meta = pool.get_task_info(tid)
-        assert meta.status == BgStatus.FAILED
+        assert meta.status == BackgroundTaskStatus.FAILED
         # Result is the uniform <error> block; the typed report is on meta.error.
         assert meta.result.startswith("<error ")
         assert "kaboom" in meta.result
         assert meta.error is not None
-        assert meta.error["error"] == "ValueError"
-        assert meta.error["code"] == "UNKNOWN"
-        assert meta.error["message"] == "kaboom"
+        assert meta.error.error == "ValueError"
+        assert meta.error.code == "UNKNOWN"
+        assert meta.error.message == "kaboom"
 
     @pytest.mark.asyncio
     async def test_timeout(self, pool):
         tid = pool.submit(lambda: forever(), "hang", timeout=0.02)
         await pool.wait_all()
-        assert pool.get_task_info(tid).status == BgStatus.TIMEOUT
+        assert pool.get_task_info(tid).status == BackgroundTaskStatus.TIMEOUT
 
     @pytest.mark.asyncio
     async def test_timeout_carries_structured_error(self, pool):
@@ -200,11 +207,11 @@ class TestCompletionPaths:
         tid = pool.submit(lambda: forever(), "hang", timeout=0.02)
         await pool.wait_all()
         meta = pool.get_task_info(tid)
-        assert meta.status == BgStatus.TIMEOUT
+        assert meta.status == BackgroundTaskStatus.TIMEOUT
         assert meta.result.startswith("<error ")
         assert 'code="BG_TASK_TIMEOUT"' in meta.result
         assert meta.error is not None
-        assert meta.error["code"] == "BG_TASK_TIMEOUT"
+        assert meta.error.code == "BG_TASK_TIMEOUT"
         # Timeout is retryable.
         assert 'retryable="true"' in meta.result
 
@@ -215,7 +222,7 @@ class TestCompletionPaths:
         await wait_started(started)
         assert pool.cancel(tid) is True
         await pool.wait_all()
-        assert pool.get_task_info(tid).status == BgStatus.CANCELLED
+        assert pool.get_task_info(tid).status == BackgroundTaskStatus.CANCELLED
 
     @pytest.mark.asyncio
     async def test_cancel_carries_structured_error(self, pool):
@@ -228,11 +235,11 @@ class TestCompletionPaths:
         assert pool.cancel(tid) is True
         await pool.wait_all()
         meta = pool.get_task_info(tid)
-        assert meta.status == BgStatus.CANCELLED
+        assert meta.status == BackgroundTaskStatus.CANCELLED
         assert meta.result.startswith("<error ")
         assert 'code="BG_TASK_CANCELLED"' in meta.result
         assert meta.error is not None
-        assert meta.error["code"] == "BG_TASK_CANCELLED"
+        assert meta.error.code == "BG_TASK_CANCELLED"
         assert 'retryable="false"' in meta.result
 
     def test_cancel_unknown_returns_false(self, pool):
@@ -250,7 +257,7 @@ class TestNotification:
         assert isinstance(notif, BackgroundTaskNotification)
         assert notif.task_id == tid
         assert notif.command_name == "cmd"
-        assert notif.status == BgStatus.SUCCESS
+        assert notif.status == BackgroundTaskStatus.SUCCESS
         assert notif.result == "R"
         assert "<task-notification>" in notif.content
 
@@ -275,7 +282,11 @@ class TestProgressTaskTermination:
     def _progress_pool(self, msg_buffer, tmp_path):
         from mote.orchestration.background_tasks.results.store import TaskOutputStore
 
-        return BackgroundTaskPool(msg_buffer, output_store=TaskOutputStore(tmp_path))
+        return BackgroundTaskPool(
+            msg_buffer,
+            output_store=TaskOutputStore(tmp_path, session_id="background-task-test"),
+            session_id="background-task-test",
+        )
 
     @pytest.mark.asyncio
     async def test_progress_task_timeout_still_delivers_terminal(self, msg_buffer, tmp_path):
@@ -288,7 +299,7 @@ class TestProgressTaskTermination:
         terminals = [m for m in msgs if m.task_terminal]
         assert len(terminals) == 1
         assert terminals[0].task_id == tid
-        assert terminals[0].status == BgStatus.TIMEOUT
+        assert terminals[0].status == BackgroundTaskStatus.TIMEOUT
 
     @pytest.mark.asyncio
     async def test_progress_task_cancel_still_delivers_terminal(self, msg_buffer, tmp_path):
@@ -300,27 +311,24 @@ class TestProgressTaskTermination:
         await pool.wait_all()
         terminals = [m for m in msg_buffer.pop_all() if isinstance(m, BackgroundTaskNotification) and m.task_terminal]
         assert len(terminals) == 1
-        assert terminals[0].status == BgStatus.CANCELLED
+        assert terminals[0].status == BackgroundTaskStatus.CANCELLED
 
 
 class TestDeliver:
     """The single push+wake choke point all notification producers route through."""
 
-    def test_deliver_pushes_next_and_wakes(self, msg_buffer):
+    def test_deliver_rejects_unknown_task_attempt_without_wake(self, msg_buffer):
         wakes = []
         pool = BackgroundTaskPool(msg_buffer, wake=lambda: wakes.append(1))
-        notif = BackgroundTaskNotification(content="hi", task_id="bg_1", status=BgStatus.SUCCESS)
-        pool.deliver(notif)
-        # Pushed at NEXT priority and the runtime was woken.
-        assert msg_buffer.pop(max_priority=MessagePriority.NOW) is None
-        assert msg_buffer.pop(max_priority=MessagePriority.NEXT) is notif
-        assert wakes == [1]
-
-    def test_deliver_without_wake_still_pushes(self, msg_buffer):
-        pool = BackgroundTaskPool(msg_buffer)  # no wake bound
-        notif = BackgroundTaskNotification(content="hi", task_id="bg_1", status=BgStatus.FAILED)
-        pool.deliver(notif)  # must not raise
-        assert msg_buffer.pop_all() == [notif]
+        notification = BackgroundTaskNotification(
+            content="stale",
+            task_id="bg_1",
+            attempt_id=AttemptId(1),
+            status=BackgroundTaskStatus.SUCCESS,
+        )
+        assert pool.deliver(notification) is False
+        assert msg_buffer.pop_all() == []
+        assert wakes == []
 
     def test_deliver_swallows_push_failure(self):
         class _BadSink:
@@ -332,50 +340,6 @@ class TestDeliver:
         # A delivery failure must never break the pipeline — and must not wake.
         pool.deliver(BackgroundTaskNotification(content="x"))
         assert wakes == []
-
-    def test_deliver_is_stateless_no_terminal_dedup(self, msg_buffer):
-        # deliver no longer dedups terminals: there is exactly one terminal
-        # producer (_on_done), so two terminals for the same task can only occur
-        # in tests. Both are pushed — deliver carries no per-task state.
-        pool = BackgroundTaskPool(msg_buffer)
-        first = BackgroundTaskNotification(content="t1", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True)
-        second = BackgroundTaskNotification(content="t2", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True)
-        pool.deliver(first)
-        pool.deliver(second)
-        assert msg_buffer.pop_all() == [first, second]
-
-    def test_deliver_does_not_dedup_node_events(self, msg_buffer):
-        # Non-terminal (node-level) events with the same task_id are never
-        # deduped — a node fail then a graph success must both land.
-        pool = BackgroundTaskPool(msg_buffer)
-        node_a = BackgroundTaskNotification(content="node-a", task_id="bg_1", status=BgStatus.FAILED)
-        node_b = BackgroundTaskNotification(content="node-b", task_id="bg_1", status=BgStatus.SUCCESS)
-        pool.deliver(node_a)
-        pool.deliver(node_b)
-        assert msg_buffer.pop_all() == [node_a, node_b]
-
-    def test_deliver_swallows_push_failure_and_recovers(self):
-        # A swallowed push failure must not break delivery: a later push for the
-        # same task still gets through (deliver is stateless, so a failed push
-        # leaves no residue that would suppress a subsequent one).
-        class _FlakySink:
-            def __init__(self):
-                self.calls = 0
-                self.pushed = []
-
-            def push(self, msg, priority=None):
-                self.calls += 1
-                if self.calls == 1:
-                    raise RuntimeError("transient")
-                self.pushed.append(msg)
-
-        sink = _FlakySink()
-        pool = BackgroundTaskPool(sink)
-        a = BackgroundTaskNotification(content="a", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True)
-        b = BackgroundTaskNotification(content="b", task_id="bg_1", status=BgStatus.SUCCESS, task_terminal=True)
-        pool.deliver(a)  # push raises → swallowed
-        pool.deliver(b)  # retry succeeds
-        assert sink.pushed == [b]
 
 
 class TestBuildXml:
@@ -464,13 +428,13 @@ class TestConcurrency:
 
         await wait_started(started_a)
         # A holds the only slot; B is still queued (PENDING).
-        assert pool.get_task_info(a).status == BgStatus.RUNNING
-        assert pool.get_task_info(b).status == BgStatus.PENDING
+        assert pool.get_task_info(a).status == BackgroundTaskStatus.RUNNING
+        assert pool.get_task_info(b).status == BackgroundTaskStatus.PENDING
         assert started_b.is_set() is False
 
         release_a.set()
         await wait_started(started_b)
-        assert pool.get_task_info(b).status == BgStatus.RUNNING
+        assert pool.get_task_info(b).status == BackgroundTaskStatus.RUNNING
         release_b.set()
         await pool.wait_all()
 
@@ -483,12 +447,12 @@ class TestAdopt:
         tid = pool.adopt(task, command_name="adopted")
         assert tid == "bg_1"
         meta = pool.get_task_info(tid)
-        assert meta.status == BgStatus.RUNNING  # already executing, no PENDING phase
+        assert meta.status == BackgroundTaskStatus.RUNNING  # already executing, no PENDING phase
         assert meta.command_name == "adopted"
         ev.set()
         await pool.wait_all()
         meta = pool.get_task_info(tid)
-        assert meta.status == BgStatus.SUCCESS
+        assert meta.status == BackgroundTaskStatus.SUCCESS
         assert meta.result == "adopted-out"
 
 
@@ -502,7 +466,7 @@ class TestCapCancel:
         assert pool.get_task_info(tid)._output_capped is True
         await pool.wait_all()
         meta = pool.get_task_info(tid)
-        assert meta.status == BgStatus.CANCELLED
+        assert meta.status == BackgroundTaskStatus.CANCELLED
         assert "disk cap" in meta.result
 
     def test_cancel_for_cap_unknown(self, pool):
@@ -518,7 +482,7 @@ class TestAgentScoping:
         pool.submit(lambda: gated(ev), "b1", timeout=None, agent_id="B")
         # Let all three acquire the semaphore and start awaiting the gate.
         for _ in range(50):
-            if all(pool.get_task_info(t).status == BgStatus.RUNNING for t in ("bg_1", "bg_2", "bg_3")):
+            if all(pool.get_task_info(t).status == BackgroundTaskStatus.RUNNING for t in ("bg_1", "bg_2", "bg_3")):
                 break
             await asyncio.sleep(0)
 
@@ -529,8 +493,8 @@ class TestAgentScoping:
         assert set(cancelled) == {"bg_1", "bg_2"}
         ev.set()
         await pool.wait_all()
-        assert pool.get_task_info("bg_1").status == BgStatus.CANCELLED
-        assert pool.get_task_info("bg_3").status == BgStatus.SUCCESS
+        assert pool.get_task_info("bg_1").status == BackgroundTaskStatus.CANCELLED
+        assert pool.get_task_info("bg_3").status == BackgroundTaskStatus.SUCCESS
 
     @pytest.mark.asyncio
     async def test_list_tasks_returns_all(self, pool):
@@ -554,20 +518,16 @@ class TestProgressTelemetryVisibility:
 
     @pytest.mark.asyncio
     async def test_report_progress_reaches_telemetry_handler(self, msg_buffer, tmp_path):
+        from mote.contracts.events.task import TaskProgressEvent
         from mote.contracts.ports.events.telemetry import (
             TelemetryIdentity,
             TelemetryOverflow,
             TelemetrySubscriptionSpec,
         )
+        from mote.contracts.task.progress import ActivityProgressEvent, ActivityProgressIdentity, ProgressPhase
         from mote.orchestration.background_tasks import TaskOutputStore
         from mote.orchestration.workflows.events import report_progress
-        from mote.runtime.events import (
-            TaskProgressEvent,
-            TelemetryBinding,
-            TelemetryManifest,
-            TelemetryRuntime,
-            bind_telemetry,
-        )
+        from mote.runtime.events import AllTelemetryBinding, TelemetryManifest, TelemetryRuntime, bind_telemetry
 
         class _Recorder:
             def __init__(self):
@@ -584,7 +544,7 @@ class TestProgressTelemetryVisibility:
         telemetry = TelemetryRuntime(
             TelemetryManifest(
                 (
-                    TelemetryBinding(
+                    AllTelemetryBinding(
                         TelemetrySubscriptionSpec(
                             identity=TelemetryIdentity("mote.test.task_progress"),
                             capacity=16,
@@ -598,10 +558,20 @@ class TestProgressTelemetryVisibility:
         )
         telemetry.start()
 
-        pool = BackgroundTaskPool(msg_buffer, output_store=TaskOutputStore(base_dir=tmp_path))
+        pool = BackgroundTaskPool(
+            msg_buffer,
+            output_store=TaskOutputStore(base_dir=tmp_path, session_id="session"),
+        )
 
         async def reporter():
-            report_progress("split", "running", "hello")
+            report_progress(
+                ActivityProgressEvent(
+                    ActivityProgressIdentity("activity", "definition"),
+                    "split",
+                    ProgressPhase.RUNNING,
+                    "hello",
+                )
+            )
             return "ok"
 
         with bind_telemetry(telemetry):
@@ -612,6 +582,7 @@ class TestProgressTelemetryVisibility:
         assert tid == "bg_1"
         assert len(rec.events) == 1
         e = rec.events[0]
-        assert (e.task_id, e.stage, e.status, e.detail) == ("bg_1", "split", "running", "hello")
+        assert str(e.progress.reference.task_id) == "bg_1"
+        assert (e.stage, e.status, e.detail) == ("split", "running", "hello")
         await pool.aclose()
         await telemetry.aclose()

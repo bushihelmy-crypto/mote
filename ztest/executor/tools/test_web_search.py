@@ -6,15 +6,17 @@
 as a CC-aligned markdown link list. These tests inject the narrow
 ``invoke_service`` capability directly — fully offline, no network, no real LLM.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from mote.contracts.model import WebSearchHit
-from mote.contracts.service import ServiceExecutionSemantics
+from mote.contracts.model.invocation import WebSearchHitOutput
+from mote.contracts.service import ServiceExecutionSemantics, WebSearchPayload, WebSearchResult
 from mote.contracts.service.errors import ServiceCallExhaustedError
+from mote.contracts.tool.errors import ToolNotConfiguredError
 from mote.product.toolsets.builtin.web_search import WebSearch
-from mote.runtime.errors import ToolNotConfiguredError
 from mote.runtime.tools.definitions import native_definition
 
 from .conftest import run
@@ -25,12 +27,14 @@ def _tool(hits=None, *, error: Exception | None = None) -> WebSearch:
     tool = WebSearch(config)
     tool.service_calls = []
 
-    async def invoke_service(**kwargs):
-        tool.service_calls.append(kwargs)
+    async def invoke_service(payload, operation_key, semantics):
+        tool.service_calls.append((payload, operation_key, semantics))
         if error is not None:
             raise error
         selected = HITS if hits is None else hits
-        return {"hits": [{"title": hit.title, "url": hit.url, "snippet": hit.snippet} for hit in selected]}
+        return WebSearchResult(
+            hits=tuple(WebSearchHitOutput(title=hit.title, url=hit.url, snippet=hit.snippet) for hit in selected)
+        )
 
     tool.invoke_service = invoke_service
     return tool
@@ -64,14 +68,13 @@ class TestFormat:
         tool = _tool()
         _call(tool, query="cats", allowed_domains=["a.com"])
         assert len(tool.service_calls) == 1
-        call = tool.service_calls[0]
-        assert call["route_id"] == "web.search"
-        assert call["capability"] == "web.search"
-        assert call["operation_key"] == "query"
-        assert call["semantics"] is ServiceExecutionSemantics.PURE
-        assert call["payload"]["query"] == "cats"
-        assert call["payload"]["allowed_domains"] == ["a.com"]
-        assert call["payload"]["max_uses"] == 8
+        payload, operation_key, semantics = tool.service_calls[0]
+        assert isinstance(payload, WebSearchPayload)
+        assert operation_key == "query"
+        assert semantics is ServiceExecutionSemantics.PURE
+        assert payload.query == "cats"
+        assert payload.allowed_domains == ("a.com",)
+        assert payload.max_uses == 8
 
     def test_num_results_caps_returned_links(self):
         # num_results truncates the hit list client-side; it does not change how
@@ -101,7 +104,7 @@ class TestDegradation:
 
 class TestValidation:
     def test_empty_query_rejected(self):
-        from mote.runtime.errors import ToolValidationError
+        from mote.contracts.tool.errors import ToolValidationError
 
         tool = _tool()
         with pytest.raises(ToolValidationError, match="Missing query"):
@@ -110,7 +113,7 @@ class TestValidation:
         assert tool.service_calls == []
 
     def test_allowed_and_blocked_mutually_exclusive(self):
-        from mote.runtime.errors import ToolValidationError
+        from mote.contracts.tool.errors import ToolValidationError
 
         tool = _tool()
         with pytest.raises(ToolValidationError, match="Cannot specify both"):

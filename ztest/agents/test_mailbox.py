@@ -27,7 +27,7 @@ def make_mail(author: str, recipient: str, content: str, trigger_turn: bool) -> 
 
 
 def test_mailbox_data_event_set_on_enqueue():
-    mailbox = Mailbox()
+    mailbox = Mailbox("agent-1")
     assert mailbox.empty()
     assert not mailbox._data_event.is_set()
     mailbox.enqueue_communication(make_mail("/root", "/root/worker", "one", False))
@@ -36,7 +36,7 @@ def test_mailbox_data_event_set_on_enqueue():
 
 
 def test_mailbox_drains_in_delivery_order():
-    mailbox = Mailbox()
+    mailbox = Mailbox("agent-1")
     mailbox.enqueue_communication(make_mail("/root", "/root/worker", "one", False))
     mailbox.enqueue_communication(make_mail("/root/worker", "/root", "two", True))
 
@@ -50,7 +50,7 @@ def test_mailbox_drains_in_delivery_order():
 
 
 def test_mailbox_tracks_pending_trigger_turn():
-    mailbox = Mailbox()
+    mailbox = Mailbox("agent-1")
     mailbox.enqueue_communication(make_mail("/root", "/root/worker", "queued", False))
     assert not mailbox.has_trigger_turn()
     mailbox.enqueue_communication(make_mail("/root", "/root/worker", "wake", True))
@@ -60,7 +60,7 @@ def test_mailbox_tracks_pending_trigger_turn():
 def test_enqueue_raw_message_modes():
     from mote.contracts.conversation import UserMessage
 
-    mailbox = Mailbox()
+    mailbox = Mailbox("agent-1")
     mailbox.enqueue(UserMessage("queued"), mode=DeliveryMode.QUEUE_ONLY)
     assert not mailbox.has_trigger_turn()
     mailbox.enqueue(UserMessage("wake"), mode=DeliveryMode.TRIGGER_TURN)
@@ -68,10 +68,10 @@ def test_enqueue_raw_message_modes():
 
 
 def test_dump_load_roundtrip():
-    mailbox = Mailbox()
+    mailbox = Mailbox("agent-1")
     mailbox.enqueue_communication(make_mail("/root", "/root/worker", "one", False))
     mailbox.enqueue_communication(make_mail("/root/worker", "/root", "two", True))
-    restored = Mailbox.load(mailbox.dump())
+    restored = Mailbox.load(mailbox.dump(), expected_owner_agent_id="agent-1")
     drained = restored.drain_for_turn()
     assert [m.content for m in drained] == ["one", "two"]
     assert restored.has_trigger_turn() is False  # drained already
@@ -80,7 +80,7 @@ def test_dump_load_roundtrip():
 def test_mailbox_deduplicates_pending_output_publication():
     from mote.contracts.conversation import UserMessage
 
-    mailbox = Mailbox()
+    mailbox = Mailbox("agent-1")
     first = UserMessage(content="result")
     first.metadata["output_publication_id"] = "pub-1"
     retry = UserMessage(content="result retry")
@@ -94,7 +94,7 @@ def test_mailbox_deduplicates_pending_output_publication():
 
 @pytest.mark.asyncio
 async def test_wait_for_data():
-    mailbox = Mailbox()
+    mailbox = Mailbox("agent-1")
 
     async def producer():
         await asyncio.sleep(0.01)

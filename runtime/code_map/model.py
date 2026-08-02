@@ -5,11 +5,9 @@ tree-sitter, …) and the store / facade. They carry no ``ast`` (nor tree-sitter
 dependency — a provider parses a file into these rows and the rest of CodeMap
 never learns which language produced them.
 
-Split out of :mod:`~mote.runtime.code_map.extractor` so the multi-language
-provider seam (:mod:`~mote.runtime.code_map.providers`) and the store can share
-one neutral model without importing the Python-specific extractor. The extractor
-re-exports every name here for backwards compatibility, so ``from ...extractor
-import Symbol`` keeps working.
+The multi-language provider seam (:mod:`~mote.runtime.code_map.providers`) and
+the store import this authoritative neutral model without importing the
+Python-specific extractor.
 """
 
 from __future__ import annotations

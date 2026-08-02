@@ -24,6 +24,7 @@ Leaf module: imports only stdlib + ``cryptography``. It has zero knowledge of th
 event infrastructure, the config loader, or the store — the store depends on it, never the
 reverse.
 """
+
 from __future__ import annotations
 
 import os
@@ -32,6 +33,9 @@ from pathlib import Path
 from typing import Callable, Optional, Protocol, runtime_checkable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from filelock import FileLock
+
+from mote.runtime.persistence.atomic import atomic_write
 
 #: AES-256 key length in bytes.
 _KEY_BYTES = 32
@@ -52,9 +56,8 @@ class VaultCipher(Protocol):
     def decrypt(self, token: bytes) -> bytes:
         """Recover the plaintext from a token produced by :meth:`encrypt`.
 
-        Raises on a wrong key or a tampered/short token — the store treats any
-        such failure as an empty vault (fail-open), so a corrupt file never
-        bricks a turn; it just means fewer known secrets.
+        Raises on a wrong key or a tampered/short token. The store propagates
+        that failure and refuses to operate with incomplete redaction state.
         """
         ...
 
@@ -129,25 +132,24 @@ class KeyFileProvider:
         wrong-length) file is (re)generated with ``os.urandom`` and chmod-ed to
         ``0600`` so the secret-decrypting key is owner-only.
         """
-        try:
-            existing = self._path.read_bytes()
-            if len(existing) == _KEY_BYTES:
-                return existing
-        except OSError:
-            pass
-        return self._generate()
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self._path.with_name(self._path.name + ".lock")
+        with FileLock(str(lock_path)):
+            try:
+                existing = self._path.read_bytes()
+            except FileNotFoundError:
+                return self._generate()
+            except OSError as exc:
+                raise RuntimeError("vault key could not be read") from exc
+            if len(existing) != _KEY_BYTES:
+                raise ValueError("vault key file has an invalid length")
+            if self._path.stat().st_mode & 0o077:
+                raise PermissionError("vault key file permissions are not owner-only")
+            return existing
 
     def _generate(self) -> bytes:
         key = os.urandom(_KEY_BYTES)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        # Create restricted from the start: open with 0600 rather than write-then-chmod
-        # so the key is never briefly world-readable on disk.
-        fd = os.open(str(self._path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, key)
-        finally:
-            os.close(fd)
-        os.chmod(self._path, 0o600)
+        atomic_write(self._path, key, fsync=True, mode=0o600)
         return key
 
 

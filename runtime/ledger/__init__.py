@@ -7,7 +7,13 @@ tool-effect idempotency, hunk change-attribution) subclass
 
 from __future__ import annotations
 
-from mote.runtime.ledger.append_ledger import AppendOnlyLedger, LedgerRecord
+from mote.runtime.ledger.append_ledger import (
+    AppendOnlyLedger,
+    LedgerCommitReceipt,
+    LedgerCorruptionError,
+    LedgerPersistenceError,
+    LedgerRecord,
+)
 from mote.runtime.ledger.run_journal import (
     COMPLETED,
     FAILED,
@@ -17,6 +23,7 @@ from mote.runtime.ledger.run_journal import (
     KIND_TOOL,
     STARTED,
     RunJournal,
+    RunJournalLifecycleError,
     StepRecord,
     UnsupportedRunJournalRecord,
     run_journaled_step,
@@ -25,9 +32,13 @@ from mote.runtime.ledger.run_journal import (
 __all__ = [
     "AppendOnlyLedger",
     "LedgerRecord",
+    "LedgerCommitReceipt",
+    "LedgerCorruptionError",
+    "LedgerPersistenceError",
     "RunJournal",
     "StepRecord",
     "UnsupportedRunJournalRecord",
+    "RunJournalLifecycleError",
     "run_journaled_step",
     "STARTED",
     "COMPLETED",

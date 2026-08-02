@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Mapping, Optional
 
-from mote.runtime.errors.classification import _parse_retry_after
+from mote.runtime.resilience.error_classification import _parse_retry_after
 
 
 def _to_int(value: Optional[str]) -> Optional[int]:

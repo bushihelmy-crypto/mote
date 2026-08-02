@@ -3,10 +3,9 @@
 from xml.sax.saxutils import escape
 
 from mote.contracts.task.models import (
+    CompletedArtifactTaskResultPointer,
     CompletedInlineTaskResultPointer,
-    CompletedStoredTaskResultPointer,
     FailedTaskResultPointer,
-    PausedTaskResultPointer,
     TaskResultPointer,
 )
 
@@ -20,12 +19,10 @@ def render_task_result_pointer(pointer: TaskResultPointer) -> str:
     ]
     if isinstance(pointer, CompletedInlineTaskResultPointer):
         lines.extend(("<status>completed</status>", f"<result>{escape(pointer.output.content)}</result>"))
-    elif isinstance(pointer, CompletedStoredTaskResultPointer):
-        lines.extend(("<status>completed</status>", f"<result-ref>{escape(pointer.output.locator)}</result-ref>"))
+    elif isinstance(pointer, CompletedArtifactTaskResultPointer):
+        lines.extend(("<status>completed</status>", f"<result-ref>{escape(pointer.output.readable)}</result-ref>"))
     elif isinstance(pointer, FailedTaskResultPointer):
         lines.extend(("<status>failed</status>", f"<error>{escape(pointer.error.message)}</error>"))
-    elif isinstance(pointer, PausedTaskResultPointer):
-        lines.extend(("<status>paused</status>", f"<pause-reason>{escape(pointer.reason.message)}</pause-reason>"))
     else:
         raise TypeError(f"unsupported task result pointer: {type(pointer).__name__}")
     lines.append("</task-result>")

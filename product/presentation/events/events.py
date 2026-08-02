@@ -31,7 +31,9 @@ from typing import Any, ClassVar, List, Optional
 
 from pydantic import BaseModel
 
+from mote.contracts.activity import ActivityKind, ActivityNodeState, ActivityOutcome, ActivityTopology
 from mote.contracts.artifact import ArtifactRef
+from mote.contracts.tool.identity import ToolInvocationIdentity
 
 # Discriminator constants (aligned with ``AgentEvent.name`` where 1:1).
 MESSAGE_BLOCK_STARTED = "message_block_started"
@@ -63,6 +65,7 @@ ACTIVITY_COMPLETED = "activity_completed"
 OUTPUT_SNAPSHOT = "output_snapshot"
 OUTPUT_SNAPSHOT_INVALIDATED = "output_snapshot_invalidated"
 OUTPUT_COMMITTED = "output_committed"
+ASYNC_WORK_OBSERVED = "async_work_observed"
 
 # ``ToolCallCompleted.result_kind`` values — the neutral signal telling a consumer
 # *which* renderer a tool result wants. The projector decides this once; consumers
@@ -199,12 +202,12 @@ class ToolCallStarted(ViewEvent):
     """
 
     kind: ClassVar[str] = TOOL_CALL_STARTED
+    identity: ToolInvocationIdentity
     tool_name: str = ""
     title: str = ""
     headline: str = ""
     body: Optional[str] = None
     lexer: Optional[str] = None
-    tool_use_id: Optional[str] = None
 
 
 class ToolCallCompleted(ViewEvent):
@@ -219,10 +222,10 @@ class ToolCallCompleted(ViewEvent):
     """
 
     kind: ClassVar[str] = TOOL_CALL_COMPLETED
+    identity: ToolInvocationIdentity
     tool_name: str = ""
     ok: bool = True
     summary: str = ""
-    tool_use_id: Optional[str] = None
     result_kind: str = RESULT_KIND_PLAIN
     detail: Optional[str] = None
     lexer: Optional[str] = None
@@ -256,20 +259,20 @@ class MediaBlock(ViewEvent):
     """
 
     kind: ClassVar[str] = MEDIA_BLOCK
+    identity: ToolInvocationIdentity
     media_kind: str = "image"  # image | pdf | audio (reserved)
     ref: str = ""  # path / URL / data-uri
     mime: Optional[str] = None
     artifact: Optional[ArtifactRef] = None
     alt: str = ""  # degrade text when the host has no media capability
-    tool_use_id: Optional[str] = None
 
 
 class ArtifactBlock(ViewEvent):
     """A durable non-media tool product identified by an opaque ArtifactRef."""
 
     kind: ClassVar[str] = ARTIFACT_BLOCK
+    identity: ToolInvocationIdentity
     artifact: ArtifactRef
-    tool_use_id: Optional[str] = None
 
 
 class FileDiffBlock(ViewEvent):
@@ -285,10 +288,10 @@ class FileDiffBlock(ViewEvent):
     """
 
     kind: ClassVar[str] = FILE_DIFF_BLOCK
+    identity: ToolInvocationIdentity
     path: str = ""  # absolute path of the changed file (dest after a move)
     old: str = ""  # full content before ("" when created)
     new: str = ""  # full content after ("" when deleted)
-    tool_use_id: Optional[str] = None
 
 
 class TaskProgress(ViewEvent):
@@ -298,6 +301,13 @@ class TaskProgress(ViewEvent):
     stage: str = ""
     status: str = ""
     detail: str = ""
+
+
+class AsyncWorkObserved(ViewEvent):
+    """A live immutable projection; local variants are never replayed."""
+
+    kind: ClassVar[str] = ASYNC_WORK_OBSERVED
+    observation_json: str
 
 
 class Notice(ViewEvent):
@@ -491,17 +501,16 @@ class ActivityStarted(ViewEvent):
     The activity is identified by its ``scope`` (inherited from the base): the
     reducer keys an open activity by that ``ScopePath``, and every later scoped
     ``TaskProgress`` / tool event / ``ActivityCompleted`` with the same head
-    updates the same subtree. ``topology`` is a neutral pre-computed structure
-    (``{"nodes": [{"id","kind","label"}...], "edges": [{"from","to","guard"}...]}``
-    — plain dicts, so the contract layer imports nothing from bggraph); the L4
+    updates the same subtree. ``topology`` is the canonical neutral activity
+    contract; the L4
     ``activity_topology`` renderer turns it into a tree/graph. It is display-only:
     a live "which node is running" overlay rides on later ``TaskProgress`` events.
     """
 
     kind: ClassVar[str] = ACTIVITY_STARTED
-    activity_kind: str = ""  # "graph" | "agent" | "task"
+    activity_kind: ActivityKind = ActivityKind.GRAPH
     label: str = ""
-    topology: Optional[dict[str, Any]] = None
+    topology: ActivityTopology | None = None
 
 
 class ActivityCompleted(ViewEvent):
@@ -511,15 +520,14 @@ class ActivityCompleted(ViewEvent):
     own truncation): ``node_states`` and ``outcome`` fully describe the terminal
     render read straight off the graph's terminal state, so a replayed / resumed
     transcript (which has only this event, never the live ``TaskProgress`` stream)
-    renders the full outcome. ``node_states`` is a list of neutral dicts
-    (``{"id","kind","label","status","attempts","error","args"}``); ``outcome`` is
-    ``"success"`` | ``"failed"``; ``summary`` is a human one-liner. The L4
+    renders the full outcome. ``node_states`` and ``outcome`` retain their
+    canonical typed contracts; ``summary`` is a human one-liner. The L4
     ``activity_outcome`` renderer turns them into the final ✓/⊘/✗ tree.
     """
 
     kind: ClassVar[str] = ACTIVITY_COMPLETED
-    outcome: str = "success"  # success | failed
-    node_states: List[dict[str, Any]] = []
+    outcome: ActivityOutcome = ActivityOutcome.SUCCESS
+    node_states: tuple[ActivityNodeState, ...] = ()
     summary: str = ""
 
 
@@ -541,6 +549,7 @@ __all__ = [
     "ArtifactBlock",
     "FileDiffBlock",
     "TaskProgress",
+    "AsyncWorkObserved",
     "Notice",
     "ErrorRaised",
     "QuestionAsked",
@@ -566,6 +575,7 @@ __all__ = [
     "OUTPUT_SNAPSHOT",
     "OUTPUT_SNAPSHOT_INVALIDATED",
     "OUTPUT_COMMITTED",
+    "ASYNC_WORK_OBSERVED",
     "TOOL_CALL_STARTED",
     "TOOL_CALL_COMPLETED",
     "MEDIA_BLOCK",

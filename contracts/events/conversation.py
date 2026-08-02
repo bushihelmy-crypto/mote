@@ -99,3 +99,4 @@ class PostCompactEvent:
 
 
 MODEL_CONTEXT_REBUILT_EVENTS: tuple[type, ...] = (PostCompactEvent, HistoryEditedEvent)
+ModelContextRebuiltEvent = PostCompactEvent | HistoryEditedEvent

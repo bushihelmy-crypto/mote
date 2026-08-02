@@ -6,13 +6,13 @@ The interactive approval round-trip is *structured*: the engine emits an
 front-end (``PortHumanChannel``) drives a port's structured ``decide_approval``
 selector, so it never needs prose.
 
-This module serves only the *fallback* console path — a bare ``MoteEnv`` backed
-by ``get_human_input`` (a text stdin), which has no structured selector. There
+This module serves only the headless text-input adapter, which has no structured selector. There
 we must render the request to a line the human can read and parse their typed
 reply back into a choice. The wording here is intentionally English: this path
 is the developer/plumbing console (tests, headless), not the localized CLI —
 the human-facing localized surface is the port selector in ``cli`` under i18n.
 """
+
 from __future__ import annotations
 
 from mote.contracts.interaction import ApprovalChoice, ApprovalRequest

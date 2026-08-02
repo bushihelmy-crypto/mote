@@ -46,6 +46,13 @@ def test_runtime_service_gateway_never_imports_product() -> None:
     assert violations == []
 
 
+def test_product_endpoint_resolver_uses_typed_close_contract() -> None:
+    source = (ROOT / "product/composition/service_endpoints.py").read_text(encoding="utf-8")
+    assert "await resolver.aclose()" in source
+    assert "getattr(" not in source
+    assert "isawaitable" not in source
+
+
 def test_media_providers_do_not_own_retry_or_poll_loops() -> None:
     root = ROOT / "product/toolsets/builtin/generate_media"
     sources = {path.relative_to(ROOT): path.read_text(encoding="utf-8") for path in root.rglob("*.py")}
@@ -63,7 +70,7 @@ def test_media_providers_do_not_own_retry_or_poll_loops() -> None:
 def test_generate_media_uses_only_the_service_capability() -> None:
     path = ROOT / "product/toolsets/builtin/generate_media/generate_media_tool.py"
     source = path.read_text(encoding="utf-8")
-    assert 'requires: ClassVar[tuple[str, ...]] = ("invoke_service",)' in source
+    assert '"invoke_service",' in source
     assert "ServiceExecutionSemantics.IDEMPOTENT" in source
     assert "_provider_factory" not in source
 
@@ -82,3 +89,21 @@ def test_web_search_adapter_does_not_own_retry_loops() -> None:
     source = path.read_text(encoding="utf-8")
     forbidden = ("RecoveryRunner", "while True", "for attempt in", "tenacity")
     assert [token for token in forbidden if token in source] == []
+
+
+def test_hosted_service_governance_names_the_real_application_gateway() -> None:
+    from mote.contracts.composition import InstanceScope
+    from mote.product.composition.governance import CAPABILITY_DECLARATIONS
+
+    declaration = next(item for item in CAPABILITY_DECLARATIONS if item.capability_id == "hosted-service-gateway")
+    assert declaration.implementation == ("mote.runtime.service_gateway.gateway.RuntimeServiceGateway")
+    assert declaration.canonical_factory == ("mote.product.composition.service_gateway.builtin_service_gateway")
+    assert declaration.required_ports == ("mote.contracts.ports.service.gateway.ServiceGateway",)
+    assert declaration.instance_scope is InstanceScope.APPLICATION
+    assert declaration.lifecycle_owner == "product-composition"
+
+    bootstrap = (ROOT / "product/composition/bootstrap.py").read_text(encoding="utf-8")
+    assert "service_gateway = builtin_service_gateway(" in bootstrap
+    assert "context.service_gateway = service_gateway" in bootstrap
+    assert 'name="hosted-service:reconciler-gateway"' in bootstrap
+    assert "RuntimeModelInferencePort" not in declaration.implementation

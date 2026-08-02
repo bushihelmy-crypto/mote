@@ -34,6 +34,7 @@ from typing import List, Optional
 from mote.contracts.agent import BaseAgent
 from mote.contracts.model.topology import SemanticRoute
 from mote.contracts.model.topology_codec import decode_route_id
+from mote.product.extensions.sources import ExtensionKind, ExtensionSource, ExtensionSourcePolicy
 from mote.product.paths import mote_project_dirs, user_mote_dir
 from mote.product.skills.markdown import MarkdownMetaParser
 from mote.runtime.agent.role import Role
@@ -63,7 +64,13 @@ def _normalize_tools(raw) -> Optional[List[str]]:
     return None
 
 
-def _build_agent_class(name: str, meta: dict, body: str) -> Optional[type[BaseAgent]]:
+def _build_agent_class(
+    name: str,
+    meta: dict,
+    body: str,
+    *,
+    source: ExtensionSource,
+) -> Optional[type[BaseAgent]]:
     """Construct a ``(BaseAgent, Role)`` subclass from parsed frontmatter + body.
 
     Returns None when the definition is invalid (missing name/description). The
@@ -79,10 +86,44 @@ def _build_agent_class(name: str, meta: dict, body: str) -> Optional[type[BaseAg
     aliases_raw = meta.get("aliases")
     aliases = _normalize_tools(aliases_raw) or []
     instruction = body.strip()
+    schema_kwargs: dict = {
+        "name": name,
+        "instruction": instruction,
+        "desc": description,
+    }
+    if tool_list is not None:
+        schema_kwargs["tools"] = list(tool_list)
+    if model:
+        schema_kwargs["model_route"] = (
+            decode_route_id(model)
+            if model == "default" or model.startswith(("task:", "semantic:"))
+            else SemanticRoute(name=model)
+        )
+    approved_schema = RoleSchema(**schema_kwargs)
+    identity_payload = {
+        "schema": "mote.markdown-agent-definition/v1",
+        "source": {
+            "scope": source.scope.value,
+            "canonical_path": str(source.canonical_path),
+            "device": source.device,
+            "inode": source.inode,
+            "content_digest": source.content_digest,
+            "approval_principal": source.approval_principal,
+        },
+    }
+    identity = json.dumps(
+        identity_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    definition_digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    definition_id = f"mote.agent.markdown.v1.sha256-{definition_digest}"
 
     class _MarkdownAgent(BaseAgent, Role):
-        role_type_id = f"mote.agent.markdown.{name}.v1"
-        replace_role_type_registration = True
+        # Markdown definitions are Application-scoped declarations, never
+        # process-global polymorphic registrations.
+        role_type_id = None
         agent_name = name
         # class-level so the Agent tool's ``custom_schema`` listing can read it
         # without instantiating (getattr(agent_cls, "tools")).
@@ -94,41 +135,44 @@ def _build_agent_class(name: str, meta: dict, body: str) -> Optional[type[BaseAg
             parent_session_id: Optional[str] = None,
             wiring=None,
             config=None,
-            **_ignored,
+            role_schema: RoleSchema | None = None,
+            state: RoleState | None = None,
         ):
-            schema_kwargs: dict = {
-                "name": name,
-                "instruction": instruction,
-                "desc": description,
-            }
-            if tool_list is not None:
-                schema_kwargs["tools"] = list(tool_list)
-            if model:
-                schema_kwargs["model_route"] = (
-                    decode_route_id(model)
-                    if model == "default" or model.startswith(("task:", "semantic:"))
-                    else SemanticRoute(name=model)
-                )
-            schema = RoleSchema(**schema_kwargs)
-            state = RoleState(parent_session_id=parent_session_id)
+            schema = approved_schema.model_copy(deep=True)
+            if role_schema is not None and role_schema != schema:
+                raise ValueError("Markdown Agent snapshot definition does not match approved source")
+            restored_state = state or RoleState(parent_session_id=parent_session_id)
+            if state is not None and parent_session_id is not None and state.parent_session_id != parent_session_id:
+                raise ValueError("Markdown Agent parent identity conflicts with restored state")
             Role.__init__(
                 self,
                 role_schema=schema,
-                state=state,
+                state=restored_state,
                 wiring=wiring,
                 config=config,
             )
 
+        @property
+        def residency_definition_id(self) -> str:
+            return definition_id
+
     _MarkdownAgent.aliases = list(aliases)
     _MarkdownAgent.description = description
-    identity = json.dumps(meta, ensure_ascii=False, sort_keys=True, default=str) + "\n" + instruction
-    _MarkdownAgent.definition_version = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    # Spawn catalog and Session/Residency carry the exact same opaque identity.
+    _MarkdownAgent.definition_version = definition_id
+    _MarkdownAgent.definition_id = definition_id
+    _MarkdownAgent.definition_source_path = str(source.canonical_path)
+    _MarkdownAgent.definition_source_digest = source.content_digest
     _MarkdownAgent.__name__ = f"MarkdownAgent_{name}"
     _MarkdownAgent.__qualname__ = _MarkdownAgent.__name__
     return _MarkdownAgent
 
 
-def discover_md_agents(cwd: Optional[Path] = None) -> dict[str, type[BaseAgent]]:
+def discover_md_agents(
+    cwd: Optional[Path],
+    *,
+    source_policy: ExtensionSourcePolicy,
+) -> dict[str, type[BaseAgent]]:
     """Discover ``.mote/agents/*.md`` agents, low→high precedence (closer wins).
 
     Scans ``~/.mote/agents`` then the ``<dir>/.mote/agents`` git-root→cwd walk;
@@ -143,26 +187,21 @@ def discover_md_agents(cwd: Optional[Path] = None) -> dict[str, type[BaseAgent]]
     ]
 
     found: dict[str, type[BaseAgent]] = {}
-    seen_roots: set[str] = set()
+    seen_sources: set[tuple[int, int]] = set()
     for root in dirs:
         if not root.is_dir():
             continue
-        try:
-            key = str(root.resolve())
-        except OSError:
-            key = str(root)
-        if key in seen_roots:
-            continue
-        seen_roots.add(key)
-        for md in sorted(root.glob("*.md")):
-            try:
-                doc = parser.parse(md)
-            except Exception as exc:  # noqa: BLE001 — a bad file is skipped, not fatal
-                logger.warning(f"md-agent: failed to parse {md}: {exc}")
+        sources = source_policy.admitted_files(ExtensionKind.AGENT, sorted(root.glob("*.md")))
+        for source in sources:
+            identity = (source.device, source.inode)
+            if identity in seen_sources:
                 continue
+            seen_sources.add(identity)
+            md = source.canonical_path
+            doc = parser.parse_text(source.content.decode("utf-8"), source_path=md)
             meta = doc.metadata or {}
             name = str(meta.get("name", "") or md.stem).strip()
-            agent_cls = _build_agent_class(name, meta, doc.content)
+            agent_cls = _build_agent_class(name, meta, doc.content, source=source)
             if agent_cls is not None:
                 found[name] = agent_cls  # higher-precedence dir overrides
     return found

@@ -7,11 +7,14 @@ mtime), persisted user secrets, in-memory session secrets; encrypted
 persist/reload; section-isolated writes (a config reseed never clobbers user
 secrets); and fail-closed reads for damaged protection state.
 """
+
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import stat
+import threading
 
 import pytest
 
@@ -25,6 +28,10 @@ def _cipher() -> AesGcmCipher:
     return AesGcmCipher(bytes(range(32)))
 
 
+def _is_secret(path: str) -> bool:
+    return "key" in path or "secret" in path or "token" in path or "password" in path
+
+
 def _write_config(path, api_key: str) -> None:
     path.write_text(f"llm:\n  api_key: {api_key}\n  model: gpt-4o\nserver:\n  port: 8080\n")
 
@@ -35,26 +42,32 @@ def _bump_mtime(path) -> None:
     os.utime(path, (st.st_atime + 2, st.st_mtime + 2))
 
 
+def _write_secret_process(vault_path: str, key: str, value: str, barrier) -> None:
+    store = SecretStore(_cipher(), vault_path=vault_path)
+    barrier.wait()
+    store.add_user_secret(key, value)
+
+
 class TestConfigHarvest:
     def test_construction_is_io_free(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         vault = tmp_path / "vault.json"
         _write_config(cfg, _API_KEY)
 
-        SecretStore(_cipher(), vault_path=vault, config_path=cfg)
+        SecretStore(_cipher(), vault_path=vault, config_path=cfg, is_secret=_is_secret)
 
         assert not vault.exists()
 
     def test_config_secrets_seeded_into_map(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         _write_config(cfg, _API_KEY)
-        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg)
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg, is_secret=_is_secret)
         assert store.as_map() == {_API_KEY: "<secret:llm.api_key>"}
 
     def test_nested_secret_leaf_detected(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("langfuse:\n  secret_key: lf-secretkey-abcdef123456\n")
-        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg)
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg, is_secret=_is_secret)
         assert "<secret:langfuse.secret_key>" in store.as_map().values()
 
     def test_no_config_path_means_no_config_tier(self, tmp_path):
@@ -103,7 +116,7 @@ class TestSectionIsolation:
         cfg = tmp_path / "config.yaml"
         _write_config(cfg, _API_KEY)
         vault = tmp_path / "vault.json"
-        store = SecretStore(_cipher(), vault_path=vault, config_path=cfg)
+        store = SecretStore(_cipher(), vault_path=vault, config_path=cfg, is_secret=_is_secret)
         store.add_user_secret("mine", "my-persisted-secret-value")
 
         # Edit config → reseed config section; user section must survive.
@@ -114,12 +127,87 @@ class TestSectionIsolation:
         assert "sk-proj-DIFFERENTsecret999" in m  # new config value present
         assert _API_KEY not in m  # old config value gone
 
+    def test_two_store_instances_merge_concurrent_named_secret_updates(self, tmp_path):
+        vault = tmp_path / "vault.json"
+        stores = (
+            SecretStore(_cipher(), vault_path=vault),
+            SecretStore(_cipher(), vault_path=vault),
+        )
+        barrier = threading.Barrier(2)
+
+        def write(index: int) -> None:
+            barrier.wait()
+            stores[index].add_user_secret(f"key-{index}", f"secret-{index}")
+
+        threads = [threading.Thread(target=write, args=(index,)) for index in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+
+        restored = SecretStore(_cipher(), vault_path=vault)
+        assert restored.get("key-0") == "secret-0"
+        assert restored.get("key-1") == "secret-1"
+
+    def test_two_processes_concurrently_create_and_merge_first_vault(self, tmp_path):
+        vault = tmp_path / "vault.json"
+        context = multiprocessing.get_context("fork")
+        barrier = context.Barrier(2)
+        processes = [
+            context.Process(
+                target=_write_secret_process,
+                args=(str(vault), f"process-{index}", f"value-{index}", barrier),
+            )
+            for index in range(2)
+        ]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=10)
+            assert process.exitcode == 0
+
+        restored = SecretStore(_cipher(), vault_path=vault)
+        assert restored.get("process-0") == "value-0"
+        assert restored.get("process-1") == "value-1"
+
+    def test_config_reseed_and_named_upload_do_not_clobber_sections(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        _write_config(cfg, _API_KEY)
+        vault = tmp_path / "vault.json"
+        config_store = SecretStore(_cipher(), vault_path=vault, config_path=cfg, is_secret=_is_secret)
+        config_store.prepare()
+        upload_store = SecretStore(_cipher(), vault_path=vault)
+        _write_config(cfg, "rotated-config-secret")
+        _bump_mtime(cfg)
+        barrier = threading.Barrier(2)
+
+        def reseed() -> None:
+            barrier.wait()
+            config_store.refresh()
+
+        def upload() -> None:
+            barrier.wait()
+            upload_store.add_user_secret("uploaded", "uploaded-secret")
+
+        threads = [threading.Thread(target=reseed), threading.Thread(target=upload)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+
+        restored = SecretStore(_cipher(), vault_path=vault)
+        values = restored.as_map()
+        assert "rotated-config-secret" in values
+        assert "uploaded-secret" in values
+
 
 class TestHotReload:
     def test_config_edit_reseeds_without_restart(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         _write_config(cfg, _API_KEY)
-        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg)
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg, is_secret=_is_secret)
         assert _API_KEY in store.as_map()
 
         new_key = "sk-proj-rotatedKEY-0987654321"
@@ -212,7 +300,13 @@ class TestSecretsConfigFile:
         sc = tmp_path / "secrets_config.json"
         self._write_sc(sc, {"file-key": "file-secret-value-123"})
         vault = tmp_path / "vault.json"
-        store = SecretStore(_cipher(), vault_path=vault, config_path=cfg, secrets_config_file=sc)
+        store = SecretStore(
+            _cipher(),
+            vault_path=vault,
+            config_path=cfg,
+            secrets_config_file=sc,
+            is_secret=_is_secret,
+        )
         store.add_user_secret("user-key", "user-secret-value-456")
 
         m = store.as_map()
@@ -255,6 +349,7 @@ class TestLabels:
             vault_path=tmp_path / "vault.json",
             config_path=cfg,
             secrets_config_file=sc,
+            is_secret=_is_secret,
         )
         store.add_user_secret("gh_token", "ghp_uservalue123")
         labels = store.labels()
@@ -309,6 +404,43 @@ class TestFailClosed:
     def test_malformed_config_raises(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("this: : : not: valid: yaml: [")
-        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg)
+        store = SecretStore(_cipher(), vault_path=tmp_path / "vault.json", config_path=cfg, is_secret=_is_secret)
         with pytest.raises(ValueError, match="malformed"):
             store.as_map()
+
+    @pytest.mark.parametrize(
+        "payload",
+        (
+            {
+                "schema": "mote.secret-vault/v2",
+                "schema_version": 2,
+                "revision": 1,
+                "sections": {"config": {}, "file": {}, "secrets": {}},
+            },
+            {
+                "schema": "mote.secret-vault/v1",
+                "schema_version": 1,
+                "revision": 1,
+                "sections": {"config": {}, "file": {}, "secrets": {}, "future": {}},
+            },
+            {
+                "schema": "mote.secret-vault/v1",
+                "schema_version": 1,
+                "revision": 1,
+                "sections": {"config": {"bad": 1}, "file": {}, "secrets": {}},
+            },
+        ),
+    )
+    def test_unknown_schema_extra_section_and_non_string_value_fail_closed(self, tmp_path, payload):
+        vault = tmp_path / "vault.json"
+        vault.write_bytes(_cipher().encrypt(json.dumps(payload).encode("utf-8")))
+        with pytest.raises(ValueError):
+            SecretStore(_cipher(), vault_path=vault).prepare()
+
+    def test_noncanonical_vault_fails_closed(self, tmp_path):
+        vault = tmp_path / "vault.json"
+        noncanonical = {"config": {}, "file": {}, "secrets": {"old": "secret"}}
+        vault.write_bytes(_cipher().encrypt(json.dumps(noncanonical).encode("utf-8")))
+        store = SecretStore(_cipher(), vault_path=vault)
+        with pytest.raises(ValueError, match="envelope"):
+            store.prepare()

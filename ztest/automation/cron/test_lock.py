@@ -1,64 +1,85 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""Tests for SchedulerLock — O_EXCL single-writer lease with stale recovery."""
+"""Focused guarantees for the OS-held, monotonic Cron scheduler lease."""
+
+from __future__ import annotations
 
 import json
-import os
 
-from mote.orchestration.automation.cron.lock import SchedulerLock
+import pytest
 
-
-def test_acquire_creates_lock_file(tmp_path):
-    lock = SchedulerLock("sess-a", base_dir=str(tmp_path))
-    assert lock.acquire() is True
-    assert lock.is_held is True
-    assert lock.path.exists()
-    data = json.loads(lock.path.read_text())
-    assert data["session_id"] == "sess-a"
-    assert data["pid"] == os.getpid()
+from mote.contracts.clock import UNIX_UTC_CLOCK, AbsoluteInstant, ClockIdentity, MonotonicMark
+from mote.orchestration.automation.cron.lock import SchedulerFenceLost, SchedulerLock, SchedulerLockCorruptionError
 
 
-def test_release_removes_lock(tmp_path):
-    lock = SchedulerLock("sess-a", base_dir=str(tmp_path))
-    lock.acquire()
-    lock.release()
+class FakeClock:
+    def __init__(self) -> None:
+        self.epoch_nanoseconds = 1_000
+
+    @property
+    def durable_clock_identity(self) -> ClockIdentity:
+        return UNIX_UTC_CLOCK
+
+    def now(self) -> AbsoluteInstant:
+        return AbsoluteInstant(1, UNIX_UTC_CLOCK, self.epoch_nanoseconds)
+
+    def monotonic_mark(self) -> MonotonicMark:
+        return MonotonicMark("cron-lock-test", 0)
+
+
+def test_only_one_owner_acquires_even_with_same_session_identity(tmp_path) -> None:
+    first = SchedulerLock("same", base_dir=str(tmp_path), clock_source=FakeClock())
+    second = SchedulerLock("same", base_dir=str(tmp_path), clock_source=FakeClock())
+
+    fence = first.acquire()
+
+    assert fence is not None
+    assert first.acquire() == fence
+    assert second.acquire() is None
+    assert second.is_held is False
+    first.release()
+
+
+def test_release_preserves_epoch_and_reacquire_advances_fence(tmp_path) -> None:
+    first = SchedulerLock("owner-a", base_dir=str(tmp_path), clock_source=FakeClock())
+    first_fence = first.acquire()
+    assert first_fence is not None
+    first.refresh()
+    first.release()
+
+    released = json.loads(first.path.read_text(encoding="utf-8"))
+    assert released["status"] == "released"
+    assert released["epoch"] == first_fence.epoch
+
+    second = SchedulerLock("owner-b", base_dir=str(tmp_path), clock_source=FakeClock())
+    second_fence = second.acquire()
+    assert second_fence is not None
+    assert second_fence.epoch == first_fence.epoch + 1
+    assert second_fence.token != first_fence.token
+    second.release()
+
+
+def test_stale_owner_cannot_refresh_or_release(tmp_path) -> None:
+    stale = SchedulerLock("owner-a", base_dir=str(tmp_path), clock_source=FakeClock())
+    assert stale.acquire() is not None
+    stale.release()
+
+    current = SchedulerLock("owner-b", base_dir=str(tmp_path), clock_source=FakeClock())
+    assert current.acquire() is not None
+
+    with pytest.raises(SchedulerFenceLost):
+        stale.refresh()
+    with pytest.raises(SchedulerFenceLost):
+        stale.release()
+    assert current.is_held
+    current.release()
+
+
+def test_corrupt_record_fails_closed_and_is_not_replaced(tmp_path) -> None:
+    lock = SchedulerLock("owner", base_dir=str(tmp_path), clock_source=FakeClock())
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    lock.path.write_text("not json", encoding="utf-8")
+
+    with pytest.raises(SchedulerLockCorruptionError):
+        lock.acquire()
+
+    assert lock.path.read_text(encoding="utf-8") == "not json"
     assert lock.is_held is False
-    assert not lock.path.exists()
-
-
-def test_exclusive_blocks_second_live_session(tmp_path):
-    a = SchedulerLock("sess-a", base_dir=str(tmp_path))
-    b = SchedulerLock("sess-b", base_dir=str(tmp_path))
-    assert a.acquire() is True
-    # b sees a live PID (this process) → blocked.
-    assert b.acquire() is False
-    assert b.is_held is False
-
-
-def test_idempotent_reacquire_same_session(tmp_path):
-    a = SchedulerLock("sess-a", base_dir=str(tmp_path))
-    assert a.acquire() is True
-    assert a.acquire() is True  # idempotent
-
-
-def test_stale_pid_recovery(tmp_path):
-    # Write a lock owned by a dead PID.
-    lock_dir = tmp_path
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    stale = SchedulerLock("dead-sess", base_dir=str(tmp_path))
-    dead_pid = 2_000_000_000  # almost certainly not running
-    stale.path.write_text(json.dumps({"session_id": "dead-sess", "pid": dead_pid, "acquired_at": 0}))
-
-    fresh = SchedulerLock("sess-b", base_dir=str(tmp_path))
-    assert fresh.acquire() is True
-    data = json.loads(fresh.path.read_text())
-    assert data["session_id"] == "sess-b"
-    assert data["pid"] == os.getpid()
-
-
-def test_corrupt_lock_treated_as_stale(tmp_path):
-    bad = SchedulerLock("x", base_dir=str(tmp_path))
-    bad.path.parent.mkdir(parents=True, exist_ok=True)
-    bad.path.write_text("not json")
-    fresh = SchedulerLock("sess-b", base_dir=str(tmp_path))
-    assert fresh.acquire() is True

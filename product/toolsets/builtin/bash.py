@@ -6,7 +6,7 @@ dir); it is NOT mutated by the command. A bare ``cd`` inside a command does not
 persist to the next call — to operate in a subdirectory, pass the per-call
 ``workdir`` parameter instead.
 
-aexecute() spawns a fresh subprocess per call (no persistent shell), so a bare
+The governed runner spawns a fresh subprocess per call (no persistent shell), so a bare
 `cd` would not survive across calls regardless; we deliberately do not emulate
 persistence. This mirrors Codex: cwd is passed in explicitly on every spawn, the
 process cwd is never read, and directory scoping is a per-call ``workdir`` arg.
@@ -20,13 +20,15 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar
 
 from mote.contracts.authorization import PermissionDecision
-from mote.runtime.errors import ToolError
-from mote.runtime.process import aexecute
+from mote.contracts.tool.errors import ToolError
+from mote.contracts.tool.result import json_tool_payload
+from mote.runtime.process import AuthorizedShellIntent, ProcessDisposition, run_authorized_shell
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetCwd, GetSandboxRuntime
+from mote.runtime.tools.execution_context import current_authorized_invocation
 from mote.runtime.tools.permission.classifier import classify_command
 from mote.runtime.tools.permission.command_parse import segment_strings
 from mote.runtime.tools.tool_result import ToolResult
@@ -200,11 +202,15 @@ class Bash(BaseTool):
             if not os.path.isdir(run_cwd):
                 raise ToolError(_MSG_WORKDIR_NOT_EXIST.format(workdir=workdir))
         else:
-            run_cwd = base_cwd  # may be None -> aexecute uses the process default
+            run_cwd = base_cwd  # None uses the process default
 
-        # OS-level sandbox: when a runtime is wired, aexecute wraps the command
-        # (bwrap + hardening) and amends the env before spawning. None => the
-        # historical un-sandboxed path.
+        authorization = current_authorized_invocation()
+        if authorization is None or authorization.tool_name != self.name:
+            raise ToolError("Bash command has no active ToolExecutor authorization")
+        authorized_command = authorization.arguments.get("command")
+        if not isinstance(authorized_command, str) or authorized_command != command:
+            raise ToolError("Bash command does not match the active authorization")
+
         runtime = self.get_sandbox_runtime() if self.get_sandbox_runtime is not None else None
 
         # inputs -> env: only build a full env (process env + injected vars) when
@@ -213,22 +219,27 @@ class Bash(BaseTool):
         env = {**os.environ, **_inputs_to_env(inputs)} if inputs else None
 
         try:
-            # return_partial_on_timeout=True always yields the 4-tuple
-            # (rc, stdout, stderr, timed_out); narrow the declared union.
-            rc, stdout, stderr, timed_out = cast(
-                "tuple[int, str, str, bool]",
-                await aexecute(
-                    command,
-                    working_dir=run_cwd,
-                    env=env,
-                    wait=True,
-                    timeout=timeout,
-                    return_partial_on_timeout=True,
-                    sandbox_runtime=runtime,
-                ),
+            result = await run_authorized_shell(
+                AuthorizedShellIntent(command, self.name, authorization.generation),
+                sandbox=runtime,
+                working_dir=run_cwd,
+                env=env,
+                timeout=timeout,
             )
         except Exception as e:
             raise ToolError(_MSG_EXEC_FAILED.format(error=e))
+
+        if result.disposition in {
+            ProcessDisposition.SPAWN_FAILED,
+            ProcessDisposition.SANDBOX_UNAVAILABLE,
+        }:
+            raise ToolError(_MSG_EXEC_FAILED.format(error=result.detail or result.disposition.value))
+        rc = result.exit_code or 0
+        stdout = result.stdout
+        stderr = result.stderr
+        timed_out = result.disposition is ProcessDisposition.TIMED_OUT
+        if result.disposition is ProcessDisposition.SIGNALED:
+            rc = 128 + (result.signal or 0)
 
         output = stdout.rstrip("\n") if stdout else ""
         parts = []
@@ -253,7 +264,7 @@ class Bash(BaseTool):
         if check and rc and not timed_out:
             reason = _MSG_CHECK_FAILED.format(rc=rc)
             return ToolResult(output=f"{reason}\n{text}" if text else reason, success=False)
-        return ToolResult(output=text, data=_structured(stdout))
+        return ToolResult(output=text, payload=json_tool_payload(_structured(stdout)))
 
     def cleanup_session(self, session_id: str) -> None:
-        """No persistent process to tear down; aexecute spawns per-call."""
+        """No persistent process to tear down; the governed runner spawns per call."""

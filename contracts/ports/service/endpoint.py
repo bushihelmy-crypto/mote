@@ -24,8 +24,7 @@ class ServiceEndpointAdapter(Protocol):
         endpoint: ServiceEndpointDescriptor,
         *,
         timeout_seconds: float,
-    ) -> ServiceEndpointOutcome:
-        ...
+    ) -> ServiceEndpointOutcome: ...
 
     async def poll_once(
         self,
@@ -33,8 +32,7 @@ class ServiceEndpointAdapter(Protocol):
         endpoint: ServiceEndpointDescriptor,
         *,
         timeout_seconds: float,
-    ) -> ServiceEndpointOutcome:
-        ...
+    ) -> ServiceEndpointOutcome: ...
 
     async def reconcile_once(
         self,
@@ -42,8 +40,7 @@ class ServiceEndpointAdapter(Protocol):
         endpoint: ServiceEndpointDescriptor,
         *,
         timeout_seconds: float,
-    ) -> ServiceEndpointOutcome | None:
-        ...
+    ) -> ServiceEndpointOutcome | None: ...
 
     async def cancel_once(
         self,
@@ -51,17 +48,13 @@ class ServiceEndpointAdapter(Protocol):
         endpoint: ServiceEndpointDescriptor,
         *,
         timeout_seconds: float,
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    def classify_start(self, exc: Exception) -> ServiceEndpointFailure:
-        ...
+    def classify_start(self, exc: Exception) -> ServiceEndpointFailure: ...
 
-    def classify_poll(self, exc: Exception) -> ServiceEndpointFailure:
-        ...
+    def classify_poll(self, exc: Exception) -> ServiceEndpointFailure: ...
 
-    async def aclose(self) -> None:
-        ...
+    async def aclose(self) -> None: ...
 
 
 class ServiceEndpointResolver(Protocol):
@@ -69,8 +62,9 @@ class ServiceEndpointResolver(Protocol):
         self,
         endpoint: ServiceEndpointDescriptor,
         credential_slot_id: str,
-    ) -> ServiceEndpointAdapter | None:
-        ...
+    ) -> ServiceEndpointAdapter | None: ...
+
+    async def aclose(self) -> None: ...
 
 
 __all__ = ["ServiceEndpointAdapter", "ServiceEndpointResolver"]

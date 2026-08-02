@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import Any, List, Optional
 
@@ -42,9 +43,19 @@ class FakeAgentEvt:
 class FakeRole:
     def __init__(self, session_id: str, name: str = "Assistant") -> None:
         self.session_id = session_id
-        self.state = SimpleNamespace(env=None)
+        self._human = ContextVar(f"agui-human-{session_id}", default=None)
         self.telemetry = InlineTelemetry()
         self.role_schema = SimpleNamespace(name=name)
+
+    @property
+    def human_interaction(self):
+        return self._human.get()
+
+    def bind_human_interaction(self, interaction):
+        return self._human.set(interaction)
+
+    def reset_human_interaction(self, token):
+        self._human.reset(token)
 
     async def cleanup(self) -> None:
         return None
@@ -78,8 +89,8 @@ class FakeControl:
 
 
 def make_factory():
-    def role_factory(*, name: str = "Assistant", session_id: Optional[str] = None, agent_type=None):
-        return FakeRole(session_id=session_id or "auto-thread", name=name)
+    def role_factory(request):
+        return FakeRole(session_id=request.session_id or "auto-thread", name=request.name)
 
     return role_factory
 
@@ -285,7 +296,7 @@ class ApprovalControl(FakeControl):
 
         req = ApprovalRequest(tool_name="Bash", target="rm -rf /", risk="high")
         try:
-            self.recorded_choice = await self.role.state.env.request_approval(req)
+            self.recorded_choice = await self.role.human_interaction.request_approval(req)
         finally:
             self._done = True
 
@@ -327,6 +338,19 @@ async def _read_until_approval(content, limit: int = 12) -> dict:
     raise AssertionError("approval frame never arrived on the SSE stream")
 
 
+def _approval_reply(frame: dict, outcome: str) -> dict:
+    value = frame["value"]
+    return {
+        "promptId": value["promptId"],
+        "promptNonce": value["promptNonce"],
+        "promptKind": value["promptKind"],
+        "agentId": value["agentId"],
+        "threadId": value["threadId"],
+        "runId": value["runId"],
+        "outcome": outcome,
+    }
+
+
 @pytest.mark.asyncio
 async def test_approval_round_trip_accept(approval_backend):
     async with _client(insecure=True) as client:
@@ -343,7 +367,7 @@ async def test_approval_round_trip_accept(approval_backend):
         assert approval["value"]["risk"] == "high"
 
         # Answer on the back-channel — the blocked turn unblocks.
-        reply = await client.post("/respond", json={"promptId": pid, "outcome": "accept"})
+        reply = await client.post("/respond", json=_approval_reply(approval, "accept"))
         assert reply.status == 200
         assert (await reply.json())["resolved"] is True
 
@@ -364,7 +388,7 @@ async def test_approval_round_trip_reject(approval_backend):
         )
         approval = await _read_until_approval(resp.content)
         pid = approval["value"]["approvalId"]
-        await client.post("/respond", json={"promptId": pid, "outcome": "reject"})
+        await client.post("/respond", json=_approval_reply(approval, "reject"))
         await resp.content.read()
     assert approval_backend[0].recorded_choice == "deny"
 
@@ -379,6 +403,17 @@ async def test_respond_requires_prompt_id(approval_backend):
 @pytest.mark.asyncio
 async def test_respond_unknown_prompt_is_not_resolved(approval_backend):
     async with _client(insecure=True) as client:
-        resp = await client.post("/respond", json={"promptId": "nope", "outcome": "accept"})
-        assert resp.status == 200
+        resp = await client.post(
+            "/respond",
+            json={
+                "promptId": "nope",
+                "promptNonce": "nonce",
+                "promptKind": "approval",
+                "agentId": "main",
+                "threadId": "thread",
+                "runId": "run",
+                "outcome": "accept",
+            },
+        )
+        assert resp.status == 409
         assert (await resp.json())["resolved"] is False

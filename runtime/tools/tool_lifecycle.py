@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 from contextlib import AsyncExitStack
-from typing import Any, Generic, TypeAlias, TypeVar, cast
+from typing import Any, Generic, TypeAlias, TypeVar
 
 from mote.contracts.events.tool import ToolsChangedEvent
 from mote.contracts.tool import CommandProtocol
 from mote.kernel.execution.run_context import RunContext
 from mote.runtime.tools.base_tool import BaseTool, ToolCapabilityProvider
-from mote.runtime.tools.mcp.lifecycle import McpLifecycle, NativeMcpRegistrar, XmlMcpRegistrar
+from mote.runtime.tools.mcp.lifecycle import McpCandidate, McpLifecycle
 from mote.runtime.tools.provider import (
     NativeToolset,
     ToolsetCompositionError,
@@ -20,7 +20,7 @@ from mote.runtime.tools.provider import (
     validate_toolset_protocols,
 )
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
-from mote.runtime.tools.tool_binding import BoundTool
+from mote.runtime.tools.tool_binding import ExecutableToolBinding
 from mote.runtime.tools.tool_catalog import BoundToolCatalog
 from mote.runtime.tools.tool_settlement import ToolSettlement
 
@@ -69,7 +69,7 @@ class ToolLifecycle(Generic[AgentDepsT]):
             )
             if self._declared_tools:
                 bound: dict[object, Any] = {}
-                presented: dict[tuple[int, object, str], BoundTool] = {}
+                presented: dict[tuple[int, object, str], ExecutableToolBinding] = {}
                 skipped: set[object] = set()
                 for name in self._declared_tools:
                     resolved = definitions_by_name.get(name)
@@ -91,7 +91,7 @@ class ToolLifecycle(Generic[AgentDepsT]):
                         continue
                     presentation_key = (id(toolset), factory, definition.name)
                     if presentation_key not in presented:
-                        presented[presentation_key] = BoundTool(
+                        presented[presentation_key] = ExecutableToolBinding(
                             definition,
                             bound[factory],
                             toolset.bind_approval(definition),
@@ -193,7 +193,7 @@ class ToolLifecycle(Generic[AgentDepsT]):
     def register_native(self, definition: NativeToolDefinition[Any], capability: BaseTool) -> None:
         self.prepare()
         capability.bind(self._session_id, role=self._role)
-        bound = BoundTool(definition, capability)
+        bound = ExecutableToolBinding(definition, capability)
         self._catalog.register(bound, list(definition.names))
 
     def static_toolset_instructions(self) -> tuple[str, ...]:
@@ -207,7 +207,7 @@ class ToolLifecycle(Generic[AgentDepsT]):
     def register_xml(self, definition: XmlToolDefinition[Any], capability: BaseTool) -> None:
         self.prepare()
         capability.bind(self._session_id, role=self._role)
-        bound = BoundTool(definition, capability)
+        bound = ExecutableToolBinding(definition, capability)
         self._catalog.register(bound, list(definition.names))
 
     async def deregister(self, name: str) -> bool:
@@ -223,35 +223,80 @@ class ToolLifecycle(Generic[AgentDepsT]):
 
     async def init_mcp(self, executor: object, mcps: list[str] | None, *, enabled: bool) -> None:
         if enabled and not self._mcp_lifecycle.active:
-            await self._bind_mcp(executor, mcps or None)
+            await self._replace_mcp(mcps or None, announce=False)
 
     async def reload_mcp(self, executor: object, mcps: list[str] | None, *, enabled: bool) -> bool:
         if not enabled:
             return False
-        self.prepare()
-        removed = self._catalog.mcp_names()
-        seen_ids: set[int] = set()
-        for name in removed:
-            tool = self._catalog.get(name)
-            if id(tool) not in seen_ids:
-                seen_ids.add(id(tool))
-                await self._cleanup_tool_session(tool, name)
-        self._catalog.remove(removed)
-        await self._mcp_lifecycle.teardown()
-        await self._bind_mcp(executor, mcps or None)
-        await self._announce(removed, "ToolsChangedEvent after MCP reload not delivered")
+        await self._replace_mcp(mcps or None, announce=True)
         return True
 
-    async def _bind_mcp(self, registrar: object, mcps: list[str] | None) -> None:
+    async def _prepare_mcp(self, mcps: list[str] | None) -> McpCandidate:
         if self._command_protocol is CommandProtocol.XML:
-            await self._mcp_lifecycle.bind_xml(mcps, cast(XmlMcpRegistrar, registrar))
-        else:
-            await self._mcp_lifecycle.bind_native(mcps, cast(NativeMcpRegistrar, registrar))
+            return await self._mcp_lifecycle.prepare_xml(mcps)
+        return await self._mcp_lifecycle.prepare_native(mcps)
 
-    async def _announce(self, removed: list[str], context: str) -> None:
+    async def _replace_mcp(self, mcps: list[str] | None, *, announce: bool) -> None:
+        """Prepare a complete generation, then publish it in one catalog swap."""
+
+        self.prepare()
+        candidate = await self._prepare_mcp(mcps)
+        bound: list[ExecutableToolBinding] = []
+        try:
+            for definition, capability in candidate.bindings:
+                capability.bind(self._session_id, role=self._role)
+                bound.append(ExecutableToolBinding(definition, capability))
+            new_names = tuple(name for tool in bound for name in tool.definition.names)
+            old_name_set = set(self._catalog.mcp_names())
+            new_name_set = set(new_names)
+            old_tools, old_names = self._catalog.replace_mcp(
+                tuple((tool, tuple(tool.definition.names)) for tool in bound)
+            )
+            previous_owner = self._mcp_lifecycle.activate(candidate)
+        except BaseException:
+            for tool in bound:
+                try:
+                    await self._cleanup_tool_session(tool, tool.definition.name)
+                except Exception:
+                    pass
+            await self._mcp_lifecycle.discard(candidate)
+            raise
+
+        cleanup_failures: list[tuple[str, BaseException]] = []
+        for tool in old_tools:
+            try:
+                await self._cleanup_tool_session(tool, getattr(tool, "name", type(tool).__name__))
+            except Exception as exc:
+                cleanup_failures.append((getattr(tool, "name", type(tool).__name__), exc))
+        try:
+            await self._mcp_lifecycle.cleanup_owner(previous_owner)
+        except Exception as exc:
+            cleanup_failures.append(("mcp-owner", exc))
+        if announce:
+            await self._announce(
+                sorted(old_name_set - new_name_set),
+                "ToolsChangedEvent after MCP reload not delivered",
+                added=sorted(new_name_set - old_name_set),
+                changed=sorted(new_name_set & old_name_set),
+            )
+        if cleanup_failures:
+            details = "; ".join(f"{name}: {type(exc).__name__}: {exc}" for name, exc in cleanup_failures)
+            raise RuntimeError(f"MCP generation committed but prior generation cleanup failed: {details}")
+
+    async def _announce(
+        self,
+        removed: list[str],
+        context: str,
+        *,
+        added: list[str] | None = None,
+        changed: list[str] | None = None,
+    ) -> None:
         await self._settlement.observe(
             ToolsChangedEvent(
                 removed=removed,
+                added=added or [],
+                changed=changed or [],
+                generation=self._catalog.generation,
                 reconstructable=sorted(self._catalog.reconstructable_names()),
             ),
             context=context,

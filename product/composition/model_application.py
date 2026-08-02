@@ -49,6 +49,7 @@ from mote.contracts.runtime.application import (
     SourceRevision,
     StaleReloadError,
 )
+from mote.product.models.generation_builder import ProductModelGenerationReuseKey
 from mote.runtime.events.context import observe_event_sync
 from mote.runtime.telemetry.logging import log_class
 
@@ -60,6 +61,9 @@ class AsyncResource(Protocol):
 
 
 class SharedRuntimeCompositionHandle(Protocol):
+    @property
+    def reuse_key(self) -> ProductModelGenerationReuseKey: ...
+
     @property
     def runtime_generation_id(self) -> RuntimeGenerationId: ...
 
@@ -114,6 +118,8 @@ class ApplicationCompositionCandidate:
         "runtime_role_config",
         "product_config",
         "product_resources",
+        "approved_capabilities",
+        "trust_revision",
         "_state",
     )
 
@@ -126,6 +132,8 @@ class ApplicationCompositionCandidate:
         runtime_role_config: RuntimeRoleConfigView,
         product_config: ProductConfigSnapshot | None = None,
         product_resources: tuple[AsyncResource, ...] = (),
+        approved_capabilities: frozenset[str] = frozenset(),
+        trust_revision: str = "",
     ) -> None:
         self.source_revision = source_revision
         self.reload_sequence = reload_sequence
@@ -133,6 +141,8 @@ class ApplicationCompositionCandidate:
         self.runtime_role_config = runtime_role_config
         self.product_config = product_config
         self.product_resources = product_resources
+        self.approved_capabilities = frozenset(approved_capabilities)
+        self.trust_revision = trust_revision
         self._state = CandidateState.NEW
 
     @property
@@ -174,6 +184,8 @@ class _Generation:
     runtime_role_config: RuntimeRoleConfigView
     product_config: ProductConfigSnapshot | None
     product_resources: tuple[AsyncResource, ...]
+    approved_capabilities: frozenset[str] = frozenset()
+    trust_revision: str = ""
     leases: int = 0
     retired_at: float | None = None
     closed: bool = False
@@ -433,6 +445,14 @@ class AtomicApplicationComposition:
                     )
                 )
                 raise RetiredGenerationCapacityError("retired generation capacity reached")
+            if self._current is not None:
+                expanded = candidate.approved_capabilities - self._current.approved_capabilities
+                if expanded:
+                    raise ApplicationNotReadyError(
+                        f"reload candidate expands unapproved capabilities: {sorted(expanded)!r}"
+                    )
+                if candidate.trust_revision != self._current.trust_revision:
+                    raise ApplicationNotReadyError("reload candidate changed trusted extension/source identity")
             generation = _Generation(
                 generation_id=ApplicationGenerationId(uuid4().hex),
                 source_revision=candidate.source_revision,
@@ -441,6 +461,8 @@ class AtomicApplicationComposition:
                 runtime_role_config=candidate.runtime_role_config,
                 product_config=deepcopy(candidate.product_config),
                 product_resources=candidate.product_resources,
+                approved_capabilities=candidate.approved_capabilities,
+                trust_revision=candidate.trust_revision,
             )
             old = self._current
             candidate._commit()

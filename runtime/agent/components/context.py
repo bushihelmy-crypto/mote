@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from mote.contracts.conversation.fields import TOOL_CALLS
+from mote.contracts.events.conversation import ModelContextRebuiltEvent
 from mote.contracts.output import OutputBindingKind
+from mote.contracts.ports.code_intelligence.code_map import CodeMapIndexerFactory, CodeMapTurnSourceRequest
+from mote.contracts.ports.conversation.compaction_policy import CompactionPolicyExtensionSpec
 from mote.contracts.ports.conversation.turn_context import EphemeralContextSource
-from mote.contracts.ports.skill.registry import SkillService
+from mote.contracts.ports.skill.registry import SkillService, SkillServiceFactory
 from mote.runtime.agent.component_graph import ComponentSpec
 from mote.runtime.agent.component_keys import (
     COMMAND_CHANNEL,
@@ -29,6 +34,7 @@ from mote.runtime.agent.component_keys import (
 )
 from mote.runtime.agent.components.action import effective_deferred_tools
 from mote.runtime.agent.components.output_context import OutputContractContextSource
+from mote.runtime.agent.control import resolve_control
 from mote.runtime.context import ContextManager, ContextVisibility
 from mote.runtime.context.compaction import FileRehydrator
 from mote.runtime.context.compaction.policy import build_compaction_policy
@@ -54,15 +60,22 @@ from mote.runtime.resources import ResourceRegistry
 from mote.runtime.vcs import find_git_root
 
 
-def context_component_specs() -> list[ComponentSpec]:
+@dataclass(frozen=True, slots=True)
+class ContextComponentInputs:
+    skill_service_factory: SkillServiceFactory | None = None
+    code_map_indexer_factory: CodeMapIndexerFactory | None = None
+    compaction_policy_extensions: tuple[CompactionPolicyExtensionSpec, ...] = ()
+
+
+def context_component_specs(inputs: ContextComponentInputs = ContextComponentInputs()) -> list[ComponentSpec]:
     """Return the complete, uniquely owned context-domain graph fragment."""
     return [
-        ComponentSpec(SKILL_MANAGER, _build_skill_manager),
+        ComponentSpec(SKILL_MANAGER, lambda ctx: _build_skill_manager(ctx, inputs)),
         ComponentSpec(RESOURCE_REGISTRY, lambda ctx: ResourceRegistry()),
-        ComponentSpec(CONTEXT_MANAGER, _build_context_manager),
+        ComponentSpec(CONTEXT_MANAGER, lambda ctx: _build_context_manager(ctx, inputs)),
         ComponentSpec(CONTEXT_VISIBILITY, _build_context_visibility),
-        ComponentSpec(REPO_INDEX, _build_repo_index, available=_repo_index_available),
-        ComponentSpec(TURN_CONTEXT_SOURCES, _build_turn_context_sources),
+        ComponentSpec(REPO_INDEX, lambda ctx: _build_repo_index(ctx, inputs), available=_repo_index_available),
+        ComponentSpec(TURN_CONTEXT_SOURCES, lambda ctx: _build_turn_context_sources(ctx, inputs)),
         ComponentSpec(
             TURN_CONTEXT_BUS,
             lambda ctx: TurnContextBus(ctx.dep(TURN_CONTEXT_SOURCES)),
@@ -86,9 +99,9 @@ class _DisabledSkillService:
         return []
 
 
-def _build_skill_manager(ctx) -> SkillService:
+def _build_skill_manager(ctx, inputs: ContextComponentInputs) -> SkillService:
     cfg = ctx.role.config.context.skills
-    factory = ctx.role.wiring.dependencies.skill_service_factory
+    factory = inputs.skill_service_factory
     if factory is None:
         return _DisabledSkillService()
     return factory.build(
@@ -106,9 +119,9 @@ def _repo_index_available(role, state) -> bool:
     return _repo_index_root(role) is not None
 
 
-def _build_repo_index(ctx):
+def _build_repo_index(ctx, inputs: ContextComponentInputs):
     root = _repo_index_root(ctx.role)
-    factory = ctx.role.wiring.dependencies.code_map_indexer_factory
+    factory = inputs.code_map_indexer_factory
     return factory.build(root) if root is not None and factory is not None else None
 
 
@@ -124,7 +137,7 @@ def _read_state(role) -> dict:
     return role.file_operations.observed_versions()
 
 
-def _build_context_manager(ctx) -> ContextManager:
+def _build_context_manager(ctx, inputs: ContextComponentInputs) -> ContextManager:
     role = ctx.role
     executor = ctx.dep(EXECUTOR)
     registry = ctx.dep(RESOURCE_REGISTRY)
@@ -132,7 +145,7 @@ def _build_context_manager(ctx) -> ContextManager:
     get_turn_context_bus = ctx.defer(TURN_CONTEXT_BUS)
     rehydrator = FileRehydrator(lambda: _touched_files(role))
 
-    async def model_context_rebuilt(event: object) -> None:
+    async def model_context_rebuilt(event: ModelContextRebuiltEvent) -> None:
         await get_turn_context_bus().model_context_rebuilt(event)
 
     compression_route = ctx.dep(ROUTER).model_route_for_task(COMPRESSION_TASK)
@@ -152,7 +165,7 @@ def _build_context_manager(ctx) -> ContextManager:
         limit_config=executor.limit_config,
         compaction_policy=build_compaction_policy(
             hook_manager=ctx.dep(HOOK_MANAGER),
-            extensions=role.wiring.dependencies.compaction_policy_extensions,
+            extensions=inputs.compaction_policy_extensions,
         ),
         session_fact_sink=ctx.dep(SESSION_FACT_COMMITTER),
         history_edited=lambda event: get_session_manager().reconcile_resources(event.remaining_messages),
@@ -217,7 +230,7 @@ def _credential_index_active(role, store) -> bool:
     )
 
 
-def _build_turn_context_sources(ctx) -> list[EphemeralContextSource]:
+def _build_turn_context_sources(ctx, inputs: ContextComponentInputs) -> list[EphemeralContextSource]:
     role = ctx.role
     get_executor = ctx.defer(EXECUTOR)
     get_context_manager = ctx.defer(CONTEXT_MANAGER)
@@ -232,7 +245,7 @@ def _build_turn_context_sources(ctx) -> list[EphemeralContextSource]:
         GitContextSource(get_cwd=lambda: role.state.working_dir or None),
         TeamContextSource(
             get_session_id=lambda: role.state.session_id,
-            get_provider=lambda: role.agent_control,
+            get_provider=resolve_control,
         ),
         TimestampContextSource(),
         TokenPressureContextSource(get_context_manager),
@@ -249,16 +262,18 @@ def _build_turn_context_sources(ctx) -> list[EphemeralContextSource]:
         ),
         ChangedFilesContextSource(),
     ]
-    code_map_factory = role.wiring.dependencies.code_map_indexer_factory
+    code_map_factory = inputs.code_map_indexer_factory
     if code_map_factory is not None:
         sources.append(
             code_map_factory.build_turn_source(
-                get_touched_files=lambda: _touched_files(role),
-                lsp_query=_LspCodeQuery(ctx.defer(LSP_SERVICE)),
-                repo_index=ctx.dep(REPO_INDEX),
-                get_read_state=lambda: _read_state(role),
-                get_glimpsed_files=lambda: _glimpsed_files(role),
-                surface_callers=role.config.context.code_map.surface_callers,
+                CodeMapTurnSourceRequest(
+                    get_touched_files=lambda: _touched_files(role),
+                    lsp_query=_LspCodeQuery(ctx.defer(LSP_SERVICE)),
+                    repo_index=ctx.dep(REPO_INDEX),
+                    get_read_state=lambda: _read_state(role),
+                    get_glimpsed_files=lambda: _glimpsed_files(role),
+                    surface_callers=role.config.context.code_map.surface_callers,
+                )
             )
         )
     binding = ctx.dep(COMMAND_CHANNEL).output_binding(is_text=role.output_contract.is_text)
@@ -278,7 +293,7 @@ def _build_turn_context_sources(ctx) -> list[EphemeralContextSource]:
             )
     disabled = set(role.config.context.turn_context.disabled)
     if disabled:
-        sources = [source for source in sources if getattr(source, "name", "") not in disabled]
+        sources = [source for source in sources if source.name not in disabled]
     store = ctx.dep(SECRET_STORE)
     if _credential_index_active(role, store):
         turn_context = role.config.context.turn_context

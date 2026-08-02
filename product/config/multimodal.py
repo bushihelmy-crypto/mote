@@ -4,11 +4,12 @@ Only the four generation services the GenerateMedia tool actually consumes are
 modelled (see ``executor/tools/generate_media/creators.py``). Each carries just
 the endpoint + model fields the creators read.
 """
+
 from __future__ import annotations
 
 from pydantic import Field
 
-from mote.product.config.base import ConfigModel as YamlModel
+from mote.contracts.config.base import ConfigModel as YamlModel
 
 
 class ImageGenerationConfig(YamlModel):

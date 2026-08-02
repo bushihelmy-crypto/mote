@@ -8,6 +8,7 @@ running (with incremental delta + offset advance) attachments, first-time
 terminal final attachments vs the pool-already-notified skip, eviction of
 previously-notified terminal tasks, and ``mark_notified``.
 """
+
 from __future__ import annotations
 
 import time
@@ -15,7 +16,7 @@ import time
 import pytest
 
 from mote.orchestration.background_tasks import (
-    BgStatus,
+    BackgroundTaskStatus,
     TaskAttachment,
     TaskAttachmentGenerator,
     TaskMeta,
@@ -50,7 +51,7 @@ class TestFormatXml:
     def test_with_delta_and_escaping(self):
         att = TaskAttachment(
             task_id="bg_1",
-            status=BgStatus.RUNNING,
+            status=BackgroundTaskStatus.RUNNING,
             command_name="run & wait",
             description="running",
             delta_summary="line<1>",
@@ -76,16 +77,16 @@ class TestFormatXml:
         assert "<status>pending</status>" in xml
 
     def test_error_renders_uniform_error_block(self):
-        from mote.runtime.errors import ErrorReport
+        from mote.contracts.foundation.errors.report import ErrorReport
 
         report = ErrorReport.from_exception(RuntimeError("kaboom"))
         att = TaskAttachment(
             task_id="bg_1",
-            status=BgStatus.FAILED,
+            status=BackgroundTaskStatus.FAILED,
             command_name="cmd",
             description="failed",
             delta_summary=None,
-            error=report.as_dict(),
+            error=report,
         )
         xml = format_attachment_xml(att)
         # Same <error> envelope every executor surface uses.
@@ -96,7 +97,7 @@ class TestFormatXml:
     def test_no_error_omits_error_block(self):
         att = TaskAttachment(
             task_id="bg_1",
-            status=BgStatus.SUCCESS,
+            status=BackgroundTaskStatus.SUCCESS,
             command_name="cmd",
             description="done",
             delta_summary=None,
@@ -107,12 +108,12 @@ class TestFormatXml:
 class TestGeneratePending:
     @pytest.mark.asyncio
     async def test_pending_attachment(self):
-        meta = TaskMeta(task_id="bg_1", command_name="job", status=BgStatus.PENDING)
+        meta = TaskMeta(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.PENDING)
         gen = TaskAttachmentGenerator(FakePool([meta]))
         result = await gen.generate()
         assert len(result.attachments) == 1
         att = result.attachments[0]
-        assert att.status == BgStatus.PENDING
+        assert att.status == BackgroundTaskStatus.PENDING
         assert "is pending" in att.description
         assert att.delta_summary is None
 
@@ -120,7 +121,7 @@ class TestGeneratePending:
 class TestGenerateRunning:
     @pytest.mark.asyncio
     async def test_running_with_delta_then_advances_offset(self):
-        meta = TaskMeta(task_id="bg_1", command_name="job", status=BgStatus.RUNNING)
+        meta = TaskMeta(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.RUNNING)
         store = FakeStore()
         store.deltas["bg_1"] = b"first-chunk"
         gen = TaskAttachmentGenerator(FakePool([meta]), store)
@@ -135,7 +136,7 @@ class TestGenerateRunning:
 
     @pytest.mark.asyncio
     async def test_running_without_store(self):
-        meta = TaskMeta(task_id="bg_1", command_name="job", status=BgStatus.RUNNING)
+        meta = TaskMeta(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.RUNNING)
         gen = TaskAttachmentGenerator(FakePool([meta]))
         r = await gen.generate()
         assert r.attachments[0].delta_summary is None
@@ -147,7 +148,7 @@ class TestGenerateTerminal:
         meta = TaskMeta(
             task_id="bg_1",
             command_name="job",
-            status=BgStatus.SUCCESS,
+            status=BackgroundTaskStatus.SUCCESS,
             end_time=time.time(),
             notified=False,  # pool did NOT push a notification
         )
@@ -168,21 +169,21 @@ class TestGenerateTerminal:
 
     @pytest.mark.asyncio
     async def test_failed_terminal_threads_error_report(self):
-        from mote.runtime.errors import ErrorReport
+        from mote.contracts.foundation.errors.report import ErrorReport
 
         report = ErrorReport.from_exception(RuntimeError("kaboom"))
         meta = TaskMeta(
             task_id="bg_1",
             command_name="job",
-            status=BgStatus.FAILED,
+            status=BackgroundTaskStatus.FAILED,
             end_time=time.time(),
             notified=False,
-            error=report.as_dict(),
+            error=report,
         )
         gen = TaskAttachmentGenerator(FakePool([meta]))
         r = await gen.generate()
         att = r.attachments[0]
-        assert att.error == report.as_dict()
+        assert att.error == report
         assert '<error code="UNKNOWN"' in format_attachment_xml(att)
 
     @pytest.mark.asyncio
@@ -190,7 +191,7 @@ class TestGenerateTerminal:
         meta = TaskMeta(
             task_id="bg_1",
             command_name="job",
-            status=BgStatus.SUCCESS,
+            status=BackgroundTaskStatus.SUCCESS,
             end_time=time.time(),
             notified=True,  # _on_done already pushed a notification
         )
@@ -210,7 +211,7 @@ class TestGenerateTerminal:
         meta = TaskMeta(
             task_id="bg_1",
             command_name="job",
-            status=BgStatus.FAILED,
+            status=BackgroundTaskStatus.FAILED,
             end_time=time.time(),
             notified=False,
         )

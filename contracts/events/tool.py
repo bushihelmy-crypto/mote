@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, List, Literal, Optional
 
+from mote.contracts.tool.identity import ToolInvocationIdentity
+
 if TYPE_CHECKING:
     from mote.contracts.artifact import ArtifactRef
     from mote.contracts.foundation.errors.report import ErrorReport
@@ -33,6 +35,9 @@ class ToolsChangedEvent:
     """
 
     removed: List[str] = field(default_factory=list)
+    added: List[str] = field(default_factory=list)
+    changed: List[str] = field(default_factory=list)
+    generation: int = 0
     reconstructable: List[str] = field(default_factory=list)
 
     name: ClassVar[str] = TOOLS_CHANGED
@@ -42,9 +47,9 @@ class ToolsChangedEvent:
 class ToolInvocationStartedEvent:
     """Observation emitted at the irreversible tool invocation boundary."""
 
+    identity: ToolInvocationIdentity
     tool_name: str = ""
     tool_input: dict[str, Any] = field(default_factory=dict)
-    tool_use_id: Optional[str] = None
     scope: tuple[object, ...] = ()
 
     name: ClassVar[str] = TOOL_INVOCATION_STARTED
@@ -54,10 +59,10 @@ class ToolInvocationStartedEvent:
 class ToolCallFinishedEvent:
     """Safe observation of a succeeded, failed, or rejected tool call."""
 
+    identity: ToolInvocationIdentity
     tool_name: str = ""
     tool_input: dict[str, Any] = field(default_factory=dict)
     tool_response: Any = None
-    tool_use_id: Optional[str] = None
     outcome: Literal["succeeded", "failed", "rejected"] = "succeeded"
     #: Structured failure record on a non-success result (``ErrorReport``), mirrored
     #: from the ``ToolResult``; ``None`` on success or for a legacy output-only fail.

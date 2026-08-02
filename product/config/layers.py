@@ -12,6 +12,7 @@ Merge semantics (best-of-both):
   allow/deny rules, mcp servers, additional dirs accumulate across layers.
 - scalar / type mismatch: higher layer wins.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -24,7 +25,7 @@ from mote.product.config.sources import ConfigSource
 
 # Credential / endpoint-redirecting keys removed from untrusted layers, at any
 # nesting depth (a malicious working-dir config must not steer LLM auth, nor
-# inject ``api_key_helper`` — an arbitrary shell command run to fetch a key).
+# inject ``api_key_helper`` — a trusted fixed-argv credential capability).
 CREDENTIAL_DENYLIST = frozenset({"api_key", "base_url", "oauth", "model_providers", "api_key_helper"})
 
 
@@ -59,6 +60,16 @@ class ConfigLayer:
     source: ConfigSource
     data: Dict[str, Any]
     path: Optional[Path] = None
+    trusted: bool | None = None
+    source_identity: str | None = None
+
+    @property
+    def is_trusted(self) -> bool:
+        return self.source.trusted if self.trusted is None else self.trusted
+
+    @property
+    def provenance_name(self) -> str:
+        return self.source_identity or self.source.name
 
 
 @dataclass
@@ -83,14 +94,15 @@ class ConfigLayerStack:
             ordinary = {key: value for key, value in layer.data.items() if key != "models"}
             merged = deep_merge(merged, ordinary)
             if isinstance(layer.data.get("models"), dict):
+                model_data = dict(layer.data["models"])
+                if layer.source not in {ConfigSource.USER, ConfigSource.MANAGED} or not layer.is_trusted:
+                    model_data.pop("api_key_helper", None)
                 model_layers.append(
                     ModelLayer(
-                        layer.source.name,
-                        layer.data["models"],
-                        trusted=layer.source.trusted,
-                        display_source=(
-                            f"{layer.source.name}:{layer.path.name}" if layer.path is not None else layer.source.name
-                        ),
+                        layer.provenance_name,
+                        model_data,
+                        trusted=layer.is_trusted,
+                        display_source=(layer.provenance_name),
                     )
                 )
         if model_layers:
@@ -104,16 +116,17 @@ class ConfigLayerStack:
         model_layers: list[ModelLayer] = []
         for layer in self.sorted_layers():
             ordinary = {key: value for key, value in layer.data.items() if key != "models"}
-            _record_origin(ordinary, layer.source.name, origin)
+            _record_origin(ordinary, layer.provenance_name, origin)
             if isinstance(layer.data.get("models"), dict):
+                model_data = dict(layer.data["models"])
+                if layer.source not in {ConfigSource.USER, ConfigSource.MANAGED} or not layer.is_trusted:
+                    model_data.pop("api_key_helper", None)
                 model_layers.append(
                     ModelLayer(
-                        layer.source.name,
-                        layer.data["models"],
-                        trusted=layer.source.trusted,
-                        display_source=(
-                            f"{layer.source.name}:{layer.path.name}" if layer.path is not None else layer.source.name
-                        ),
+                        layer.provenance_name,
+                        model_data,
+                        trusted=layer.is_trusted,
+                        display_source=(layer.provenance_name),
                     )
                 )
         if model_layers:

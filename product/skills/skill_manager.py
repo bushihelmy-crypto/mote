@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from mote.product.extensions.sources import ExtensionSourcePolicy
 from mote.product.skills.skill_injector import SkillInjector
 from mote.product.skills.skill_pool import SkillPool
 from mote.runtime.telemetry.logging import log_class
@@ -37,12 +38,14 @@ class SkillManager:
         *,
         enabled: Optional[bool] = None,
         source_dirs: Optional[list[Path]] = None,
+        source_policy: ExtensionSourcePolicy,
     ):
         self._skills = skills
         # Inference: with no explicit master switch, a non-empty skills
         # list means "enabled" (and an empty one "disabled").
         self._enabled = bool(skills) if enabled is None else enabled
         self._source_dirs = source_dirs
+        self._source_policy = source_policy
         self.pool: Optional[SkillPool] = None
         self.injector: Optional[SkillInjector] = None
         self._ready = False
@@ -65,8 +68,8 @@ class SkillManager:
     def _new_pool(self) -> SkillPool:
         """Build a pool over the configured source directories (or the default)."""
         if self._source_dirs is not None:
-            return SkillPool(source_dirs=self._source_dirs)
-        return SkillPool()
+            return SkillPool(source_dirs=self._source_dirs, source_policy=self._source_policy)
+        return SkillPool(source_policy=self._source_policy)
 
     def _load(self, pool: SkillPool) -> None:
         """Load skills into ``pool`` — by name when filtered, else everything."""

@@ -7,12 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mote.runtime.artifacts.budgets import ARTIFACT_HARD_LIMIT_BYTES, ARTIFACT_MINIMUM_GC_AGE_NS
-from mote.runtime.artifacts.repository import ArtifactRepository
+from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
 
 from .gc import ArtifactGarbageCollector
 from .ownership import ArtifactOwnership
+from .pins import ArtifactPinRegistry
 from .ports import ArtifactMetadataSource, ArtifactPinSource, ArtifactRootSource
-from .repository_blobs import ArtifactRepositoryBlobStore
+from .repository_blobs import ContentAddressedArtifactBlobStore
 from .store import ARTIFACT_INDEX_FILENAME, DurableArtifactStore
 
 ARTIFACT_REPOSITORY_DIRNAME = ".artifacts"
@@ -26,8 +27,9 @@ def project_artifact_identity(project_root: str | Path) -> str:
 @dataclass(frozen=True, slots=True)
 class ArtifactRepositoryBundle:
     store: DurableArtifactStore
-    repository: ArtifactRepository
+    repository: ContentAddressedArtifactStore
     collector: ArtifactGarbageCollector
+    pins: ArtifactPinRegistry
 
 
 class ArtifactRepositoryLayout:
@@ -65,13 +67,16 @@ class ArtifactRepositoryLayout:
         metadata_sources: tuple[ArtifactMetadataSource, ...] = (),
         minimum_gc_age_ns: int = ARTIFACT_MINIMUM_GC_AGE_NS,
     ) -> ArtifactRepositoryBundle:
-        repository = ArtifactRepository(
+        pins = ArtifactPinRegistry()
+        for index, source in enumerate(pin_sources):
+            pins.register_source(f"layout-source:{index}", source)
+        repository = ContentAddressedArtifactStore(
             self.blobs_path,
             hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
         )
         store = DurableArtifactStore(
             self.index_path,
-            ArtifactRepositoryBlobStore(repository),
+            ContentAddressedArtifactBlobStore(repository),
             ownership=ownership,
         )
         return ArtifactRepositoryBundle(
@@ -81,10 +86,11 @@ class ArtifactRepositoryLayout:
                 store,
                 repository,
                 root_sources=root_sources,
-                pin_sources=pin_sources,
+                pin_sources=(pins,),
                 metadata_sources=metadata_sources,
                 minimum_age_ns=minimum_gc_age_ns,
             ),
+            pins=pins,
         )
 
 

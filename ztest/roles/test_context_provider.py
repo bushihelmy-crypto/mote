@@ -7,15 +7,18 @@ Role: loop_context() packing, property forwarders, env-derived strings, and the
 router-driven resolve_llm() conduit. prepare() (full prompt build + tool specs)
 is exercised indirectly via its inputs since it depends on the prompt stack.
 """
+
 from __future__ import annotations
 
 import asyncio
 
+from mote.contracts.conversation import UserMessage
+from mote.contracts.model.invocation import CanonicalToolDefinition
 from mote.contracts.model.topology import DefaultRoute, SemanticRoute
 from mote.contracts.output import OutputRepresentationCapabilities
 from mote.kernel.execution import ExecutionContext
 from mote.kernel.execution.context_provider import BaseContextProvider
-from mote.kernel.inference.request import InferenceRequest
+from mote.kernel.execution.request import InferenceRequest
 from mote.kernel.output.binding import negotiate_output_binding
 from mote.runtime.agent import Role
 from mote.runtime.agent.components.context_provider import ContextProvider
@@ -45,18 +48,19 @@ class TestThinkRequest:
             is_text=True,
             capabilities=OutputRepresentationCapabilities(supports_text=True),
         )
+        message = UserMessage("one")
         tr = InferenceRequest(
-            req=[1],
+            req=[message],
             system_prompt="sys",
-            tool_specs=["t"],
+            tool_specs=(CanonicalToolDefinition(name="t"),),
             output_binding=binding,
             command_channel="channel",
             output_schema={},
             schema_fingerprint="fingerprint",
         )
-        assert tr.req == [1]
+        assert tr.req == [message]
         assert tr.system_prompt == "sys"
-        assert tr.tool_specs == ["t"]
+        assert tr.tool_specs == (CanonicalToolDefinition(name="t"),)
         assert tr.output_binding is binding
         assert tr.command_channel == "channel"
 
@@ -166,7 +170,13 @@ class TestResolveInferenceTarget:
             def tool_specs(self, catalog, output_contract):
                 assert catalog.identity.catalog_id == "runtime-tools"
                 assert output_contract is role.output_contract
-                return ["routed-spec"]
+                return [
+                    {
+                        "name": "routed-spec",
+                        "description": "routed",
+                        "input_schema": {"type": "object", "properties": {}},
+                    }
+                ]
 
         monkeypatch.setattr(
             role.command_channel,
@@ -185,7 +195,13 @@ class TestResolveInferenceTarget:
 
         assert result is request
         assert result.output_binding is binding
-        assert result.tool_specs == ["routed-spec"]
+        assert result.tool_specs == (
+            CanonicalToolDefinition(
+                name="routed-spec",
+                description="routed",
+                input_schema={"type": "object", "properties": {}},
+            ),
+        )
         assert isinstance(result.command_channel, RoutedChannel)
 
     def test_fixed_model_when_routing_disabled_on_router(self, role, monkeypatch):

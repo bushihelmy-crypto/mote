@@ -1,4 +1,5 @@
 """Stable value models for managed stateful interactive runtimes."""
+
 from __future__ import annotations
 
 import hashlib
@@ -110,6 +111,69 @@ class RuntimeCheckpoint:
     sensitivity: str = "private"
     fidelity: CheckpointFidelity = CheckpointFidelity.NONE
     alias: str = "default"
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("runtime_id", self.runtime_id),
+            ("kind", self.kind),
+            ("alias", self.alias),
+        ):
+            if (
+                type(value) is not str
+                or not value
+                or len(value) > 512
+                or any(ord(character) < 32 for character in value)
+            ):
+                raise ValueError(f"runtime checkpoint {field_name} is invalid")
+        RuntimeRef(self.runtime_id, self.kind, self.alias)
+        for field_name, value in (
+            ("codec", self.codec),
+            ("payload_ref", self.payload_ref),
+            ("sensitivity", self.sensitivity),
+        ):
+            if (
+                type(value) is not str
+                or not value
+                or len(value) > 4096
+                or any(ord(character) < 32 for character in value)
+            ):
+                raise ValueError(f"runtime checkpoint {field_name} is invalid")
+        if type(self.epoch) is not int or self.epoch < 1:
+            raise ValueError("runtime checkpoint epoch must be a positive integer")
+        if type(self.revision) is not int or self.revision < 0:
+            raise ValueError("runtime checkpoint revision must be a non-negative integer")
+        if type(self.schema_version) is not int or self.schema_version < 1:
+            raise ValueError("runtime checkpoint schema_version must be a positive integer")
+        if (
+            type(self.digest) is not str
+            or len(self.digest) > 256
+            or any(ord(character) < 32 for character in self.digest)
+        ):
+            raise ValueError("runtime checkpoint digest is invalid")
+        if self.sensitivity not in {"private", "secret"}:
+            raise ValueError("runtime checkpoint sensitivity is invalid")
+        if not isinstance(self.fidelity, CheckpointFidelity):
+            raise TypeError("runtime checkpoint fidelity must be CheckpointFidelity")
+
+
+def validate_checkpoint_successor(
+    current: RuntimeCheckpoint | None,
+    candidate: RuntimeCheckpoint,
+) -> None:
+    """Reject identity replacement, regression, and divergent duplicate facts."""
+
+    if current is None:
+        return
+    if (current.kind, current.alias) != (candidate.kind, candidate.alias):
+        raise ValueError("runtime checkpoint key changed during evolution")
+    if current.runtime_id != candidate.runtime_id:
+        raise ValueError("runtime checkpoint alias cannot replace runtime identity")
+    current_position = (current.epoch, current.revision)
+    candidate_position = (candidate.epoch, candidate.revision)
+    if candidate_position < current_position:
+        raise ValueError("runtime checkpoint revision regressed")
+    if candidate_position == current_position and candidate != current:
+        raise ValueError("runtime checkpoint revision has conflicting content")
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,6 +484,34 @@ class DriverCheckpoint:
     sensitivity: str = "private"
     fidelity: Optional[CheckpointFidelity] = None
 
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("codec", self.codec),
+            ("payload_ref", self.payload_ref),
+        ):
+            if (
+                type(value) is not str
+                or not value
+                or len(value) > 4096
+                or any(ord(character) < 32 for character in value)
+            ):
+                raise ValueError(f"driver checkpoint {field_name} is invalid")
+        if type(self.schema_version) is not int or self.schema_version < 1:
+            raise ValueError("driver checkpoint schema_version must be positive")
+        if (
+            type(self.digest) is not str
+            or len(self.digest) > 256
+            or any(ord(character) < 32 for character in self.digest)
+        ):
+            raise ValueError("driver checkpoint digest is invalid")
+        if type(self.sensitivity) is not str or self.sensitivity not in {
+            "private",
+            "secret",
+        }:
+            raise ValueError("driver checkpoint sensitivity is invalid")
+        if self.fidelity is not None and not isinstance(self.fidelity, CheckpointFidelity):
+            raise TypeError("driver checkpoint fidelity must be CheckpointFidelity or null")
+
 
 __all__ = [
     "CheckpointFidelity",
@@ -442,4 +534,5 @@ __all__ = [
     "RuntimeProjectionRequest",
     "RuntimeRef",
     "RuntimeState",
+    "validate_checkpoint_successor",
 ]

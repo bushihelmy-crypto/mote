@@ -1,12 +1,15 @@
 """Unit tests for the domain-agnostic :class:`RecoveryRunner` skeleton."""
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
 
-from mote.runtime.errors import MoteError, NonRetryableError, RecoveryAction, RecoveryRunner, RetryableError
+from mote.contracts.foundation.errors.base import MoteError, NonRetryableError, RetryableError
+from mote.contracts.foundation.errors.codes import RecoveryAction
 from mote.runtime.events import bind_telemetry
+from mote.runtime.resilience.recovery import RecoveryRunner
 from mote.ztest.telemetry import InlineTelemetry
 
 pytestmark = pytest.mark.asyncio
@@ -248,7 +251,7 @@ class _RecordingTelemetryHandler:
         self.events = []
 
     async def handle(self, event):
-        from mote.runtime.events import RecoveryEvent
+        from mote.contracts.events.telemetry import RecoveryEvent
 
         if isinstance(event, RecoveryEvent):
             self.events.append(event)

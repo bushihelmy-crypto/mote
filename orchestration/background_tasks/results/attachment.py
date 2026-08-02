@@ -14,11 +14,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as _escape_xml
 
+from mote.contracts.foundation.errors.report import ErrorReport, render_error_block
 from mote.orchestration.background_tasks.constants import DELTA_MAX_BYTES, DELTA_SUMMARY_MAX_CHARS
-from mote.orchestration.background_tasks.model import BgStatus
 from mote.orchestration.background_tasks.results.formatting import format_elapsed
 from mote.orchestration.background_tasks.status import TERMINAL_STATUSES as _TERMINAL_STATUSES
-from mote.runtime.errors import ErrorReport, render_error_block
+from mote.orchestration.background_tasks.status import BackgroundTaskStatus
 
 if TYPE_CHECKING:
     from mote.orchestration.background_tasks.pool import BackgroundTaskPool
@@ -35,14 +35,14 @@ class TaskAttachment:
     """Single attachment describing a background task's current state."""
 
     task_id: str
-    status: str  # BgStatus value
+    status: str  # BackgroundTaskStatus value
     command_name: str
     description: str  # e.g. "generate videos is running (elapsed: 45.2s)"
     delta_summary: str | None  # incremental output summary, None = no new output
     # Structured failure record (ErrorReport.as_dict form) for a FAILED task,
     # carried from the pool's TaskMeta. None when the task did not fail or
     # carries no structured error.
-    error: dict | None = None
+    error: ErrorReport | None = None
 
 
 @dataclass
@@ -102,7 +102,7 @@ class TaskAttachmentGenerator:
                 continue
 
             # 2. Pending (waiting for semaphore) → simple status attachment
-            if meta.status == BgStatus.PENDING:
+            if meta.status == BackgroundTaskStatus.PENDING:
                 elapsed = time.time() - meta.submit_time
                 attachments.append(
                     TaskAttachment(
@@ -116,7 +116,7 @@ class TaskAttachmentGenerator:
                 continue
 
             # 3. Running → read incremental delta
-            if meta.status == BgStatus.RUNNING:
+            if meta.status == BackgroundTaskStatus.RUNNING:
                 delta_summary = None
                 if self._store is not None:
                     try:
@@ -156,7 +156,7 @@ class TaskAttachmentGenerator:
                     except KeyError:
                         pass
                 elapsed = (meta.end_time or time.time()) - meta.start_time
-                status_str = meta.status.value if isinstance(meta.status, BgStatus) else str(meta.status)
+                status_str = meta.status.value if isinstance(meta.status, BackgroundTaskStatus) else str(meta.status)
                 attachments.append(
                     TaskAttachment(
                         task_id=tid,
@@ -182,7 +182,7 @@ class TaskAttachmentGenerator:
 
 def format_attachment_xml(att: TaskAttachment) -> str:
     """Render a ``TaskAttachment`` as a ``<task-attachment>`` XML block."""
-    status_str = att.status.value if isinstance(att.status, BgStatus) else str(att.status)
+    status_str = att.status.value if isinstance(att.status, BackgroundTaskStatus) else str(att.status)
     lines = [
         "<task-attachment>",
         f"<task-id>{att.task_id}</task-id>",
@@ -197,6 +197,6 @@ def format_attachment_xml(att: TaskAttachment) -> str:
         # carries the same <error> block (code/recovery/detail) as its
         # notification.
 
-        lines.append(render_error_block(ErrorReport.from_dict(att.error)))
+        lines.append(render_error_block(att.error))
     lines.append("</task-attachment>")
     return "\n".join(lines)

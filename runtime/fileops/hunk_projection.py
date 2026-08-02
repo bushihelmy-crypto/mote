@@ -7,13 +7,13 @@ from mote.contracts.file.mutations import MutationSet
 from mote.contracts.file.transactions import HunkRecord
 from mote.runtime.fileops.edit_plans import EditPlanReviewFact
 from mote.runtime.fileops.hunks import split_hunks
-from mote.runtime.fileops.mutation.artifacts import ArtifactRepository
+from mote.runtime.fileops.mutation.artifacts import FileMutationArtifactRepository
 
 
 class EditPlanHunkProjector:
     """Build review records without reopening or re-decoding live files."""
 
-    def __init__(self, *, session_id: str, artifacts: ArtifactRepository) -> None:
+    def __init__(self, *, session_id: str, artifacts: FileMutationArtifactRepository) -> None:
         self.session_id = session_id
         self.artifacts = artifacts
 

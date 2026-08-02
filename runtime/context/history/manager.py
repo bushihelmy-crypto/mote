@@ -37,7 +37,12 @@ from typing import TYPE_CHECKING, cast
 import mote.runtime.context.history.budget as budget
 from mote.contracts.conversation import ContextManagerConfig, FoldState, LLMCallContext
 from mote.contracts.conversation.fields import CACHE_INTENT, CACHE_INTENT_EPHEMERAL_TAIL
-from mote.contracts.events.conversation import HistoryEditedEvent, MessageAppendedEvent, PostCompactEvent
+from mote.contracts.events.conversation import (
+    HistoryEditedEvent,
+    MessageAppendedEvent,
+    ModelContextRebuiltEvent,
+    PostCompactEvent,
+)
 from mote.runtime.context.markers import is_system_reminder
 from mote.runtime.telemetry.logging import log_class
 
@@ -133,7 +138,7 @@ class ContextManager:
         compaction_policy=None,
         session_fact_sink: "SessionFactSink | None" = None,
         history_edited: Callable[[HistoryEditedEvent], None] | None = None,
-        model_context_rebuilt: Callable[[object], Awaitable[None]] | None = None,
+        model_context_rebuilt: Callable[[ModelContextRebuiltEvent], Awaitable[None]] | None = None,
     ):
         self._context = context if context is not None else LLMCallContext()
         self._model_route = model_route
@@ -504,7 +509,7 @@ class ContextManager:
         self._context.messages[:] = outcome.transcript.to_messages()
         return True
 
-    async def _commit_fact(self, event: object) -> None:
+    async def _commit_fact(self, event: MessageAppendedEvent | HistoryEditedEvent) -> None:
         if self._session_fact_sink is not None:
             await self._session_fact_sink.commit_fact(event)
 

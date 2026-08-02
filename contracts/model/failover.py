@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mote.contracts.model.execution_policy import EndpointExecutionPolicy
 from mote.contracts.model.invocation import RequestRequirements
+from mote.contracts.model.operations import ModelOperation
 
 
 class _FrozenContract(BaseModel):
@@ -228,7 +229,8 @@ class AttemptBudget(_FrozenContract):
         return self
 
 
-class EndpointCapabilities(_FrozenContract):
+class ResolvedEndpointCapabilities(_FrozenContract):
+    supported_operations: frozenset[ModelOperation] = frozenset({ModelOperation.GENERATE})
     supports_tools: bool = False
     supports_native_schema: bool = False
     supports_server_web_search: bool = False
@@ -244,7 +246,7 @@ class EndpointDescriptor(_FrozenContract):
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
     base_url_identity: str = Field(min_length=1)
-    capabilities: EndpointCapabilities = Field(default_factory=EndpointCapabilities)
+    capabilities: ResolvedEndpointCapabilities = Field(default_factory=ResolvedEndpointCapabilities)
     governance_domain: str = "default"
     region: str = "global"
     pricing_class: str = "default"
@@ -357,7 +359,7 @@ __all__ = [
     "AttemptSummary",
     "DecisionKind",
     "CredentialVerdict",
-    "EndpointCapabilities",
+    "ResolvedEndpointCapabilities",
     "EndpointDescriptor",
     "FailoverDecision",
     "FailoverPlan",

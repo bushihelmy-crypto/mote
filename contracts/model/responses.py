@@ -9,26 +9,12 @@ Kept deliberately small and provider-agnostic: integrations normalize their own
 wire format (OpenAI ``tool_calls`` / Anthropic ``tool_use`` blocks) into this
 shape via ``BaseLLM.get_choice_tool_calls``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
-@dataclass
-class LLMToolCall:
-    """One structured tool call emitted by the model.
-
-    Attributes:
-        id: Provider-assigned call id (e.g. OpenAI ``tool_calls[i].id``), used to
-            pair the eventual tool result back to this call. May be "" if the
-            provider does not supply one.
-        name: The tool/command name the model chose to invoke.
-        arguments: Already-parsed keyword arguments (a dict), not a JSON string.
-    """
-
-    id: str
-    name: str
-    arguments: dict = field(default_factory=dict)
+from mote.contracts.model.invocation import CanonicalToolCall
 
 
 @dataclass
@@ -46,7 +32,7 @@ class WebSearchHit:
     snippet: str = ""
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class LLMResponse:
     """Text + structured tool calls from one native-tool-use completion.
 
@@ -58,11 +44,19 @@ class LLMResponse:
     """
 
     content: str = ""
-    tool_calls: list[LLMToolCall] = field(default_factory=list)
+    tool_calls: tuple[CanonicalToolCall, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if type(self.content) is not str:
+            raise TypeError("LLM response content must be a string")
+        calls = tuple(self.tool_calls)
+        if any(not isinstance(call, CanonicalToolCall) for call in calls):
+            raise TypeError("LLM response tool calls must be canonical")
+        object.__setattr__(self, "tool_calls", calls)
 
     @property
     def has_tool_calls(self) -> bool:
         return bool(self.tool_calls)
 
 
-__all__ = ["LLMResponse", "LLMToolCall", "WebSearchHit"]
+__all__ = ["LLMResponse", "WebSearchHit"]

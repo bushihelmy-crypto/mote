@@ -17,10 +17,23 @@ import json
 import uuid
 from typing import Any, ClassVar
 
+from mote.contracts.activity import (
+    ActivityEdge,
+    ActivityKind,
+    ActivityNode,
+    ActivityNodeKind,
+    ActivityNodeState,
+    ActivityNodeStatus,
+    ActivityOutcome,
+    ActivityTopology,
+)
 from mote.contracts.events.task import ActivityCompletedEvent, ActivityStartedEvent, TaskProgressEvent
 from mote.contracts.task.graph_errors import GraphError
+from mote.contracts.task.progress import ActivityProgressEvent, ProgressEvent
+from mote.contracts.tool.errors import ToolError
 from mote.contracts.tool.execution import ToolExecutionKind
-from mote.orchestration.workflows.events import reset_progress_writer, set_progress_writer
+from mote.contracts.tool.result import json_tool_payload
+from mote.orchestration.workflows.events import reset_progress_sink, set_progress_sink
 from mote.orchestration.workflows.types import GraphRunState
 from mote.product.workflows.run_graph.compiler import (
     ItemFailure,
@@ -30,7 +43,6 @@ from mote.product.workflows.run_graph.compiler import (
     resolve_output,
 )
 from mote.product.workflows.run_graph.spec import GraphSpec
-from mote.runtime.errors import ToolError
 from mote.runtime.events.context import observe_event_sync
 from mote.runtime.events.scope import ScopeRef, current_scope, push_scope
 from mote.runtime.tools.base_tool import BaseTool
@@ -220,21 +232,24 @@ class RunGraph(BaseTool):
     async def _execute_owned_graph(self, *, compiled, spec, graph_ref, inputs):
         restored = await self.resume_graph_output(contract_spec=spec.output_contract, run_id=graph_ref.id)
         if restored is not None:
-            return ToolResult(output=self._format(restored.value), data=restored.value)
+            return ToolResult(
+                output=self._format(restored.value),
+                payload=json_tool_payload(restored.value),
+            )
 
         run_state = GraphRunState.for_graph(compiled)
         topology = self._build_topology(spec)
         with collect_item_failures() as failures:
             with push_scope(graph_ref) as scope:
                 self._emit_started(scope, topology)
-                token = set_progress_writer(self._make_progress_writer())
+                token = set_progress_sink(self._make_progress_sink())
                 try:
                     state = await compiled.arun(run_state=run_state, **(inputs or {}))
                 except GraphError as exc:
-                    self._emit_completed(scope, run_state, "failed", str(exc))
+                    self._emit_completed(scope, run_state, ActivityOutcome.FAILED, str(exc))
                     return ToolResult(output=str(exc) + self._failure_note(failures), success=False)
                 finally:
-                    reset_progress_writer(token)
+                    reset_progress_sink(token)
 
                 result = resolve_output(spec, state)
                 try:
@@ -244,16 +259,19 @@ class RunGraph(BaseTool):
                         run_id=graph_ref.id,
                     )
                 except GraphError as exc:
-                    self._emit_completed(scope, run_state, "failed", str(exc))
+                    self._emit_completed(scope, run_state, ActivityOutcome.FAILED, str(exc))
                     return ToolResult(output=str(exc), success=False)
                 result = committed.value
-                self._emit_completed(scope, run_state, "success", "")
+                self._emit_completed(scope, run_state, ActivityOutcome.SUCCESS, "")
 
-        return ToolResult(output=self._format(result) + self._failure_note(failures), data=result)
+        return ToolResult(
+            output=self._format(result) + self._failure_note(failures),
+            payload=json_tool_payload(result),
+        )
 
     # -- activity lineage (the run_graph → node → tool spine) --
     @staticmethod
-    def _make_progress_writer():
+    def _make_progress_sink():
         """A progress writer whose sole sink is a **scoped** observation ping.
 
         Foreground ``arun`` installs no writer, so the engine's per-node
@@ -264,31 +282,29 @@ class RunGraph(BaseTool):
         Best-effort telemetry — a sink failure never breaks the run.
         """
 
-        def _writer(stage: str, status: Any, detail: Any = None) -> None:
-            status_str = status.value if hasattr(status, "value") else str(status)
-            detail_str = str(detail) if detail is not None else ""
-            sc = current_scope()
-            try:
-                observe_event_sync(
-                    TaskProgressEvent(
-                        task_id="run_graph",
-                        stage=stage,
-                        status=status_str,
-                        detail=detail_str,
-                        scope=sc,
+        class _RunGraphProgressSink:
+            def emit(self, event: ProgressEvent) -> None:
+                if not isinstance(event, ActivityProgressEvent):
+                    raise TypeError("RunGraph progress sink requires ActivityProgressEvent")
+                sc = current_scope()
+                try:
+                    observe_event_sync(
+                        TaskProgressEvent(
+                            progress=event,
+                            scope=sc,
+                        )
                     )
-                )
-            except Exception:  # noqa: BLE001 — telemetry must never break the run
-                pass
+                except Exception:  # noqa: BLE001 — telemetry must never break the run
+                    pass
 
-        return _writer
+        return _RunGraphProgressSink()
 
-    def _emit_started(self, scope: tuple, topology: dict) -> None:
+    def _emit_started(self, scope: tuple, topology: ActivityTopology) -> None:
         try:
             observe_event_sync(
                 ActivityStartedEvent(
                     scope=scope,
-                    activity_kind="graph",
+                    activity_kind=ActivityKind.GRAPH,
                     label="run_graph",
                     topology=topology,
                 )
@@ -296,7 +312,13 @@ class RunGraph(BaseTool):
         except Exception:  # noqa: BLE001 — telemetry must never break the run
             pass
 
-    def _emit_completed(self, scope: tuple, run_state: GraphRunState, outcome: str, summary: str) -> None:
+    def _emit_completed(
+        self,
+        scope: tuple,
+        run_state: GraphRunState,
+        outcome: ActivityOutcome,
+        summary: str,
+    ) -> None:
         try:
             observe_event_sync(
                 ActivityCompletedEvent(
@@ -310,12 +332,12 @@ class RunGraph(BaseTool):
             pass
 
     @staticmethod
-    def _build_topology(spec: GraphSpec) -> dict:
+    def _build_topology(spec: GraphSpec) -> ActivityTopology:
         """Neutral pre-computed declared shape read by ``activity_topology``.
 
-        ``{"nodes": [{"id","kind","label"}...], "edges": [{"from","to",
-        "guarded"}...]}`` — plain dicts so the contracts/render layers import
-        nothing from bggraph. ``label`` prefers the node's description.
+        The canonical activity DTO remains independent from bggraph while
+        preserving the declared nodes and edges. ``label`` prefers the node's
+        description.
 
         Edges mirror what the compiler actually wires: the INFERRED data-flow
         edges (a node's ``$ref`` to another node's result → the referenced node
@@ -324,9 +346,16 @@ class RunGraph(BaseTool):
         ``guarded`` when they carry a ``when`` predicate. An explicit edge that
         duplicates an inferred one is not double-listed.
         """
-        nodes = [{"id": n.id, "kind": n.kind, "label": (n.description or n.id)} for n in spec.nodes]
+        nodes = tuple(
+            ActivityNode(
+                n.id,
+                ActivityNodeKind(n.kind),
+                n.description or n.id,
+            )
+            for n in spec.nodes
+        )
         node_ids = {n.id for n in spec.nodes}
-        edges: list[dict] = []
+        edges: list[ActivityEdge] = []
         seen: set[tuple[str, str]] = set()
         # Inferred data-flow edges (dep → node) — the implicit dependency spine.
         for node in spec.nodes:
@@ -334,38 +363,37 @@ class RunGraph(BaseTool):
                 pair = (dep, node.id)
                 if pair not in seen:
                     seen.add(pair)
-                    edges.append({"from": dep, "to": node.id, "guarded": False})
+                    edges.append(ActivityEdge(dep, node.id, False))
         # Explicit edges (branch / loop routing); guarded when predicated.
         for e in spec.edges:
             pair = (e.from_, e.to)
             if e.when is None and pair in seen:
                 continue  # already covered by an inferred data-flow edge
-            edges.append({"from": e.from_, "to": e.to, "guarded": e.when is not None})
-        return {"nodes": nodes, "edges": edges}
+            edges.append(ActivityEdge(e.from_, e.to, e.when is not None))
+        return ActivityTopology(nodes, tuple(edges))
 
     @staticmethod
-    def _build_node_states(run_state: GraphRunState) -> list[dict]:
+    def _build_node_states(run_state: GraphRunState) -> tuple[ActivityNodeState, ...]:
         """Neutral per-node outcome list read by ``activity_outcome``.
 
-        ``[{"id","kind","label","status","attempts","error","args"}...]`` off the
-        authoritative ``GraphRunState`` records — the self-sufficient terminal
+        Canonical node-state DTOs projected from the authoritative
+        ``GraphRunState`` records form the self-sufficient terminal
         view (a replay renders from this alone). ``args`` is omitted (the record
         holds no resolved kwargs; per-item retry args ride the failure note).
         """
-        states: list[dict] = []
+        states: list[ActivityNodeState] = []
         for name, rec in run_state.records.items():
             states.append(
-                {
-                    "id": name,
-                    "kind": "",
-                    "label": name,
-                    "status": rec.status.value if hasattr(rec.status, "value") else str(rec.status),
-                    "attempts": rec.attempts,
-                    "error": rec.last_error or "",
-                    "args": None,
-                }
+                ActivityNodeState(
+                    node_id=name,
+                    kind=ActivityNodeKind.UNSPECIFIED,
+                    label=name,
+                    status=ActivityNodeStatus(rec.status.value),
+                    attempts=rec.attempts,
+                    error=rec.last_error or "",
+                )
             )
-        return states
+        return tuple(states)
 
     @staticmethod
     def _parse(graph: Any) -> GraphSpec:

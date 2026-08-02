@@ -7,8 +7,9 @@ from mote.contracts.inference.deadline import CrossProcessDeadline
 from mote.contracts.inference.executions import BoundExecutionRequest
 from mote.contracts.inference.identity import InferencePrincipal, TrustedSchedulingClass
 from mote.contracts.inference.transport import ProviderWireResult
-from mote.contracts.inference.wire_permit import WirePermit
+from mote.contracts.inference.wire_permit import ExecutionTaxonomy, WirePermit
 from mote.product.inference.backends.sqlite import SQLiteAttemptReceiptStore, SQLiteUsageLedger
+from mote.runtime.clock import SystemClock
 from mote.runtime.inference.command_runtime import EmbeddedServiceCommandRuntime
 from mote.runtime.inference.governance import CredentialHealthAuthority, ProviderQuotaAuthority
 
@@ -100,7 +101,7 @@ def _permit(request):
     now = datetime.now(timezone.utc)
     return WirePermit(
         attempt_id=request.execution_id,
-        execution_taxonomy="durable_operation",
+        execution_taxonomy=ExecutionTaxonomy.DURABLE_OPERATION,
         owner_journal_id="service-journal",
         wire_unit="batch.create",
         generation_id=request.generation_id,
@@ -123,7 +124,7 @@ def test_command_runtime_uses_durable_taxonomy_and_single_wire(tmp_path):
     async def scenario():
         receipts = SQLiteAttemptReceiptStore(tmp_path / "gateway.sqlite3")
         await receipts.initialize()
-        ledger = SQLiteUsageLedger(receipts)
+        ledger = SQLiteUsageLedger(receipts, clock_source=SystemClock())
         await ledger.configure_budget("tenant", "project", 100)
         transport = _Transport()
         generations = _Generations()
@@ -165,7 +166,7 @@ def test_command_runtime_drain_rejects_new_work_and_waits_for_terminal(tmp_path)
     async def scenario():
         receipts = SQLiteAttemptReceiptStore(tmp_path / "gateway.sqlite3")
         await receipts.initialize()
-        ledger = SQLiteUsageLedger(receipts)
+        ledger = SQLiteUsageLedger(receipts, clock_source=SystemClock())
         await ledger.configure_budget("tenant", "project", 100)
         transport = _Transport()
         runtime = EmbeddedServiceCommandRuntime(

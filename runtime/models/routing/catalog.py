@@ -52,6 +52,9 @@ def build_route_catalog(
             continue
         profile = profiles[0]
         route_capabilities = RouteCapabilities(
+            supported_operations=frozenset(
+                operation for item in profiles for operation in item.capabilities.supported_operations
+            ),
             supports_tools=any(item.capabilities.supports_tools for item in profiles),
             supports_native_schema=any(item.capabilities.supports_native_schema for item in profiles),
             supports_server_web_search=any(item.capabilities.supports_server_web_search for item in profiles),
@@ -72,6 +75,7 @@ def build_route_catalog(
                     RouteAdmissionProfile(
                         context_tokens=item.capabilities.context_tokens,
                         capabilities=RouteCapabilities(
+                            supported_operations=item.capabilities.supported_operations,
                             supports_tools=item.capabilities.supports_tools,
                             supports_native_schema=item.capabilities.supports_native_schema,
                             supports_server_web_search=item.capabilities.supports_server_web_search,

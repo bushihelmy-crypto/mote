@@ -12,9 +12,11 @@ from mote.contracts.model.errors import (
     ModelRouteUnavailableError,
 )
 from mote.contracts.model.failover import EndpointDescriptor, FailoverPlan
-from mote.contracts.model.invocation import ModelInvocation, ModelOperation, RequestRequirements, ResponseMode
+from mote.contracts.model.invocation import ModelInvocation, RequestRequirements, ResponseMode
+from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.topology import RouteId
 from mote.contracts.model.topology_codec import encode_route_id
+from mote.runtime.models.failover.compatibility import endpoints_are_projection_compatible
 from mote.runtime.models.failover.snapshot import CanonicalModelRuntimeSnapshot, RuntimeFailoverGroup
 
 
@@ -83,6 +85,15 @@ class FailoverPlanner:
                 missing_by_endpoint=missing_by_endpoint,
                 config_revision=self._snapshot.revision,
             )
+        if not endpoints_are_projection_compatible(eligible, invocation.operation):
+            raise ModelCapabilityUnsatisfiedError(
+                f"route {invocation.route_id!r} mixes projection-incompatible endpoints",
+                route_id=encode_route_id(invocation.route_id),
+                group_id=group.group_id,
+                operation=invocation.operation.value,
+                candidates=[endpoint.endpoint_id for endpoint in eligible],
+                config_revision=self._snapshot.revision,
+            )
 
         plan_id = hashlib.sha256(
             (
@@ -133,6 +144,8 @@ class FailoverPlanner:
         requirements = invocation.requirements
         capabilities = endpoint.capabilities
         missing: list[str] = []
+        if invocation.operation not in capabilities.supported_operations:
+            missing.append(f"operation:{invocation.operation.value}")
         if (
             requirements.needs_tools or requirements.response_mode is ResponseMode.NATIVE_TOOLS
         ) and not capabilities.supports_tools:

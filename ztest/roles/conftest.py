@@ -13,6 +13,7 @@ Key facts the fixtures encode:
   want to bypass them pre-seed the private ``_router`` / ``_context_manager`` /
   ``_inference_engine`` slots with the fakes here.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -22,25 +23,16 @@ from mote.runtime.agent import Role
 
 @pytest.fixture(autouse=True)
 def _isolated_session_root(tmp_path, monkeypatch):
-    from dataclasses import replace
-
+    from mote.kernel.output import text_output_contract
+    from mote.product.agents.factory import CodingAgentFactory
     from mote.product.paths import default_runtime_paths
-    from mote.runtime.agent import AgentDependencies, AgentWiring
+    from mote.runtime.agent import AgentWiring
 
     paths = default_runtime_paths(
         user_config_root=tmp_path / "config",
         workspace_root=tmp_path / "workspace",
     )
-    dependencies = replace(
-        AgentDependencies.text(None),
-        watched_config_files=(),
-        user_config_root=paths.user_config_root,
-        session_workspace_root=paths.session_workspace_root,
-        browser_profiles_root=paths.browser_profiles_root,
-        sandbox_ca_root=paths.sandbox_ca_root,
-        secrets_root=paths.secrets_root,
-        oauth_root=paths.oauth_root,
-    )
+    dependencies = CodingAgentFactory(paths=paths).dependencies(deps=None, output_contract=text_output_contract())
     monkeypatch.setattr(
         AgentWiring,
         "defaults",
@@ -139,14 +131,10 @@ class FakeEnv:
 @pytest.fixture
 def context():
     """A Runtime Context with an explicitly injected offline provider."""
-    from mote.product.config.model.inputs import ProductEndpointInput, ShortcutModelsConfig
-    from mote.product.config.schema import Config
     from mote.runtime.models.clients.context import Context
     from mote.ztest.model_fakes import FakeApplicationComposition, FakeModelGateway
 
-    context = Context(
-        config=Config(models=ShortcutModelsConfig(default=ProductEndpointInput(model="test"))),
-    )
+    context = Context()
     object.__setattr__(
         context,
         "_test_application_composition",
@@ -159,8 +147,8 @@ def context():
 def role(context, _isolated_session_root):
     """A bound Role with a real Context but no env."""
     from mote.kernel.output import text_output_contract
-    from mote.product.agents.background_tasks import build_background_task_pool
-    from mote.runtime.agent import AgentDependencies, AgentWiring
+    from mote.product.agents.factory import CodingAgentFactory
+    from mote.runtime.agent import AgentWiring
 
     paths = _isolated_session_root
     built = Role(
@@ -168,17 +156,8 @@ def role(context, _isolated_session_root):
         wiring=AgentWiring.for_context(
             context,
             application_composition=context._test_application_composition,
-            dependencies=AgentDependencies(
-                deps=None,
-                output_contract=text_output_contract(),
-                background_task_pool_builder=build_background_task_pool,
-                watched_config_files=(),
-                user_config_root=paths.user_config_root,
-                session_workspace_root=paths.session_workspace_root,
-                browser_profiles_root=paths.browser_profiles_root,
-                sandbox_ca_root=paths.sandbox_ca_root,
-                secrets_root=paths.secrets_root,
-                oauth_root=paths.oauth_root,
+            dependencies=CodingAgentFactory(paths=paths).dependencies(
+                deps=None, output_contract=text_output_contract()
             ),
         ),
     )

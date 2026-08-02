@@ -12,6 +12,13 @@ try:
 except ImportError:  # pragma: no cover - optional provider extra
     AsyncOpenAI = None
 
+from mote.contracts.service import MediaGenerationResult, MediaGenerationSpec
+from mote.product.config.multimodal import (
+    AudioGenerationConfig,
+    ImageGenerationConfig,
+    MusicGenerationConfig,
+    VideoGenerationConfig,
+)
 from mote.product.media_generation.errors import classify_media_failure
 from mote.product.media_generation.registry import MediaProvider, media_provider
 
@@ -80,19 +87,18 @@ def _operation_id(data: dict[str, Any]) -> str:
     return operation_id
 
 
-def _completed_asset(data: dict[str, Any], filename: str) -> dict[str, Any]:
+def _completed_asset(data: dict[str, Any], filename: str) -> MediaGenerationResult:
     urls = data.get("urls") or []
     if not urls and data.get("url"):
         urls = [data["url"]]
     if not urls:
         urls = data.get("pre_urls") or []
     normalized = [str(url) for url in urls if url]
-    return {
-        "status": "success",
-        "filename": filename,
-        "urls": normalized,
-        "url": normalized[0] if normalized else "",
-    }
+    return MediaGenerationResult(
+        filename=filename,
+        urls=tuple(normalized),
+        url=normalized[0] if normalized else "",
+    )
 
 
 @media_provider("audio", "openai")
@@ -110,7 +116,7 @@ class AudioCreator(MediaProvider):
         ("gpt-4o-mini-tts", "female"): "nova",
     }
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: AudioGenerationConfig) -> None:
         super().__init__(config)
         self._api_key = str(config.api_key)
         self._base_url = str(config.base_url).rstrip("/")
@@ -118,19 +124,19 @@ class AudioCreator(MediaProvider):
 
     async def start_once(
         self,
-        item: dict[str, Any],
+        item: MediaGenerationSpec,
         *,
         idempotency_key: str,
         timeout_seconds: float,
     ) -> str:
-        gender = str(item.get("gender") or "female")
+        gender = item.gender or "female"
         payload = {
             "model": self._model,
-            "input": item.get("text") or item.get("input") or "",
+            "input": item.text or "",
             "voice": self.VOICE_MAP.get((self._model, gender)) or ("echo" if gender == "male" else "alloy"),
-            "speed": item.get("speed", 1.0),
+            "speed": item.speed or 1.0,
             "response_format": "mp3",
-            "filename": item.get("filename", "audio.mp3"),
+            "filename": item.filename or "audio.mp3",
         }
         data = await _post_json(
             f"{self._base_url}/audio/speech/async",
@@ -143,19 +149,19 @@ class AudioCreator(MediaProvider):
     async def poll_once(
         self,
         operation_id: str,
-        state: dict[str, Any],
+        filename: str,
         *,
         timeout_seconds: float,
-    ) -> dict[str, Any] | None:
+    ) -> MediaGenerationResult | None:
         data = await _poll_task_once(self._base_url, self._api_key, operation_id, timeout_seconds)
-        return None if data is None else _completed_asset(data, str(state["filename"]))
+        return None if data is None else _completed_asset(data, filename)
 
 
 @media_provider("music", "openai")
 class MusicCreator(MediaProvider):
     """OpenAI-compatible asynchronous music endpoint."""
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: MusicGenerationConfig) -> None:
         super().__init__(config)
         self._api_key = str(config.api_key)
         self._base_url = str(config.base_url).rstrip("/")
@@ -164,29 +170,29 @@ class MusicCreator(MediaProvider):
 
     async def start_once(
         self,
-        item: dict[str, Any],
+        item: MediaGenerationSpec,
         *,
         idempotency_key: str,
         timeout_seconds: float,
     ) -> str:
         payload: dict[str, Any] = {
             "model": self._model,
-            "prompt": item.get("prompt", ""),
-            "n": item.get("n", 1),
-            "response_format": item.get("response_format") or self._response_format,
-            "filename": item.get("filename", "music.wav"),
+            "prompt": item.prompt or "",
+            "n": item.n,
+            "response_format": item.response_format or self._response_format,
+            "filename": item.filename or "music.wav",
         }
-        for key in (
-            "negative_prompt",
-            "seed",
-            "lyrics",
-            "audio_format",
-            "sample_rate",
-            "bitrate",
-            "voice_id",
+        for key, value in (
+            ("negative_prompt", item.negative_prompt),
+            ("seed", item.seed),
+            ("lyrics", item.lyrics),
+            ("audio_format", item.audio_format),
+            ("sample_rate", item.sample_rate),
+            ("bitrate", item.bitrate),
+            ("voice_id", item.voice_id),
         ):
-            if item.get(key) is not None:
-                payload[key] = item[key]
+            if value is not None:
+                payload[key] = value
         data = await _post_json(
             f"{self._base_url}/audio/music/async",
             _headers(self._api_key, idempotency_key),
@@ -198,19 +204,19 @@ class MusicCreator(MediaProvider):
     async def poll_once(
         self,
         operation_id: str,
-        state: dict[str, Any],
+        filename: str,
         *,
         timeout_seconds: float,
-    ) -> dict[str, Any] | None:
+    ) -> MediaGenerationResult | None:
         data = await _poll_task_once(self._base_url, self._api_key, operation_id, timeout_seconds)
-        return None if data is None else _completed_asset(data, str(state["filename"]))
+        return None if data is None else _completed_asset(data, filename)
 
 
 @media_provider("image", "openai")
 class ImageCreator(MediaProvider):
     """OpenAI-compatible image generation and editing endpoint."""
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: ImageGenerationConfig) -> None:
         super().__init__(config)
         self._api_key = str(config.api_key)
         self._base_url = str(config.base_url).rstrip("/")
@@ -218,15 +224,15 @@ class ImageCreator(MediaProvider):
 
     async def start_once(
         self,
-        item: dict[str, Any],
+        item: MediaGenerationSpec,
         *,
         idempotency_key: str,
         timeout_seconds: float,
     ) -> str:
-        filename = str(item.get("filename") or "image.png")
-        prompt = item.get("description") or item.get("prompt") or ""
-        size = str(item.get("size") or "1024x1024")
-        reference = item.get("image")
+        filename = item.filename or "image.png"
+        prompt = item.description or item.prompt or ""
+        size = item.size or "1024x1024"
+        reference = item.image
         if reference:
             data = await self._submit_edit_once(
                 prompt=str(prompt),
@@ -298,19 +304,19 @@ class ImageCreator(MediaProvider):
     async def poll_once(
         self,
         operation_id: str,
-        state: dict[str, Any],
+        filename: str,
         *,
         timeout_seconds: float,
-    ) -> dict[str, Any] | None:
+    ) -> MediaGenerationResult | None:
         data = await _poll_task_once(self._base_url, self._api_key, operation_id, timeout_seconds)
-        return None if data is None else _completed_asset(data, str(state["filename"]))
+        return None if data is None else _completed_asset(data, filename)
 
 
 @media_provider("video", "openai")
 class VideoCreator(MediaProvider):
     """OpenAI SDK video generation endpoint."""
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: VideoGenerationConfig) -> None:
         super().__init__(config)
         self._api_key = str(config.api_key)
         self._base_url = str(config.base_url).rstrip("/")
@@ -328,26 +334,26 @@ class VideoCreator(MediaProvider):
 
     async def start_once(
         self,
-        item: dict[str, Any],
+        item: MediaGenerationSpec,
         *,
         idempotency_key: str,
         timeout_seconds: float,
     ) -> str:
-        reference = item.get("image") or item.get("input_reference")
-        has_reference = reference or item.get("first_frame")
+        reference = item.image or item.input_reference
+        has_reference = reference or item.first_frame
         params: dict[str, Any] = {
             "model": self._reference_model if has_reference else self._text_model,
-            "prompt": item.get("prompt", ""),
-            "size": item.get("size", "1280x720"),
-            "seconds": str(item.get("seconds", 4)),
-            "extra_body": {"filename": item.get("filename", "video.mp4")},
+            "prompt": item.prompt or "",
+            "size": item.size or "1280x720",
+            "seconds": str(item.seconds or 4),
+            "extra_body": {"filename": item.filename or "video.mp4"},
             "extra_headers": {"Idempotency-Key": idempotency_key},
             "timeout": timeout_seconds,
         }
         if reference:
             params["input_reference"] = reference
-        if item.get("first_frame"):
-            params["extra_body"]["first_frame"] = item["first_frame"]
+        if item.first_frame:
+            params["extra_body"]["first_frame"] = item.first_frame
         client = self._client()
         try:
             video = await client.videos.create(**params)
@@ -358,10 +364,10 @@ class VideoCreator(MediaProvider):
     async def poll_once(
         self,
         operation_id: str,
-        state: dict[str, Any],
+        filename: str,
         *,
         timeout_seconds: float,
-    ) -> dict[str, Any] | None:
+    ) -> MediaGenerationResult | None:
         client = self._client()
         try:
             video = await client.videos.retrieve(
@@ -388,12 +394,11 @@ class VideoCreator(MediaProvider):
             return None
         urls = _field(video, "urls") or []
         url = str((urls[0] if urls else _field(video, "url")) or "")
-        return {
-            "status": "success",
-            "filename": str(state["filename"]),
-            "url": url,
-            "urls": [url] if url else [],
-        }
+        return MediaGenerationResult(
+            filename=filename,
+            url=url,
+            urls=(url,) if url else (),
+        )
 
 
 def _field(value: Any, name: str) -> Any:

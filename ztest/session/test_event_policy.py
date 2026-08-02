@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from mote.runtime.events import (
-    OutputCommittedEvent,
-    PromptRejectedEvent,
-    TaskProgressEvent,
-    ToolInvocationStartedEvent,
-    TurnEndEvent,
-)
+from mote.contracts.events.conversation import PromptRejectedEvent
+from mote.contracts.events.output import OutputCommittedEvent
+from mote.contracts.events.session import TurnEndEvent
+from mote.contracts.events.task import TaskProgressEvent
+from mote.contracts.events.tool import ToolInvocationStartedEvent
+from mote.contracts.task.progress import ProgressPhase
+from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity
 from mote.runtime.session.event_policy import ROLLOUT_EVENT_TYPES, is_rollout_event
 
 
@@ -28,8 +28,27 @@ def test_rollout_policy_selects_facts_without_changing_their_types():
 
 
 def test_non_persisted_events_remain_available_to_other_observers():
-    assert not is_rollout_event(TaskProgressEvent())
-    assert not is_rollout_event(ToolInvocationStartedEvent())
+    assert not is_rollout_event(
+        TaskProgressEvent.activity(
+            run_id="run",
+            definition_id="definition",
+            stage="node",
+            phase=ProgressPhase.RUNNING,
+        )
+    )
+    assert not is_rollout_event(
+        ToolInvocationStartedEvent(
+            ToolInvocationIdentity(
+                ToolInvocationId("test-call"),
+                ToolAttemptOrdinal(1),
+                "definition",
+                1,
+                "sha256-args",
+                "owner",
+                "run",
+            )
+        )
+    )
 
 
 def test_rollout_policy_has_no_duplicate_or_instance_order_semantics():

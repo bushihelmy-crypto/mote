@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
@@ -51,12 +52,21 @@ class FakeRole:
             FakeRole._counter += 1
             session_id = f"auto-{FakeRole._counter}"
         self.session_id = session_id
-        self.state = SimpleNamespace(env=None)
+        self._human = ContextVar(f"acp-human-{session_id}", default=None)
         self.telemetry = InlineTelemetry()
         self.role_schema = SimpleNamespace(name=name)
 
     async def cleanup(self) -> None:
         return None
+
+    def bind_human_interaction(self, interaction):
+        return self._human.set(interaction)
+
+    def reset_human_interaction(self, token):
+        self._human.reset(token)
+
+    async def fork_session(self):
+        return FakeRole(None, self.role_schema.name)
 
 
 class EmittingControl:
@@ -99,8 +109,8 @@ class EmittingControl:
 
 
 def make_factory():
-    def role_factory(*, name: str = "Assistant", session_id: Optional[str] = None, agent_type=None):
-        return FakeRole(session_id=session_id, name=name)
+    def role_factory(request):
+        return FakeRole(session_id=request.session_id, name=request.name)
 
     return role_factory
 
@@ -114,7 +124,7 @@ def patched_backend(monkeypatch):
         return EmittingControl(role), SimpleNamespace(role=role)
 
     monkeypatch.setattr(sr, "_build_control", build_control)
-    monkeypatch.setattr(sr, "_resume_role", lambda role: False)
+    monkeypatch.setattr(sr, "_resume_role", lambda role: True)
     monkeypatch.setattr(sr, "_role_cleanup", lambda role: getattr(role, "cleanup", None))
 
 
@@ -319,12 +329,11 @@ async def test_fork_branches_a_new_session_id(patched_backend):
 
 
 @pytest.mark.asyncio
-async def test_fork_degrades_to_fresh_when_engine_cannot_fork(patched_backend, monkeypatch):
-    # fork_role returning None → the server degrades to a plain new session.
-    async def no_fork(role):
-        return None
+async def test_fork_unsupported_returns_protocol_error_without_fresh_session(patched_backend, monkeypatch):
+    async def no_fork(self):
+        raise NotImplementedError("unsupported")
 
-    monkeypatch.setattr(srv, "_fork_role", no_fork)
+    monkeypatch.setattr(FakeRole, "fork_session", no_fork)
     client, to_server, from_server = _fresh_client()
     registry = SessionRegistry(make_factory(), name="Assistant")
     server = AcpServer(registry, name="Assistant")
@@ -333,8 +342,8 @@ async def test_fork_degrades_to_fresh_when_engine_cannot_fork(patched_backend, m
         src = await client.request("session/new", {})
         src_id = src["result"]["sessionId"]
         fork = await client.request("session/fork", {"sessionId": src_id})
-        assert fork["result"]["sessionId"]  # still a usable id, not an error
-        assert fork["result"]["sessionId"] != src_id
+        assert fork["error"]["code"] == srv.ERR_INTERNAL
+        assert registry.session_ids == [src_id]
     finally:
         to_server.close()
         await task

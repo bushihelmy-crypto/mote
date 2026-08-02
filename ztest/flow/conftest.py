@@ -26,6 +26,7 @@ Collaborators the flow touches (and the slice each fake implements):
 ``make_engine`` wires a fully-defaulted engine and hands back the engine and the
 fakes so a test can pre-seed inputs and assert on recorded calls.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -44,7 +45,7 @@ from mote.contracts.tool.catalog import (
 )
 from mote.kernel.commands.contracts import ExecutedCommand, HistoryProjection
 from mote.kernel.execution import PROCEED, BudgetVerdict, ExecutionContext, ExecutionEngine
-from mote.kernel.inference.request import InferenceRequest
+from mote.kernel.execution.request import InferenceRequest
 from mote.runtime.durable.inference_checkpoint import InferenceCheckpoint
 from mote.runtime.persistence.execution_transaction import RuntimeExecutionTransaction
 

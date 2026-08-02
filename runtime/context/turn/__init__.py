@@ -12,7 +12,6 @@ by ``Role``.
 """
 
 from mote.runtime.context.turn.bus import TurnContextBus
-from mote.runtime.context.turn.format import wrap_system_reminder
 from mote.runtime.context.turn.sources import (
     ChangedFilesContextSource,
     CompactionNoticeContextSource,
@@ -32,7 +31,6 @@ from mote.runtime.context.turn.sources import (
 
 __all__ = [
     "TurnContextBus",
-    "wrap_system_reminder",
     "ChangedFilesContextSource",
     "CompactionNoticeContextSource",
     "CredentialIndexContextSource",
