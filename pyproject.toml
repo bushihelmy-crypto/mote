@@ -78,8 +78,8 @@ dependencies = [
     "pylatexenc",  # flatten LaTeX math ($…$/$$…$$) to Unicode for terminal render
     # Multi-language CodeMap (JS/TS/Go/Rust/Java/C#/C/C++ via tree-sitter). Keep
     # the Python binding and precompiled grammars as one validated native pair.
-    "tree-sitter==0.25.2",
-    "tree-sitter-language-pack==1.12.5",
+    "tree-sitter==0.26.0",
+    "tree-sitter-language-pack==1.13.7",
     # Observability
     "langfuse",
     "sentry-sdk",
