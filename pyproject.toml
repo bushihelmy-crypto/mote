@@ -101,7 +101,7 @@ inference-redis = ["redis>=5,<7"]
 inference-qdrant = ["qdrant-client>=1.14,<2"]
 inference-s3 = ["aioboto3>=13,<16"]
 inference-gcs = ["google-cloud-storage>=3,<4"]
-inference-webrtc = ["aiortc>=1.13,<2"]
+inference-webrtc = ["aiortc>=1.15.0,<2"]
 
 [project.scripts]
 mote = "mote.product.entrypoints.cli.__main__:main"
