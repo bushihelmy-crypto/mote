@@ -2,30 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
+from mote.contracts.model.invocation import CanonicalMessage
 from mote.contracts.model.routing import RoutingMessage, RoutingSignals
 from mote.kernel.inference.tokenization import count_message_tokens, count_string_tokens
 
 
 def build_routing_signals(
-    messages: Sequence[Mapping[str, object]],
+    messages: Sequence[RoutingMessage],
     *,
     prompt_text: str = "",
 ) -> RoutingSignals:
     """Normalize model context into the stable semantic-routing signal contract."""
 
-    normalized = tuple(
-        RoutingMessage(
-            role=str(message.get("role", "user")),
-            content=str(message.get("content", "")),
-        )
-        for message in messages
-    )
+    normalized = tuple(messages)
     text = prompt_text or "\n".join(message.content for message in normalized if message.content)
-    wire = [message.model_dump(mode="python") for message in normalized]
+    canonical = tuple(CanonicalMessage(role=message.role, content=message.content) for message in normalized)
     try:
-        estimated_tokens = count_message_tokens(wire, "gpt-3.5-turbo-0125")
+        estimated_tokens = count_message_tokens(canonical, "gpt-3.5-turbo-0125")
     except Exception:
         try:
             estimated_tokens = count_string_tokens(text, "gpt-3.5-turbo-0125")

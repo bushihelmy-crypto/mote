@@ -36,6 +36,7 @@ def _request(number: int, *, maximum_attempts: int = 3) -> TurnAcceptanceRequest
         _instant(1),
         _instant(100),
         maximum_attempts,
+        "digest-1",
     )
 
 
@@ -47,10 +48,19 @@ def _components(path: Path, *, now: list[float], limit: int = 1):
     return leases, store, limiter, DurableTurnScheduler(store=store, limiter=limiter)
 
 
+def _accept(store: DurableTurnQueueStore, request: TurnAcceptanceRequest) -> None:
+    lease = store._lease_coordinator.acquire(f"turn-accept:{request.identity.request_id}", "acceptor", 30)
+    prepared = store.prepare_acceptance(request, lease=lease)
+    assert prepared.revision is not None
+    store.commit_acceptance(
+        request_id=request.identity.request_id, expected_item_revision=prepared.revision, lease=lease
+    )
+
+
 def test_claim_durably_binds_fence_process_and_execution_permit(tmp_path: Path) -> None:
     now = [1.0]
     leases, store, limiter, scheduler = _components(tmp_path / "turns.json", now=now)
-    store.accept(_request(1))
+    _accept(store, _request(1))
     lease = leases.acquire("turn-queue:queue-1", "scheduler-1", 30)
     attempt = scheduler.claim_next(
         config=TurnSchedulingConfig(1), now=_instant(10), lease=lease, process_instance_id="process-1"
@@ -74,8 +84,8 @@ def test_claim_durably_binds_fence_process_and_execution_permit(tmp_path: Path) 
 def test_capacity_backpressure_does_not_claim_second_turn(tmp_path: Path) -> None:
     now = [1.0]
     leases, store, limiter, scheduler = _components(tmp_path / "turns.json", now=now)
-    store.accept(_request(1))
-    store.accept(_request(2))
+    _accept(store, _request(1))
+    _accept(store, _request(2))
     lease = leases.acquire("turn-queue:queue-1", "scheduler-1", 30)
     first = scheduler.claim_next(
         config=TurnSchedulingConfig(1), now=_instant(10), lease=lease, process_instance_id="process-1"
@@ -92,7 +102,7 @@ def test_capacity_backpressure_does_not_claim_second_turn(tmp_path: Path) -> Non
 def test_stale_fence_cannot_claim_and_releases_only_its_local_permit(tmp_path: Path) -> None:
     now = [1.0]
     leases, store, limiter, scheduler = _components(tmp_path / "turns.json", now=now)
-    store.accept(_request(1))
+    _accept(store, _request(1))
     stale = leases.acquire("turn-queue:queue-1", "scheduler-1", 1)
     now[0] = 3.0
     current = leases.acquire("turn-queue:queue-1", "scheduler-2", 30)
@@ -112,7 +122,7 @@ def test_restart_scan_rediscovers_accepted_work_without_wake_signal(tmp_path: Pa
     now = [1.0]
     path = tmp_path / "turns.json"
     leases, store, _, _ = _components(path, now=now)
-    store.accept(_request(1))
+    _accept(store, _request(1))
     restarted_store = DurableTurnQueueStore(path, queue_id="queue-1", capacity=8, lease_coordinator=leases)
     restarted_limiter = AgentExecutionLimiter()
     restarted_limiter.initialize(1)
@@ -128,7 +138,7 @@ def test_restart_scan_rediscovers_accepted_work_without_wake_signal(tmp_path: Pa
 def test_cancel_deadline_and_claim_compete_by_item_revision_cas(tmp_path: Path) -> None:
     now = [1.0]
     leases, store, limiter, scheduler = _components(tmp_path / "turns.json", now=now)
-    store.accept(_request(1))
+    _accept(store, _request(1))
     lease = leases.acquire("turn-queue:queue-1", "scheduler-1", 30)
     stale_view = store.load().items[0]
     cancelled = scheduler.cancel_unclaimed(stale_view, reason="root_cancelled", lease=lease)
@@ -149,7 +159,7 @@ def test_cancel_deadline_and_claim_compete_by_item_revision_cas(tmp_path: Path) 
 def test_claimed_deadline_is_execution_owned_and_cannot_be_cancelled_as_queued(tmp_path: Path) -> None:
     now = [1.0]
     leases, store, limiter, scheduler = _components(tmp_path / "turns.json", now=now)
-    store.accept(_request(1))
+    _accept(store, _request(1))
     lease = leases.acquire("turn-queue:queue-1", "scheduler-1", 30)
     queued_view = store.load().items[0]
     claimed = scheduler.claim_next(
@@ -172,8 +182,8 @@ def test_claimed_deadline_is_execution_owned_and_cannot_be_cancelled_as_queued(t
 def test_retry_persists_bounded_backoff_and_does_not_block_other_work(tmp_path: Path) -> None:
     now = [1.0]
     leases, store, limiter, scheduler = _components(tmp_path / "turns.json", now=now)
-    store.accept(_request(1))
-    store.accept(_request(2))
+    _accept(store, _request(1))
+    _accept(store, _request(2))
     lease = leases.acquire("turn-queue:queue-1", "scheduler-1", 30)
     first = scheduler.claim_next(
         config=TurnSchedulingConfig(1), now=_instant(10), lease=lease, process_instance_id="process-1"
@@ -195,8 +205,8 @@ def test_retry_persists_bounded_backoff_and_does_not_block_other_work(tmp_path: 
 def test_durable_scan_expires_due_items_and_root_cancel_settles_each_acceptance(tmp_path: Path) -> None:
     now = [1.0]
     leases, store, _, scheduler = _components(tmp_path / "turns.json", now=now)
-    store.accept(_request(1))
-    store.accept(_request(2))
+    _accept(store, _request(1))
+    _accept(store, _request(2))
     lease = leases.acquire("turn-queue:queue-1", "scheduler-1", 30)
     expired = scheduler.reconcile_expired(now=_instant(101), lease=lease)
     assert len(expired) == 2
@@ -204,8 +214,8 @@ def test_durable_scan_expires_due_items_and_root_cancel_settles_each_acceptance(
 
     path = tmp_path / "cancel.json"
     leases2, store2, _, scheduler2 = _components(path, now=now)
-    store2.accept(_request(1))
-    store2.accept(_request(2))
+    _accept(store2, _request(1))
+    _accept(store2, _request(2))
     lease2 = leases2.acquire("turn-queue:queue-1", "scheduler-2", 30)
     cancelled = scheduler2.cancel_root("root-1", reason="root_terminal", lease=lease2)
     assert len(cancelled) == 1
@@ -218,7 +228,7 @@ def test_durable_scan_expires_due_items_and_root_cancel_settles_each_acceptance(
 def test_stale_owner_cannot_settle_or_retry_claimed_fact(tmp_path: Path) -> None:
     now = [1.0]
     leases, store, limiter, scheduler = _components(tmp_path / "turns.json", now=now)
-    store.accept(_request(1))
+    _accept(store, _request(1))
     stale = leases.acquire("turn-queue:queue-1", "scheduler-1", 1)
     claimed = scheduler.claim_next(
         config=TurnSchedulingConfig(1), now=_instant(10), lease=stale, process_instance_id="process-1"
@@ -235,7 +245,7 @@ def test_stale_owner_cannot_settle_or_retry_claimed_fact(tmp_path: Path) -> None
 def test_retry_exhaustion_is_a_terminal_typed_settlement(tmp_path: Path) -> None:
     now = [1.0]
     leases, store, limiter, scheduler = _components(tmp_path / "turns.json", now=now)
-    store.accept(_request(1, maximum_attempts=1))
+    _accept(store, _request(1, maximum_attempts=1))
     lease = leases.acquire("turn-queue:queue-1", "scheduler-1", 30)
     claimed = scheduler.claim_next(
         config=TurnSchedulingConfig(1), now=_instant(10), lease=lease, process_instance_id="process-1"
@@ -253,7 +263,7 @@ def test_retry_exhaustion_is_a_terminal_typed_settlement(tmp_path: Path) -> None
 def test_new_fenced_owner_can_terminally_reconcile_lost_claim_without_replay(tmp_path: Path) -> None:
     now = [1.0]
     leases, store, _, scheduler = _components(tmp_path / "turns.json", now=now)
-    store.accept(_request(1))
+    _accept(store, _request(1))
     old = leases.acquire("turn-queue:queue-1", "scheduler-1", 1)
     claimed = scheduler.claim_next(
         config=TurnSchedulingConfig(1), now=_instant(10), lease=old, process_instance_id="process-1"

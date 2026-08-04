@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Optional
+from collections.abc import Mapping
+from typing import Optional
 
+from mote.contracts.events.envelope import JsonValue
 from mote.contracts.events.tool import ToolInvocationStartedEvent
 from mote.product.presentation.events.events import ToolCallStarted
 
@@ -41,7 +43,7 @@ _EXT_LEXER = {
 _MAX_BODY_LINES = 30
 
 
-def _search_headline(args: dict[str, Any]) -> str:
+def _search_headline(args: Mapping[str, JsonValue]) -> str:
     for key in ("content", "files"):
         value = args.get(key)
         if isinstance(value, str) and value.strip():
@@ -61,14 +63,14 @@ def _truncate_lines(text: str, limit: int) -> str:
     return "\n".join([*lines[:limit], f"… ({len(lines) - limit} more lines)"])
 
 
-def _format_args(args: dict[str, Any]) -> str:
+def _format_args(args: Mapping[str, JsonValue]) -> str:
     lines: list[str] = []
     for key, value in args.items():
         if isinstance(value, str):
             text = value
         else:
             try:
-                text = json.dumps(value, ensure_ascii=False, default=str)
+                text = json.dumps(value, ensure_ascii=False)
             except Exception:  # noqa: BLE001 - presentation fallback
                 text = str(value)
         if "\n" in text:
@@ -79,7 +81,7 @@ def _format_args(args: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _body_and_lexer(name: str, args: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+def _body_and_lexer(name: str, args: Mapping[str, JsonValue]) -> tuple[Optional[str], Optional[str]]:
     spec = _BODY.get(name)
     if spec is not None:
         argument, lexer = spec
@@ -87,7 +89,8 @@ def _body_and_lexer(name: str, args: dict[str, Any]) -> tuple[Optional[str], Opt
         if isinstance(value, str) and value.strip():
             if lexer is None:
                 headline_argument = _HEADLINE_ARG.get(name, "")
-                lexer = _lexer_for_path(args.get(headline_argument, "") if headline_argument else "")
+                path = args.get(headline_argument, "") if headline_argument else ""
+                lexer = _lexer_for_path(path if isinstance(path, str) else "")
             return _truncate_lines(value, _MAX_BODY_LINES), lexer
         return None, None
     if args:
@@ -116,7 +119,7 @@ def project_tool_started(
     if name != "Search":
         headline_argument = _HEADLINE_ARG.get(name)
         if headline_argument and isinstance(args.get(headline_argument), str):
-            headline = args[headline_argument]
+            headline = str(args[headline_argument])
     body, lexer = _body_and_lexer(name, args)
     return ToolCallStarted(
         tool_name=name,

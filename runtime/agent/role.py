@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 from dataclasses import asdict
@@ -25,9 +25,20 @@ from mote.contracts.events.conversation import PromptRejectedEvent, UserPromptSu
 from mote.contracts.events.envelope import JsonValue, thaw_json
 from mote.contracts.events.output import OutputPublicationQueuedEvent, OutputPublishedEvent
 from mote.contracts.events.session import SessionStartEvent, TurnEndEvent
-from mote.contracts.output import RunOutcome, RunRejected, RunRejectionKind, RunResult, TranscriptRef
+from mote.contracts.file import RewindResult
+from mote.contracts.output import (
+    CommittedOutput,
+    GraphOutputContractSpec,
+    RunOutcome,
+    RunRejected,
+    RunRejectionKind,
+    RunResult,
+    TranscriptRef,
+)
 from mote.contracts.output.policy import RunCompletionDecision, RunCompletionIntent
+from mote.contracts.ports.agent.hosting import ResidentAgentHostingSnapshot
 from mote.contracts.ports.agent.routing import AgentRoutingPort
+from mote.contracts.ports.events.telemetry import TelemetryRuntimePort
 from mote.contracts.ports.interaction.role import RoleHumanInteractionPort
 from mote.contracts.ports.skill.registry import SkillCatalog, SkillService
 from mote.contracts.ports.task.operations import BackgroundTaskService
@@ -59,11 +70,16 @@ from mote.runtime.agent.wiring import AgentWiring
 from mote.runtime.context import ContextManager
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleStack
 from mote.runtime.events.context import bind_telemetry
+from mote.runtime.hook.manager import AsyncHookCallback
 from mote.runtime.models.clients.context import Context
+from mote.runtime.models.cost.report import format_total_cost
 from mote.runtime.models.gateway import LLMRouter
 from mote.runtime.models.model_calls import describe_image as describe_image_with_model
+from mote.runtime.models.ratelimit import format_rate_limits
+from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.run_context import bind_run_context
 from mote.runtime.services import EngineServices
+from mote.runtime.session.checkpoint import CheckpointEntry, list_checkpoints
 from mote.runtime.session.events import SessionMetaEvent
 from mote.runtime.telemetry.logging import bind_session_logfile, bind_trace, log_class, logger, unbind_session_logfile
 from mote.runtime.tools.execution_context import current_tool_call_id
@@ -83,7 +99,11 @@ ChildOutputT = TypeVar("ChildOutputT")
 if TYPE_CHECKING:
     from mote.contracts.artifact import ArtifactRef
     from mote.contracts.interaction import ApprovalChoice, ApprovalRequest, AskUserQuestionAnswers, AskUserQuestionItem
-    from mote.contracts.ports.artifact.store import ArtifactResolver, ArtifactStore, ReliableArtifactPublisher
+    from mote.contracts.ports.artifact.store import (
+        ArtifactRepositoryService,
+        ArtifactResolver,
+        ReliableArtifactPublisher,
+    )
     from mote.contracts.ports.conversation.prompt_policy import PromptPolicy
     from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicy
     from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolResultPolicy
@@ -153,7 +173,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         self.state = state if state is not None else RoleState()
 
         # External dependencies (injected)
-        self.wiring: AgentWiring[DepsT, OutputT] = (
+        self._wiring: AgentWiring[DepsT, OutputT] = (
             wiring if wiring is not None else cast(AgentWiring[DepsT, OutputT], AgentWiring.defaults())
         )
         validate_toolset_protocols(
@@ -244,13 +264,6 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         self.role_schema = self.role_schema.model_copy(update={"name": value})
 
     @property
-    def components(self) -> RoleComponents:
-        """The Role's subsystem holder (lazy assembly + ownership). See
-        :class:`RoleComponents`. The component properties below delegate here.
-        """
-        return self._components
-
-    @property
     def _state_ctl(self):
         """Behaviour over the (pure-DTO) RoleState — resolved through the graph.
 
@@ -276,7 +289,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         return self._components.session_manager
 
     @property
-    def router(self) -> LLMRouter:
+    def _router(self) -> LLMRouter:
         """The LLM router bound to this Role's context (delegates to components)."""
         return self._components.router
 
@@ -291,9 +304,9 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         self._config = config
 
     @property
-    def context(self):
-        if self.wiring.services is not None:
-            return self.wiring.services.context
+    def _context(self):
+        if self._wiring.services is not None:
+            return self._wiring.services.context
         raise RoleContextNotSetError("Role.context not set. Provide EngineServices through AgentWiring.")
 
     @property
@@ -303,9 +316,9 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     def bind_services(self, services: EngineServices, *, owned: bool = False) -> None:
         """Provision this Role with Engine-owned or Role-owned shared services."""
 
-        if self.wiring.services is not None and self.wiring.services is not services:
+        if self._wiring.services is not None and self._wiring.services is not services:
             raise RuntimeError("Role EngineServices cannot be rebound after provisioning")
-        self.wiring = self.wiring.with_services(services, owned=owned)
+        self._wiring = self._wiring.with_services(services, owned=owned)
 
     def build_child_spawn_context(
         self,
@@ -325,7 +338,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         """Provision a child without exposing Runtime wiring to Orchestration."""
         if not isinstance(child, _SpawnServiceRecipient):
             raise TypeError("spawned child must use the canonical Runtime Role")
-        services = self.wiring.services
+        services = self._wiring.services
         if services is None:
             raise RuntimeError("spawn parent has no provisioned EngineServices")
         if policy is ContextPolicy.SHARE_PARENT:
@@ -341,6 +354,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                 run_lease_coordinator=services.run_lease_coordinator,
                 application_composition=services.application_composition,
                 workflow_governance=services.workflow_governance,
+                workflow_delivery=services.workflow_delivery,
             ),
             owned=True,
         )
@@ -354,15 +368,41 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
 
     def spawn_cost_attribution(self):
         """Return the cost attribution bucket through a public narrow seam."""
-        return self.context.cost_manager
+        return self._context.cost_manager
+
+    def resident_hosting_snapshot(self) -> ResidentAgentHostingSnapshot:
+        """Project only the typed capabilities required by Product residency."""
+        projection = self._wiring.dependencies.component_projection
+        if projection is None:
+            raise RuntimeError("resident Agent requires a component projection")
+        workspace_root = projection.session_workspace_root()
+        if workspace_root is None:
+            raise RuntimeError("resident Agent requires a session workspace root")
+        services = self._wiring.services
+        if services is None or services.agent_budget is None:
+            raise RuntimeError("resident Agent requires canonical budget governance")
+        return ResidentAgentHostingSnapshot(
+            workspace_root=workspace_root,
+            writer=self._context.disk_writer,
+            budget=services.agent_budget,
+            workflow_governance=services.workflow_governance,
+            workflow_delivery=services.workflow_delivery,
+        )
+
+    def usage_report(self) -> str:
+        """Return the immutable human-readable cost and rate-limit query."""
+        return (
+            f"{format_total_cost(self._context.cost_manager)}\n\n"
+            f"{format_rate_limits(self._context.rate_limit_tracker)}"
+        )
 
     @property
     def deps(self) -> DepsT:
-        return self.wiring.dependencies.deps
+        return self._wiring.dependencies.deps
 
     @property
     def output_contract(self):
-        return self.wiring.dependencies.output_contract
+        return self._wiring.dependencies.output_contract
 
     # =========================================================================
     # Component properties (lazy-init)
@@ -389,101 +429,40 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         self._components.set_task_completion_wake(wake)
 
     @property
-    def executor(self) -> ToolExecutor:
+    def _executor(self) -> ToolExecutor:
         return self._components.executor
 
     @property
-    def tool_call_policy(self) -> "ToolCallPolicy":
+    def _tool_call_policy(self) -> "ToolCallPolicy":
         return self._components.tool_call_policy
 
     @property
-    def tool_result_policy(self) -> "ToolResultPolicy":
+    def _tool_result_policy(self) -> "ToolResultPolicy":
         return self._components.tool_result_policy
 
     @property
-    def prompt_policy(self) -> "PromptPolicy":
+    def _prompt_policy(self) -> "PromptPolicy":
         return self._components.prompt_policy
 
     @property
-    def run_completion_policy(self) -> "RunCompletionPolicy":
+    def _run_completion_policy(self) -> "RunCompletionPolicy":
         return self._components.run_completion_policy
 
     @property
-    def context_manager(self) -> ContextManager:
+    def _context_manager(self) -> ContextManager:
         return self._components.context_manager
 
     @property
-    def session_log(self) -> "SessionLog":
-        return self._components.session_log
-
-    @property
-    def telemetry(self):
+    def telemetry(self) -> TelemetryRuntimePort:
         return self._components.telemetry
 
     @property
-    def file_operations(self):
+    def _telemetry(self):
+        return self._components.telemetry
+
+    @property
+    def _file_operations(self):
         return self._components.file_operations
-
-    @property
-    def artifact_store(self) -> "ArtifactStore":
-        return self._components.artifact_store
-
-    @property
-    def artifact_resolver(self) -> "ArtifactResolver":
-        return self._components.artifact_resolver
-
-    @property
-    def artifact_publisher(self) -> "ReliableArtifactPublisher":
-        return self._components.artifact_publisher
-
-    @property
-    def review_service(self):
-        """The rollout-backed durable hunk review service."""
-        return self.file_operations.review
-
-    @property
-    def hunk_ops(self) -> "HunkOps":
-        """Accept / reject / undo over rollout-backed review events."""
-        return self._session_manager.hunk_ops
-
-    @property
-    def hunk_attribution(self) -> "HunkAttribution":
-        """Read-side projection of durable review events for review UIs.
-
-        Groups review records (by turn / file / source) and rehydrates
-        each hunk's before/after text on demand from the blob store. Built once
-        and cached — the ledger and blob store it binds to are stable for the
-        Role's lifetime.
-        """
-        return self._session_manager.hunk_attribution
-
-    @property
-    def resource_registry(self):
-        return self._components.resource_registry
-
-    @property
-    def runtime_host(self):
-        return self._components.runtime_host
-
-    @property
-    def browser_profile_store(self) -> "BrowserProfileStore":
-        return self._components.browser_profile_store
-
-    @property
-    def hook_manager(self):
-        return self._components.hook_manager
-
-    @property
-    def lsp_service(self):
-        return self._components.lsp_service
-
-    @property
-    def sandbox_runtime(self):
-        return self._components.sandbox_runtime
-
-    @property
-    def diagnostics_buffer(self):
-        return self._components.diagnostics_buffer
 
     def turn_context_source(self, name: str):
         """Look up a per-turn context feed by its ``name`` (or ``None``).
@@ -497,15 +476,12 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             None,
         )
 
-    @property
-    def file_watch_service(self):
-        return self._components.file_watch_service
-
-    @property
-    def turn_context_bus(self):
-        return self._components.turn_context_bus
-
-    def register_hook(self, event: str, fn, matcher: Optional[str] = None) -> None:
+    def register_hook(
+        self,
+        event: str,
+        fn: "AsyncHookCallback",
+        matcher: Optional[str] = None,
+    ) -> None:
         """Register an in-process Python hook callback (delegates to components).
 
         Engages the hook layer even with no ``HookConfig`` declared. Register
@@ -524,11 +500,11 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         self._state_ctl.set_last_think_result(result)
 
     @property
-    def command_channel(self) -> CommandChannel:
+    def _command_channel(self) -> CommandChannel:
         return self._components.command_channel
 
     @property
-    def context_provider(self) -> ContextProvider:
+    def _context_provider(self) -> ContextProvider:
         return self._components.context_provider
 
     # =========================================================================
@@ -651,15 +627,11 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         """
         return self._components.context_visibility.is_resource_visible(path)
 
-    def get_runtime_host(self):
+    def _get_runtime_host(self):
         """Return this Role's managed interactive-runtime composition root."""
         return self._components.runtime_host
 
-    def get_artifact_store(self) -> "ArtifactStore":
-        """Return this Role's durable logical Artifact store."""
-        return self._components.artifact_store
-
-    def get_artifact_publisher(self) -> "ReliableArtifactPublisher":
+    def _get_artifact_publisher(self) -> "ReliableArtifactPublisher":
         """Return this Role's staged, crash-reconcilable Artifact publisher."""
         return self._components.artifact_publisher
 
@@ -725,17 +697,15 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             "get_browser_profile_target": self.get_browser_profile_target,
             "get_browser_client_certs": self.get_browser_client_certs,
             "get_secret": self.get_secret,
-            "get_runtime_host": self.get_runtime_host,
-            "get_artifact_store": self.get_artifact_store,
-            "get_artifact_publisher": self.get_artifact_publisher,
+            "get_runtime_host": self._get_runtime_host,
+            "get_artifact_publisher": self._get_artifact_publisher,
             "handoff_runtime": self.handoff_runtime,
             "wait_interruptible": self.wait_interruptible,
             "get_skill_pool": self.get_skill_pool,
             "run_skill_fork": self.run_skill_fork,
             "register_resource": self._capabilities.register_resource,
             "register_task_result": self._capabilities.register_task_result,
-            "retire_task_result": self._capabilities.retire_task_result,
-            "get_sandbox_runtime": self.get_sandbox_runtime,
+            "get_sandbox_runtime": self._get_sandbox_runtime,
             "get_device_config": self.get_device_config,
             "dispatch_tool": self.dispatch_tool,
             "list_tool_names": self.list_tool_names,
@@ -762,7 +732,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
 
         route_id = route_for_payload(payload)
         capability = capability_for_payload(payload)
-        gateway = self.context.service_gateway
+        gateway = self._context.service_gateway
         if gateway is None or not gateway.supports_route(route_id, capability):
             raise ToolNotConfiguredError(f"Hosted Tool service route {route_id!r} is not configured.")
         tool_call_id = current_tool_call_id() or uuid4().hex
@@ -808,7 +778,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         """Return the background task pool (capability surface; delegates)."""
         return self._capabilities.get_bg_pool()
 
-    def get_sandbox_runtime(self) -> Optional[SandboxRuntime]:
+    def _get_sandbox_runtime(self) -> Optional[SandboxRuntime]:
         """Return the OS-level sandbox runtime, or ``None`` when not configured.
 
         Capability surface for the command-execution tools (Bash / terminal /
@@ -907,7 +877,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         :class:`BrowserProfileStore`. Best-effort (None on any miss/failure).
         """
         try:
-            return self.browser_profile_store.load(name)
+            return self._components.browser_profile_store.load(name)
         except BrowserProfileNotFoundError:
             return None
 
@@ -917,10 +887,10 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         Capability surface for the WebBrowser tool; delegates to the encrypted
         :class:`BrowserProfileStore`. Best-effort (never raises).
         """
-        return self.browser_profile_store.save(name, storage_state, expected_revision=expected_revision)
+        return self._components.browser_profile_store.save(name, storage_state, expected_revision=expected_revision)
 
     def get_browser_profile_target(self, name: str) -> str:
-        return str(self.browser_profile_store.path_for(name))
+        return str(self._components.browser_profile_store.path_for(name))
 
     def get_browser_client_certs(self) -> list[dict]:
         """Return the role's client TLS certs as Playwright-shaped dicts.
@@ -1040,15 +1010,15 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         would leak forever. So node-level idempotency stays a graph concern
         (node-replay), and the ledger guards the graph as a whole.
         """
-        return await self.executor.run_command(name, kwargs or {})
+        return await self._executor.run_command(name, kwargs or {})
 
     async def commit_graph_output(
         self,
         *,
-        output: Any,
-        contract_spec: Any,
+        output: JsonValue,
+        contract_spec: GraphOutputContractSpec,
         run_id: str,
-    ) -> Any:
+    ) -> CommittedOutput[JsonValue]:
         """Validate and durably commit one graph output through the lazy service."""
 
         return await self._components.graph_output_service.finalize(
@@ -1057,7 +1027,9 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             run_id=run_id,
         )
 
-    async def resume_graph_output(self, *, contract_spec: Any, run_id: str) -> Any:
+    async def resume_graph_output(
+        self, *, contract_spec: GraphOutputContractSpec, run_id: str
+    ) -> CommittedOutput[JsonValue] | None:
         """Resume one graph output through the lazy durable output service."""
 
         return await self._components.graph_output_service.resume(
@@ -1077,20 +1049,20 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     def list_tool_names(self) -> list[str]:
         """Live tool names (primary + aliases), for ``run_graph`` to validate the
         tool references in a graph spec. Capability surface over the executor."""
-        return self.executor.tool_names()
+        return self._executor.tool_names()
 
     def list_graph_tool_names(self) -> list[str]:
         """Names of tools that are themselves graph orchestrators, for ``run_graph``
         to refuse nesting a graph inside a graph. Capability surface over the
         executor's immutable execution-kind definitions."""
-        return sorted(self.executor.graph_tool_names())
+        return sorted(self._executor.graph_tool_names())
 
     def list_graph_excluded_tool_names(self) -> list[str]:
         """Names of tools that must not appear as a node inside a graph, for
         ``run_graph`` to refuse referencing them (e.g. Sleep, which blocks on an
         external wake event a foreground graph never delivers). Capability surface
         over the executor's ``graph_excluded`` marker set."""
-        return sorted(self.executor.graph_excluded_tool_names())
+        return sorted(self._executor.graph_excluded_tool_names())
 
     def list_deferred_tools(self) -> dict[str, str]:
         """The deferred-tool MATCH corpus → ``{name: summary + recall keywords}``.
@@ -1101,7 +1073,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         still resolves. This is the SEARCH layer — distinct from the DISPLAY menu
         the model reads (``deferred_tool_index``, pure summaries). Delegates to
         the executor's tool catalog (the single deferral seam)."""
-        return self.executor.deferred_search_index()
+        return self._executor.deferred_search_index()
 
     def reveal_tools(self, names: list[str]) -> list[str]:
         """Reveal deferred tools by name so their full schema is sent next turn.
@@ -1111,7 +1083,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         accepted — a bogus/non-deferred name is ignored), records the accepted
         names on ``RoleState`` (durable across resume) and returns them. The next
         ``prepare()`` includes their schema on the active channel."""
-        deferred = set(self.executor.deferred_tool_index().keys())
+        deferred = set(self._executor.deferred_tool_index().keys())
         accepted = [n for n in names if n in deferred]
         self._state_ctl.reveal_tools(accepted)
         return accepted
@@ -1123,7 +1095,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         the newly-revealed tools' full prose (stripped off the split ``tools=``
         wire) so it can persist that description into the conversation +
         ResourceRegistry. Delegates to the executor's tool catalog."""
-        return self.executor.describe_deferred_tools(names)
+        return self._executor.describe_deferred_tools(names)
 
     async def describe_image(self, artifact: "ArtifactRef", *, prompt: str = "") -> str:
         """Read an image as text via an ISOLATED vision-model call.
@@ -1142,7 +1114,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                 tool degrades to an "image understanding unavailable" notice.
         """
         return await describe_image_with_model(
-            self.router.model_route_for_task("image_description"),
+            self._router.model_route_for_task("image_description"),
             artifact,
             model_call_id=uuid4().hex,
             prompt=prompt,
@@ -1157,7 +1129,72 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         return await self._capabilities.end_session()
 
     def get_memories(self, k=0) -> list[Message]:
-        return self.context_manager.get(k=k)
+        return self._context_manager.get(k=k)
+
+    async def clear_history(self) -> int:
+        """Commit removal of the complete conversation and return its prior size."""
+        count = self._context_manager.count()
+        await self._context_manager.clear()
+        return count
+
+    async def delete_history_units(self, anchor_ids: Sequence[str]) -> int:
+        """Commit removal of react units selected by stable anchor identity."""
+        return await self._context_manager.delete_react_units(anchor_ids)
+
+    def rewind_files(
+        self,
+        *,
+        working_dir: str,
+        target_commit: str,
+        parent_commit: str | None,
+        prompt_index: int,
+        after_commit: str = "",
+    ) -> RewindResult:
+        """Execute one canonical fenced file rewind command."""
+        return self._file_operations.rewind(
+            working_dir=working_dir,
+            target_commit=target_commit,
+            parent_commit=parent_commit,
+            prompt_index=prompt_index,
+            after_commit=after_commit,
+        )
+
+    def checkpoint_entries(self) -> tuple[CheckpointEntry, ...]:
+        """Return the immutable checkpoint query projection for this session."""
+        return tuple(list_checkpoints(self._components.session_log))
+
+    async def rewind_checkpoint(self, index: int) -> tuple[CheckpointEntry, RewindResult] | None:
+        """Rewind one checkpoint by stable ordered query position."""
+        entries = await run_disk_io(self.checkpoint_entries)
+        if not (0 <= index < len(entries)):
+            return None
+        target = entries[index]
+        working_dir = target.working_dir or self.state.project_root or self.state.working_dir
+        if not working_dir:
+            return None
+        parent_commit = entries[-1].commit if entries else None
+        result = await run_disk_io(
+            self.rewind_files,
+            working_dir=working_dir,
+            target_commit=target.commit,
+            parent_commit=parent_commit,
+            prompt_index=len(entries),
+            after_commit=target.after_commit,
+        )
+        return target, result
+
+    @property
+    def routing_enabled(self) -> bool:
+        """Return whether this Role's immutable routing generation is active."""
+        return self._router.routing_enabled
+
+    async def seed_routing(self, prompt: str) -> None:
+        """Seed this Role's routing policy for its stable session identity."""
+        await self._router.seed_session(self.session_id, prompt)
+
+    def lower_command_text(self, text: str) -> str:
+        """Lower command syntax through this Role's approved command generation."""
+        return self._command_channel.lower(text)
 
     def publish_message(self, msg):
         """If the role belongs to env, then the role's messages will be broadcast to env"""
@@ -1213,8 +1250,8 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
 
         # Session metadata is an ordinary first fact, committed before any
         # observer can append later session facts.
-        if not self.session_log.exists():
-            await self.session_log.append(
+        if not self._components.session_log.exists():
+            await self._components.session_log.append(
                 SessionMetaEvent(
                     session_id=self.state.session_id,
                     parent_session_id=self.state.parent_session_id,
@@ -1233,7 +1270,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         config_root = self._component_projection().user_config_root()
         bind_session_logfile(self.session_id, config_root / "logs")
 
-        await self.telemetry.emit(
+        await self._telemetry.emit(
             SessionStartEvent(
                 session_id=self.state.session_id,
                 parent_session_id=self.state.parent_session_id,
@@ -1246,7 +1283,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             )
         )
 
-        watcher = self.file_watch_service
+        watcher = self._components.file_watch_service
         if watcher is not None and not watcher.watcher.is_running():
             await watcher.start_async()
 
@@ -1255,10 +1292,6 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         # Kick off the whole-repo code-index cold scan off the event loop (Layer
         # C). No-op when the index layer is off; best-effort inside.
         await self._components.kickoff_repo_scan()
-
-        # Reclaim stale workspace artifacts off the event loop (throttled ~daily,
-        # excludes this session). No-op when disabled; best-effort inside.
-        await self._components.kickoff_workspace_cleanup()
 
     @role_raise_decorator
     async def run(self, with_message=None) -> RunOutcome[OutputT] | None:
@@ -1270,7 +1303,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         # same runtime without threading it through every signature.
         with (
             bind_trace(self.session_id),
-            bind_telemetry(self.telemetry),
+            bind_telemetry(self._telemetry),
         ):
             async with (
                 self._components.application_scope(),
@@ -1282,7 +1315,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                 if with_message:
                     msg = self._coerce_to_message(with_message)
 
-                    decision = await self.prompt_policy.process(PromptIntent(prompt=msg.content))
+                    decision = await self._prompt_policy.process(PromptIntent(prompt=msg.content))
                     msg.content = decision.prompt
                     if not decision.accepted:
                         prompt_bytes = decision.prompt.encode("utf-8")
@@ -1298,7 +1331,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                             terminate=decision.terminate,
                         )
                         await self._components.session_fact_committer.commit_fact(event)
-                        await self.telemetry.emit(event)
+                        await self._telemetry.emit(event)
                         return RunRejected(
                             kind=RunRejectionKind.PROMPT_ADMISSION,
                             reason=decision.reason,
@@ -1306,7 +1339,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                             transcript=TranscriptRef(session_id=self.session_id),
                         )
 
-                    await self.telemetry.emit(UserPromptSubmitEvent(prompt=decision.prompt))
+                    await self._telemetry.emit(UserPromptSubmitEvent(prompt=decision.prompt))
                     if decision.additional_context:
                         injected = "\n".join(decision.additional_context)
                         msg.content = f"{injected}\n{msg.content}" if msg.content else injected
@@ -1330,7 +1363,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                             run_id=lease.run_id,
                         )
                         with bind_run_context(run_context):
-                            await self.executor.start_run(run_context)
+                            await self._executor.start_run(run_context)
                             try:
                                 flow_engine = self._components.make_flow_engine()
                                 try:
@@ -1341,11 +1374,11 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                                     # TurnEnd is an immutable observation fact.
                                     await self._emit_turn_end()
                             finally:
-                                await self.executor.end_run()
+                                await self._executor.end_run()
                     finally:
                         await self._components.end_output_lease()
                     bg_pool = self._peek_bg_pool()
-                    completion = await self.run_completion_policy.process(
+                    completion = await self._run_completion_policy.process(
                         RunCompletionIntent(
                             output_committed=(flow_result is not None and flow_result.committed_output is not None),
                             background_pending=(bg_pool is not None and bg_pool.has_pending()),
@@ -1375,8 +1408,8 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                         run_kind=committed.run_kind.value,
                     )
                     await self._components.session_fact_committer.commit_fact(queued_event)
-                    await self.telemetry.emit(queued_event)
-                    await self.context.disk_writer.drain()
+                    await self._telemetry.emit(queued_event)
+                    await self._context.disk_writer.drain()
                     rsp.metadata["output_publication_id"] = publication_id
                     self.publish_message(rsp)
                     published_event = OutputPublishedEvent(
@@ -1387,8 +1420,8 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                         run_kind=committed.run_kind.value,
                     )
                     await self._components.session_fact_committer.commit_fact(published_event)
-                    await self.telemetry.emit(published_event)
-                    await self.context.disk_writer.drain()
+                    await self._telemetry.emit(published_event)
+                    await self._context.disk_writer.drain()
                     return RunResult(
                         output=committed.value,
                         output_record=committed,
@@ -1429,7 +1462,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
 
         role_cls = type(self)
         config = self._config
-        wiring = self.wiring
+        wiring = self._wiring
         role_schema = self.role_schema.model_copy(deep=True)
         definition_id = self.residency_definition_id
         config_digest = self.residency_config_digest
@@ -1469,26 +1502,20 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
     async def _emit_turn_end(self) -> None:
         """Commit and observe the immutable ``TurnEndEvent`` for one turn."""
         telemetry = self._components.peek_telemetry()
+        token_state = None
         try:
+            token_state = asdict(self._context_manager.token_state())
+        except Exception:  # noqa: BLE001 — token math is optional metadata
             token_state = None
-            try:
-                token_state = asdict(self.context_manager.token_state())
-            except Exception:  # noqa: BLE001 — token math is optional metadata
-                token_state = None
-            event = TurnEndEvent(
-                turn_id=uuid4().hex,
-                working_dir=self.state.working_dir,
-                model=self.default_model_name,
-                token_state=token_state,
-            )
-            await self._components.session_fact_committer.commit_fact(event)
-            if telemetry is not None:
-                await telemetry.emit(event)
-        finally:
-            try:
-                await self._components.release_ephemeral_artifacts()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"session: failed to release ephemeral Artifacts: {exc}")
+        event = TurnEndEvent(
+            turn_id=uuid4().hex,
+            working_dir=self.state.working_dir,
+            model=self.default_model_name,
+            token_state=token_state,
+        )
+        await self._components.session_fact_committer.commit_fact(event)
+        if telemetry is not None:
+            await telemetry.emit(event)
 
     async def cleanup(self) -> None:
         """Tear down session-scoped subsystems (best-effort, idempotent).
@@ -1548,6 +1575,13 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
             lambda: unbind_session_logfile(self.session_id),
             phase=LifecyclePhase.CLOSE_RESOURCES,
         )
+        session_log = self._components.peek_session_log()
+        if session_log is not None:
+            lifecycle.register_close(
+                "session-stream-ownership",
+                session_log.release_writer,
+                phase=LifecyclePhase.FLUSH_DURABILITY,
+            )
         repo_index = self._components.peek_repo_index()
         if repo_index is not None:
             lifecycle.register_close(
@@ -1556,8 +1590,8 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                 phase=LifecyclePhase.CLOSE_RESOURCES,
             )
         lifecycle.register_close(
-            "maintenance",
-            self._components.close_maintenance,
+            "owner-tasks",
+            self._components.close_owner_tasks,
             phase=LifecyclePhase.CLOSE_RESOURCES,
         )
         sandbox_runtime = self._components.peek_sandbox_runtime()
@@ -1631,10 +1665,10 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                 file_watch_service.stop,
                 phase=LifecyclePhase.CLOSE_RESOURCES,
             )
-        if release_services and self.wiring.services_lease is not None:
+        if release_services and self._wiring.services_lease is not None:
             lifecycle.register_close(
                 "engine-services-lease",
-                self.wiring.services_lease.aclose,
+                self._wiring.services_lease.aclose,
                 phase=LifecyclePhase.RELEASE_CONTAINER,
             )
 
@@ -1665,7 +1699,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         await self._components.start_event_fabric()
         # Materialize the ContextManager (stored-history store + compaction
         # orchestrator), backed by RoleState.context so it survives recovery.
-        _ = self.context_manager
+        _ = self._context_manager
 
         # Wire telemetry by subscribing the fixed roster. The ``telemetry`` getter is
         # a pure leaf — it never wires itself — so this explicit step is the sole
@@ -1682,10 +1716,10 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         await self._components.reconcile_runtime_projections_once()
 
         self.skill_manager.ensure_ready()
-        await self.executor.init_mcp(self.role_schema.mcps, enabled=self.config.mcp.enabled)
+        await self._executor.init_mcp(self.role_schema.mcps, enabled=self.config.mcp.enabled)
 
     def _component_projection(self) -> AgentComponentProjection:
-        projection = self.wiring.dependencies.component_projection
+        projection = self._wiring.dependencies.component_projection
         if projection is None:
             raise RuntimeError("Agent composition requires a Product component projection")
         return projection

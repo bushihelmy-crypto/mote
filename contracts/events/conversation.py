@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, List, Literal
+from typing import TYPE_CHECKING, ClassVar, List, Literal, cast
 
 from mote.contracts.events._base import DurableFact as _DurableFact
+from mote.contracts.events.envelope import JsonValue
 
 if TYPE_CHECKING:
     from mote.contracts.conversation import Message
@@ -66,7 +67,7 @@ class UserPromptSubmitEvent:
     name: ClassVar[str] = USER_PROMPT_SUBMIT
 
 
-@dataclass
+@dataclass(frozen=True)
 class PromptRejectedEvent(_DurableFact):
     """Data-minimized audit fact for a prompt denied before admission."""
 
@@ -86,6 +87,37 @@ class PromptRejectedEvent(_DurableFact):
             raise ValueError("prompt rejection excerpt exceeds 160 characters")
         if not self.classification or not self.reason:
             raise ValueError("prompt rejection classification and reason are required")
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "prompt_digest": self.prompt_digest,
+            "redacted_excerpt": self.redacted_excerpt,
+            "classification": self.classification,
+            "reason": self.reason,
+            "terminate": self.terminate,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "PromptRejectedEvent":
+        expected = {"prompt_digest", "redacted_excerpt", "classification", "reason", "terminate"}
+        if set(payload) != expected:
+            raise ValueError(f"{cls.__name__} payload fields are not canonical")
+        prompt_digest = payload["prompt_digest"]
+        redacted_excerpt = payload["redacted_excerpt"]
+        classification = payload["classification"]
+        reason = payload["reason"]
+        terminate = payload["terminate"]
+        if not all(type(value) is str for value in (prompt_digest, redacted_excerpt, classification, reason)):
+            raise TypeError(f"{cls.__name__} text fields must be strings")
+        if type(terminate) is not bool:
+            raise TypeError(f"{cls.__name__}.terminate must be a boolean")
+        return cls(
+            prompt_digest=cast(str, prompt_digest),
+            redacted_excerpt=cast(str, redacted_excerpt),
+            classification=cast(str, classification),
+            reason=cast(str, reason),
+            terminate=terminate,
+        )
 
 
 @dataclass

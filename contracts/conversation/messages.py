@@ -4,18 +4,15 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime
-from json import JSONDecodeError
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny, create_model, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, field_serializer, field_validator
 
 from mote.contracts.conversation.document import CauseBy, Document, Documents, Resource
 from mote.contracts.conversation.fields import (
     AGENT,
-    CACHE_INTENT,
     MESSAGE_ROUTE_CAUSE_BY,
     MESSAGE_ROUTE_FROM,
     MESSAGE_ROUTE_TO,
@@ -29,8 +26,6 @@ from mote.contracts.conversation.fields import (
     TOOL_REFERENCES,
     TOOL_RESULT_RESOURCE_PATH,
 )
-from mote.contracts.events.envelope import freeze_json, thaw_json
-from mote.contracts.tool.calls import serialize_tool_call_args
 
 _INSTRUCT_CONTENT_TYPES: dict[str, type[BaseModel]] = {
     "conversation.document": Document,
@@ -153,117 +148,6 @@ class Message(BaseModel):
         """For search"""
         return self.content
 
-    def to_dict(self) -> dict:
-        """Return a dict for the LLM call."""
-        if self.metadata.get(TOOL_CALL_ID):
-            wire = {
-                "role": "tool",
-                "tool_call_id": self.metadata[TOOL_CALL_ID],
-                "content": self.content,
-            }
-            # Server-side tool-search discovery result (Anthropic native only):
-            # the discovered tool names ride a private wire key so the provider
-            # can render the tool_result as ``tool_reference`` blocks. Only when
-            # non-empty; stripped before the request goes out (like _cache_intent).
-            refs = self.metadata.get(TOOL_REFERENCES)
-            if refs:
-                wire["_tool_references"] = refs
-        elif self.metadata.get(TOOL_CALLS):
-            tool_calls = [
-                {
-                    "id": c["id"],
-                    "type": "function",
-                    "function": {
-                        "name": c["name"],
-                        "arguments": serialize_tool_call_args(c.get("args")),
-                    },
-                }
-                for c in self.metadata[TOOL_CALLS]
-            ]
-            wire = {"role": self.role, "content": self.content or "", "tool_calls": tool_calls}
-        else:
-            wire = {"role": self.role, "content": self.content}
-        # Declarative prompt-cache intent (provider-agnostic). Carried as a private
-        # wire key ONLY when non-default; providers translate it into their own
-        # caching mechanism and strip it before the request goes out (so it never
-        # reaches an API that rejects unknown keys). Absence == CACHE_INTENT_DURABLE.
-        intent = self.metadata.get(CACHE_INTENT)
-        if intent:
-            wire["_cache_intent"] = intent
-        return wire
-
-    def dump(self) -> str:
-        """Convert the object to json string"""
-        return self.model_dump_json(exclude_none=True, warnings=False)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "Message":
-        """Reconstruct a Message from an already-parsed payload dict.
-
-        The dict counterpart of :meth:`load` (which is just ``from_dict`` on a
-        JSON string). Used by persistence layers that already hold a dict, to
-        avoid a redundant ``json.dumps``/``json.loads`` round-trip. The stored
-        ``id`` is preserved as-is rather than regenerated.
-        """
-        if type(data) is not dict:
-            raise ValueError("message payload must be an object")
-        required = {
-            "id",
-            "timestamp",
-            "content",
-            "role",
-            "cause_by",
-            "sent_from",
-            "send_to",
-            "metadata",
-        }
-        allowed = required | {"instruct_content"}
-        if not required <= set(data) or not set(data) <= allowed:
-            raise ValueError("message payload fields are not canonical")
-        for field in ("id", "timestamp", "content", "role", "cause_by", "sent_from"):
-            if type(data[field]) is not str:
-                raise ValueError(f"message {field} must be a string")
-        if not data["id"]:
-            raise ValueError("message id must not be empty")
-        send_to = data["send_to"]
-        if (
-            type(send_to) is not list
-            or not send_to
-            or any(type(item) is not str or not item for item in send_to)
-            or len(send_to) != len(set(send_to))
-        ):
-            raise ValueError("message send_to must contain unique non-empty strings")
-        metadata = data["metadata"]
-        if type(metadata) is not dict or any(type(key) is not str for key in metadata):
-            raise ValueError("message metadata must be an object with string keys")
-        frozen_metadata = freeze_json(metadata, path="message.metadata")
-        instruct_content = data.get("instruct_content")
-        if instruct_content is not None:
-            if type(instruct_content) is not dict:
-                raise ValueError("message instruct_content must be an object")
-            freeze_json(instruct_content, path="message.instruct_content")
-        return cls(
-            id=data["id"],
-            timestamp=data["timestamp"],
-            content=data["content"],
-            instruct_content=instruct_content,
-            role=data["role"],
-            cause_by=data["cause_by"],
-            sent_from=data["sent_from"],
-            send_to=set(send_to),
-            metadata=thaw_json(frozen_metadata),
-        )
-
-    @staticmethod
-    def load(val: str) -> "Message":
-        """Strictly decode the canonical durable JSON representation."""
-        if type(val) is not str or not val:
-            raise ValueError("message payload must be a non-empty JSON string")
-        try:
-            return Message.from_dict(json.loads(val))
-        except JSONDecodeError as exc:
-            raise ValueError("message payload is not valid JSON") from exc
-
     def add_metadata(self, key: str, value: str):
         self.metadata[key] = value
 
@@ -299,8 +183,7 @@ def to_role_content_dicts(messages) -> list[dict]:
     out: list[dict] = []
     for m in messages:
         if isinstance(m, Message):
-            d = m.to_dict()
-            out.append({"role": d.get("role", "user"), "content": d.get("content", "")})
+            out.append({"role": m.role, "content": m.content})
         elif isinstance(m, dict):
             out.append({"role": m.get("role", "user"), "content": m.get("content", "")})
         else:
@@ -437,4 +320,4 @@ class ResourceMessage(UserMessage):
 class LLMCallContext(BaseModel):
     """The message sequence fed to the LLM on the last think round."""
 
-    messages: list[SerializeAsAny[Message]] = Field(default_factory=list)
+    messages: list[Message] = Field(default_factory=list)

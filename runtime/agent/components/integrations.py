@@ -21,7 +21,7 @@ from mote.runtime.agent.component_keys import (
 from mote.runtime.config.hook import HookConfig
 from mote.runtime.hook import HookManager
 from mote.runtime.hook.subscriber import HookSubscriber
-from mote.runtime.secrets.cipher import build_cipher
+from mote.runtime.secrets.cipher import build_aes_cipher
 from mote.runtime.secrets.store import SecretStore, secrets_config_path, secrets_path
 from mote.runtime.tools.permission.config import SandboxConfig
 from mote.runtime.tools.permission.sandbox.adapter import build_runtime
@@ -103,7 +103,7 @@ def _build_hook_manager(ctx, inputs: IntegrationComponentInputs):
         permission_engine=ctx.dep(PERMISSION_ENGINE),
     )
     for event, fn, matcher in ctx.state.hook_callbacks:
-        manager.register(event, fn, matcher)
+        manager.register_async(event, fn, matcher)
     return manager
 
 
@@ -131,7 +131,7 @@ def _build_diagnostics_provider(ctx, inputs: IntegrationComponentInputs):
 def _sandbox_available(role, state) -> bool:
     permissions = role.role_schema.permissions
     cfg = permissions.runtime if permissions is not None else None
-    return cfg is not None and cfg.enabled
+    return cfg is not None
 
 
 def _build_secret_store(ctx, inputs: IntegrationComponentInputs):
@@ -139,7 +139,7 @@ def _build_secret_store(ctx, inputs: IntegrationComponentInputs):
     secrets_root = inputs.secrets_root
     if secrets_root is None:
         raise ValueError("Agent composition requires a secrets root")
-    cipher = build_cipher(secrets_cfg, default_key_path=secrets_root / "vault.key")
+    cipher = build_aes_cipher(secrets_root / "vault.key")
     vault_path = Path(secrets_cfg.vault_path) if secrets_cfg.vault_path else secrets_path(secrets_root)
     secrets_file = (
         Path(secrets_cfg.secrets_config_path) if secrets_cfg.secrets_config_path else secrets_config_path(secrets_root)
@@ -157,7 +157,7 @@ def _build_sandbox_runtime(ctx, inputs: IntegrationComponentInputs):
     permissions = ctx.role.role_schema.permissions
     cfg = permissions.runtime
     role = ctx.role
-    sandbox_cfg = (permissions.sandbox if permissions is not None else None) or SandboxConfig()
+    sandbox_cfg = (permissions.sandbox if permissions is not None else None) or SandboxConfig(profile=cfg.profile)
 
     def guard_factory() -> SandboxGuard:
         return SandboxGuard(sandbox_cfg, get_cwd=role.get_cwd)

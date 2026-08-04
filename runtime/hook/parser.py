@@ -29,8 +29,63 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from mote.contracts.hook import HookStop
 from mote.runtime.hook.types import EMPTY, HookOutcome
 from mote.runtime.telemetry.logging import logger
+
+_HOOK_OUTPUT_FIELDS = frozenset(
+    {
+        "decision",
+        "hookSpecificOutput",
+        "permissionDecisionReason",
+        "reason",
+        "updatedInput",
+        "updatedResponse",
+        "additionalContext",
+        "systemMessage",
+        "continue",
+        "stopReason",
+    }
+)
+_HOOK_SPECIFIC_FIELDS = frozenset({"permissionDecision", "additionalContext"})
+
+
+def _validate_context(value: object, *, path: str) -> None:
+    if value is None or type(value) is str:
+        return
+    if type(value) is list and all(type(item) is str for item in value):
+        return
+    raise ValueError(f"{path} must be a string or list of strings")
+
+
+def _validate_strict_output(obj: dict[object, object]) -> None:
+    if any(type(key) is not str for key in obj) or not set(obj).issubset(_HOOK_OUTPUT_FIELDS):
+        raise ValueError("hook output contains unknown fields")
+    decision = obj.get("decision")
+    if decision is not None and decision not in ("approve", "block"):
+        raise ValueError("unknown hook decision")
+    for field in ("permissionDecisionReason", "reason", "updatedResponse", "systemMessage", "stopReason"):
+        value = obj.get(field)
+        if value is not None and type(value) is not str:
+            raise ValueError(f"hook output {field} must be a string")
+    continuation = obj.get("continue")
+    if continuation is not None and type(continuation) is not bool:
+        raise ValueError("hook output continue must be a boolean")
+    updated_input = obj.get("updatedInput")
+    if updated_input is not None and type(updated_input) is not dict:
+        raise ValueError("hook output updatedInput must be an object")
+    _validate_context(obj.get("additionalContext"), path="hook output additionalContext")
+    specific = obj.get("hookSpecificOutput")
+    if specific is None:
+        return
+    if type(specific) is not dict or any(type(key) is not str for key in specific):
+        raise ValueError("hookSpecificOutput must be an object")
+    if not set(specific).issubset(_HOOK_SPECIFIC_FIELDS):
+        raise ValueError("hookSpecificOutput contains unknown fields")
+    permission = specific.get("permissionDecision")
+    if permission is not None and permission not in ("allow", "deny", "ask"):
+        raise ValueError("unknown hook permission decision")
+    _validate_context(specific.get("additionalContext"), path="hookSpecificOutput additionalContext")
 
 
 def _coerce_context(value: Any) -> list[str]:
@@ -46,23 +101,24 @@ def _coerce_context(value: Any) -> list[str]:
 
 def _outcome_from_obj(obj: dict) -> HookOutcome:
     """Map a decoded JSON/dict object onto a HookOutcome (field contract)."""
-    outcome = HookOutcome()
+    behavior = None
+    additional_context: list[str] = []
 
     # Coarse decision (least specific).
     decision = obj.get("decision")
     if decision == "approve":
-        outcome.behavior = "allow"
+        behavior = "allow"
     elif decision == "block":
-        outcome.behavior = "deny"
+        behavior = "deny"
 
     # hookSpecificOutput.permissionDecision is more specific and wins.
     hook_specific = obj.get("hookSpecificOutput")
     if isinstance(hook_specific, dict):
         perm = hook_specific.get("permissionDecision")
         if perm in ("allow", "deny", "ask"):
-            outcome.behavior = perm
+            behavior = perm
         ctx = hook_specific.get("additionalContext")
-        outcome.additional_context.extend(_coerce_context(ctx))
+        additional_context.extend(_coerce_context(ctx))
 
     # Reason text -> system_message (only when not already supplied).
     reason = obj.get("permissionDecisionReason") or obj.get("reason")
@@ -70,29 +126,43 @@ def _outcome_from_obj(obj: dict) -> HookOutcome:
     # updatedInput -> updated_args
     updated = obj.get("updatedInput")
     if isinstance(updated, dict):
-        outcome.updated_args = updated
+        updated_args = updated
+    else:
+        updated_args = None
 
     updated_response = obj.get("updatedResponse")
     if isinstance(updated_response, str):
-        outcome.updated_response = updated_response
+        resolved_response = updated_response
+    else:
+        resolved_response = None
 
     # additionalContext at top level too.
-    outcome.additional_context.extend(_coerce_context(obj.get("additionalContext")))
+    additional_context.extend(_coerce_context(obj.get("additionalContext")))
 
     # systemMessage
     system_message = obj.get("systemMessage")
     if system_message:
-        outcome.system_message = str(system_message)
-    elif reason and outcome.behavior == "deny":
+        resolved_message = str(system_message)
+    elif reason and behavior == "deny":
         # Surface a block reason even when no explicit systemMessage was given.
-        outcome.system_message = str(reason)
+        resolved_message = str(reason)
+    else:
+        resolved_message = ""
 
     # continue: false -> stop
     if obj.get("continue") is False:
-        outcome.stop = True
-        outcome.stop_reason = str(obj.get("stopReason", "") or reason or "")
+        stop = HookStop(str(obj.get("stopReason", "") or reason or ""))
+    else:
+        stop = None
 
-    return outcome
+    return HookOutcome(
+        behavior=behavior,
+        updated_args=updated_args,
+        updated_response=resolved_response,
+        additional_context=tuple(additional_context),
+        system_message=resolved_message,
+        stop=stop,
+    )
 
 
 def parse_command_output(stdout: str, stderr: str, exit_code: int, *, strict: bool = False) -> HookOutcome:
@@ -124,18 +194,7 @@ def parse_command_output(stdout: str, stderr: str, exit_code: int, *, strict: bo
             raise ValueError("hook output must be a JSON object")
         return HookOutcome()
     if strict:
-        decision = obj.get("decision")
-        if decision is not None and decision not in ("approve", "block"):
-            raise ValueError("unknown hook decision")
-        specific = obj.get("hookSpecificOutput")
-        if isinstance(specific, dict):
-            permission = specific.get("permissionDecision")
-            if permission is not None and permission not in (
-                "allow",
-                "deny",
-                "ask",
-            ):
-                raise ValueError("unknown hook permission decision")
+        _validate_strict_output(obj)
     return _outcome_from_obj(obj)
 
 

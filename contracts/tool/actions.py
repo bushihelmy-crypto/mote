@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from mote.contracts.tool.arguments import ToolArguments, freeze_tool_arguments
 
 
 class TextAction(BaseModel):
@@ -16,7 +18,12 @@ class ToolCallAction(BaseModel):
     kind: Literal["tool_call"] = "tool_call"
     action_id: str = ""
     name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: ToolArguments = Field(default_factory=dict)
+
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def _freeze_arguments(cls, value: object) -> ToolArguments:
+        return freeze_tool_arguments(value)
 
 
 class FinalCandidateAction(BaseModel):

@@ -9,12 +9,14 @@ post-close / post-cap no-ops, the disk cap + ``on_cap`` callback, and
 path lookup / unknown-id ``KeyError`` / ``set_on_cap`` propagation / evict vs
 cleanup).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
+from mote.contracts.session.identity import SessionId
 from mote.orchestration.background_tasks import DiskTaskOutput, TaskOutputStore
 
 
@@ -44,15 +46,15 @@ class TestDiskTaskOutputAsync:
     @pytest.mark.asyncio
     async def test_file_created_under_task_outputs(self, tmp_path):
         # Layout is owned by the SessionWorkspace (via TaskOutputStore), not by
-        # DiskTaskOutput. An empty session falls back to the ``default`` bucket,
+        # DiskTaskOutput. The canonical SessionId selects the session bucket,
         # co-located under the session directory next to rollout + blobs.
-        store = TaskOutputStore(tmp_path)
+        store = TaskOutputStore(tmp_path, session_id=SessionId("test-session"))
         out = store.init_output("t3")
         p = Path(out.file_path)
         assert p.exists()
         assert p.name == "t3.output"
         assert p.parent.name == "task_outputs"
-        assert p.parent.parent.name == "default"
+        assert p.parent.parent.name == "test-session"
         assert p.parent.parent.parent.name == ".agent_sessions"
         await out.close()
 
@@ -101,7 +103,7 @@ class TestDiskTaskOutputAsync:
     async def test_session_scopes_path(self, tmp_path):
         # A session id nests the output under ``.agent_sessions/{session}/
         # task_outputs/`` so both of a task's artifacts share one session tree.
-        store = TaskOutputStore(tmp_path, session_id="sess-abc")
+        store = TaskOutputStore(tmp_path, session_id=SessionId("sess-abc"))
         out = store.init_output("t7")
         p = Path(out.file_path)
         assert p.parent.name == "task_outputs"
@@ -111,7 +113,7 @@ class TestDiskTaskOutputAsync:
 
     @pytest.mark.asyncio
     async def test_store_threads_session_to_outputs(self, tmp_path):
-        store = TaskOutputStore(tmp_path, session_id="sess-xyz")
+        store = TaskOutputStore(tmp_path, session_id=SessionId("sess-xyz"))
         out = store.init_output("t8")
         p = Path(out.file_path)
         assert p.parent.name == "task_outputs"
@@ -132,7 +134,7 @@ class TestDiskTaskOutputSync:
 class TestTaskOutputStore:
     @pytest.mark.asyncio
     async def test_init_and_read_roundtrip(self, tmp_path):
-        store = TaskOutputStore(tmp_path)
+        store = TaskOutputStore(tmp_path, session_id=SessionId("test-session"))
         out = store.init_output("a")
         assert isinstance(out, DiskTaskOutput)
         store.append("a", "payload")
@@ -143,7 +145,7 @@ class TestTaskOutputStore:
 
     @pytest.mark.asyncio
     async def test_get_tail_and_delta_via_store(self, tmp_path):
-        store = TaskOutputStore(tmp_path)
+        store = TaskOutputStore(tmp_path, session_id=SessionId("test-session"))
         out = store.init_output("b")
         store.append("b", "hello")
         await out.close()  # flush
@@ -154,19 +156,19 @@ class TestTaskOutputStore:
         assert store.get_size("b") == 5
 
     def test_duplicate_init_raises(self, tmp_path):
-        store = TaskOutputStore(tmp_path)
+        store = TaskOutputStore(tmp_path, session_id=SessionId("test-session"))
         store.init_output("dup")
         with pytest.raises(ValueError, match="already exists"):
             store.init_output("dup")
 
     def test_get_output_path(self, tmp_path):
-        store = TaskOutputStore(tmp_path)
+        store = TaskOutputStore(tmp_path, session_id=SessionId("test-session"))
         store.init_output("p")
         assert store.get_output_path("p").endswith("p.output")
         assert store.get_output_path("missing") is None
 
     def test_unknown_id_raises_keyerror(self, tmp_path):
-        store = TaskOutputStore(tmp_path)
+        store = TaskOutputStore(tmp_path, session_id=SessionId("test-session"))
         with pytest.raises(KeyError, match="Unknown task_id"):
             store.append("ghost", "x")
 
@@ -174,7 +176,7 @@ class TestTaskOutputStore:
     async def test_set_on_cap_propagates(self, tmp_path, monkeypatch):
         monkeypatch.setattr("mote.orchestration.background_tasks.results.store.MAX_TASK_OUTPUT_BYTES", 3)
         capped = []
-        store = TaskOutputStore(tmp_path)
+        store = TaskOutputStore(tmp_path, session_id=SessionId("test-session"))
         store.set_on_cap(capped.append)
         store.init_output("cap")
         store.append("cap", "abcdef")
@@ -183,7 +185,7 @@ class TestTaskOutputStore:
 
     @pytest.mark.asyncio
     async def test_evict_keeps_file_cleanup_removes(self, tmp_path):
-        store = TaskOutputStore(tmp_path)
+        store = TaskOutputStore(tmp_path, session_id=SessionId("test-session"))
         out = store.init_output("e")
         store.append("e", "data")
         path = Path(out.file_path)
@@ -195,7 +197,7 @@ class TestTaskOutputStore:
 
     @pytest.mark.asyncio
     async def test_cleanup_removes_file(self, tmp_path):
-        store = TaskOutputStore(tmp_path)
+        store = TaskOutputStore(tmp_path, session_id=SessionId("test-session"))
         out = store.init_output("c")
         store.append("c", "data")
         path = Path(out.file_path)
@@ -204,7 +206,7 @@ class TestTaskOutputStore:
 
     @pytest.mark.asyncio
     async def test_cleanup_all(self, tmp_path):
-        store = TaskOutputStore(tmp_path)
+        store = TaskOutputStore(tmp_path, session_id=SessionId("test-session"))
         o1 = store.init_output("x")
         o2 = store.init_output("y")
         store.append("x", "1")

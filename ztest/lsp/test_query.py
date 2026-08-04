@@ -7,13 +7,14 @@ without a real language server by stubbing the endpoint's ``request`` (the same
 seam :class:`JsonRpcEndpoint` exposes). We assert the request params are
 LSP-shaped and that any failure degrades to ``[]`` (best-effort, never raises).
 """
+
 from __future__ import annotations
 
 import pytest
 
 from mote.runtime.config.lsp import LspServerConfig
 from mote.runtime.lsp.registry import DiagnosticRegistry
-from mote.runtime.lsp.server import LspServerInstance, path_to_uri
+from mote.runtime.lsp.server import LspQueryError, LspServerInstance, path_to_uri
 
 aio = pytest.mark.asyncio
 
@@ -68,20 +69,23 @@ async def test_document_symbols_opens_doc_and_sends_request(tmp_path):
 @aio
 async def test_document_symbols_non_list_reply_is_empty(tmp_path):
     inst, _ep, path = _instance(tmp_path, result={"not": "a list"})
-    assert await inst.document_symbols(path) == []
+    with pytest.raises(LspQueryError):
+        await inst.document_symbols(path)
 
 
 @aio
 async def test_document_symbols_failure_yields_empty(tmp_path):
     inst, _ep, path = _instance(tmp_path, exc=RuntimeError("dead"))
-    assert await inst.document_symbols(path) == []
+    with pytest.raises(LspQueryError):
+        await inst.document_symbols(path)
 
 
 @aio
 async def test_document_symbols_dead_server_no_request(tmp_path):
     inst, ep, path = _instance(tmp_path, result=[])
     inst.alive = False
-    assert await inst.document_symbols(path) == []
+    with pytest.raises(LspQueryError):
+        await inst.document_symbols(path)
     assert ep.requests == []
 
 
@@ -112,14 +116,16 @@ async def test_definition_list_reply_passthrough(tmp_path):
 @aio
 async def test_definition_failure_yields_empty(tmp_path):
     inst, _ep, path = _instance(tmp_path, exc=TimeoutError())
-    assert await inst.definition(path, 0, 0) == []
+    with pytest.raises(LspQueryError):
+        await inst.definition(path, 0, 0)
 
 
 @aio
 async def test_definition_unreadable_path_no_request(tmp_path):
     inst, ep, _path = _instance(tmp_path, result=[])
     missing = str(tmp_path / "gone.py")
-    assert await inst.definition(missing, 0, 0) == []
+    with pytest.raises(LspQueryError):
+        await inst.definition(missing, 0, 0)
     assert ep.requests == []
 
 
@@ -146,20 +152,23 @@ async def test_references_sends_position_and_context(tmp_path):
 @aio
 async def test_references_non_list_reply_is_empty(tmp_path):
     inst, _ep, path = _instance(tmp_path, result={"not": "a list"})
-    assert await inst.references(path, 0, 0) == []
+    with pytest.raises(LspQueryError):
+        await inst.references(path, 0, 0)
 
 
 @aio
 async def test_references_failure_yields_empty(tmp_path):
     inst, _ep, path = _instance(tmp_path, exc=RuntimeError("dead"))
-    assert await inst.references(path, 0, 0) == []
+    with pytest.raises(LspQueryError):
+        await inst.references(path, 0, 0)
 
 
 @aio
 async def test_references_dead_server_no_request(tmp_path):
     inst, ep, path = _instance(tmp_path, result=[])
     inst.alive = False
-    assert await inst.references(path, 0, 0) == []
+    with pytest.raises(LspQueryError):
+        await inst.references(path, 0, 0)
     assert ep.requests == []
 
 

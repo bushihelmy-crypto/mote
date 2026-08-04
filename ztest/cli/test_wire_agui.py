@@ -12,6 +12,7 @@ from mote.contracts.activity import ActivityKind, ActivityOutcome
 from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity
 from mote.product.interfaces.agui import wire as agui
 from mote.product.presentation.events import events as ev
+from mote.product.presentation.events.catalog import UnsupportedViewEventError
 
 
 def _identity(value: str) -> ToolInvocationIdentity:
@@ -165,11 +166,12 @@ def test_system_reminder_maps_to_nothing(state):
     assert agui.to_agui_events(ev.SystemReminder(text="ctx"), state) == []
 
 
-def test_unknown_event_maps_to_nothing(state):
+def test_unknown_event_fails_closed(state):
     class Weird(ev.ViewEvent):
         kind = "weird_unknown_kind"
 
-    assert agui.to_agui_events(Weird(), state) == []
+    with pytest.raises(UnsupportedViewEventError):
+        agui.to_agui_events(Weird(), state)
 
 
 def test_output_snapshot_and_invalidation_use_custom_events(state):

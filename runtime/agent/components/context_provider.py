@@ -14,10 +14,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mote.contracts.conversation import Message, to_role_content_dicts
+from mote.contracts.conversation import Message
 from mote.contracts.conversation.fields import IMAGES, PDFS
 from mote.contracts.events.agent import BudgetEvent
 from mote.contracts.model.inference import InferenceIntent, InferenceRequirements
+from mote.contracts.model.routing import RoutingMessage
 from mote.contracts.output import OutputBindingKind
 from mote.kernel.commands.prompts import BUDGET_EXHAUSTED
 from mote.kernel.execution.context import PROCEED, BudgetVerdict, ExecutionContext
@@ -89,8 +90,10 @@ class ContextProvider(BaseContextProvider):
         kind), resolved once at router-build time into ``router.routing_enabled``.
         """
         messages = request.req if request is not None else None
-        wire = to_role_content_dicts(messages or ())
-        signals = build_routing_signals(wire)
+        routing_messages = tuple(
+            RoutingMessage(role=message.role, content=message.content) for message in (messages or ())
+        )
+        signals = build_routing_signals(routing_messages)
         binding_kind = request.output_binding.binding.kind if request is not None else OutputBindingKind.TEXT
         tool_specs = (
             self._executor.canonical_tool_specs(include_hidden=True)
@@ -128,7 +131,7 @@ class ContextProvider(BaseContextProvider):
                 ),
                 resume=True,
             ),
-            routing_messages=tuple((str(item.get("role", "user")), str(item.get("content", ""))) for item in wire),
+            routing_messages=tuple((message.role, message.content) for message in routing_messages),
             estimated_tokens=signals.estimated_tokens,
         )
         return await self._inference_port.resolve(intent)
@@ -137,15 +140,15 @@ class ContextProvider(BaseContextProvider):
         await self._inference_port.release(target)
 
     def resolve_task_model_route(self, task: str):
-        return self._role.router.model_route_for_task(task)
+        return self._role._router.model_route_for_task(task)
 
     @property
     def _executor(self):
-        return self._role.executor
+        return self._role._executor
 
     @property
     def _channel(self):
-        return self._role.command_channel
+        return self._role._command_channel
 
     @property
     def _get_cwd(self):
@@ -153,7 +156,7 @@ class ContextProvider(BaseContextProvider):
 
     @property
     def _context_manager(self):
-        return self._role.context_manager
+        return self._role._context_manager
 
     def execution_context(self) -> ExecutionContext:
         """Pack the static observe + loop-control parameters for one run().
@@ -196,7 +199,7 @@ class ContextProvider(BaseContextProvider):
         if limit <= 0:
             return PROCEED
 
-        spend = self._role.context.cost_manager.total_cost
+        spend = self._role._context.cost_manager.total_cost
         fraction = spend / limit
 
         if spend >= limit:

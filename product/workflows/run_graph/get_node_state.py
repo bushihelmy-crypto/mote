@@ -105,9 +105,9 @@ def _preview_value(value, *, limit: int | None = None, collapse: bool = False) -
         body = value
     else:
         try:
-            body = json.dumps(value, ensure_ascii=False, default=str)
+            body = json.dumps(value, ensure_ascii=False)
         except (TypeError, ValueError):
-            body = repr(value)
+            body = f"<{type(value).__name__} value unavailable>"
     body = body.strip()
     if collapse:
         body = collapse_whitespace(body)
@@ -128,7 +128,7 @@ def _consumers(graph, written_fields: list[str]) -> list[str]:
     if not fields:
         return []
     out: list[str] = []
-    for other_name, other_def in graph._nodes.items():
+    for other_name, other_def in graph.nodes.items():
         for pname, pinfo in other_def.params.items():
             source = pinfo.get("from", "")
             if not source or source.startswith("$input."):
@@ -216,8 +216,10 @@ class GetNodeState(BaseTool):
                 status=meta.status.value,
             )
 
-        gm = meta.graph_meta
-        graph = gm.graph_ref if gm else None
+        # The immutable run view is reconstructed from canonical Workflow
+        # projection/definition.  Never consult deferred graph metadata for
+        # inspection or node validation.
+        graph = meta.graph
 
         requested = _as_list(nodes)
         if not requested:
@@ -226,8 +228,8 @@ class GetNodeState(BaseTool):
 
         if graph is not None:
             for n in requested:
-                if n not in graph._nodes:
-                    raise ToolError(_MSG_NODE_NOT_FOUND.format(node_name=n, available=list(graph._nodes.keys())))
+                if n not in graph.nodes:
+                    raise ToolError(_MSG_NODE_NOT_FOUND.format(node_name=n, available=list(graph.nodes.keys())))
         out = self._render_details(run_id, meta, run_state, graph, requested)
         return out
 
@@ -254,7 +256,7 @@ class GetNodeState(BaseTool):
             rec = run_state.get(n)
             self_loop = _is_self_loop_node(graph, n)
             block = [f"Node '{n}': {_record_header(rec, self_loop=self_loop)}"]
-            node_def = graph._nodes.get(n) if graph is not None else None
+            node_def = graph.nodes.get(n) if graph is not None else None
             if node_def is None:
                 blocks.append("\n".join(block))
                 continue
@@ -309,7 +311,7 @@ class GetNodeState(BaseTool):
         """Short inline preview of ``state.field``, or ``None`` when unavailable."""
         if state is None or not field:
             return None
-        value = getattr(state, field, _NO_FIELD)
+        value = state.get(field, _NO_FIELD)
         if value is _NO_FIELD:
             return None
         return _preview_value(value, limit=_INLINE_PREVIEW_LIMIT, collapse=True)
@@ -319,8 +321,8 @@ class GetNodeState(BaseTool):
         state = meta.state_snapshot
         if state is None:
             return _MSG_NO_SNAPSHOT.format(run_id=run_id)
-        valid = set(getattr(type(state), "model_fields", {}) or {})
-        unknown = [f for f in requested if f not in valid and getattr(state, f, _NO_FIELD) is _NO_FIELD]
+        valid = set(state)
+        unknown = [f for f in requested if f not in valid]
         if unknown:
             raise ToolError(
                 _MSG_UNKNOWN_FIELD.format(
@@ -330,7 +332,7 @@ class GetNodeState(BaseTool):
             )
         blocks = [f"Workflow run {run_id} ({meta.command_name}) — state fields:"]
         for field in requested:
-            value = getattr(state, field, _NO_FIELD)
+            value = state.get(field, _NO_FIELD)
             if value is _NO_FIELD:
                 blocks.append(f"{field}: (not set)")
                 continue

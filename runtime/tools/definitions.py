@@ -11,6 +11,7 @@ from mote.contracts.tool import NativeToolSchema, XmlToolSchema
 from mote.contracts.tool.execution import ToolExecutionKind
 from mote.kernel.tools.docstrings import description_body, first_line
 from mote.kernel.tools.spec_adapter import build_json_schema
+from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.definition_compiler import python_tool_source_identity
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_convert import function_docstring_to_schema
@@ -35,7 +36,7 @@ def _search_text(capability_type: type) -> str:
     return f"{summary} {' '.join(keywords)}" if keywords else summary
 
 
-def render_xml_capability(capability: Any) -> XmlToolSchema:
+def render_xml_capability(capability: BaseTool) -> XmlToolSchema:
     """Render only the scalar/string XML command contract."""
 
     capability_type = type(capability)
@@ -47,7 +48,7 @@ def render_xml_capability(capability: Any) -> XmlToolSchema:
     }
 
 
-def render_native_capability(capability: Any) -> NativeToolSchema:
+def render_native_capability(capability: BaseTool) -> NativeToolSchema:
     """Render the structured JSON Schema contract for provider-native use."""
 
     capability_type = type(capability)
@@ -58,24 +59,24 @@ def render_native_capability(capability: Any) -> NativeToolSchema:
     }
 
 
-def _render_xml_with_description(capability: Any, *, description: str) -> XmlToolSchema:
+def _render_xml_with_description(capability: BaseTool, *, description: str) -> XmlToolSchema:
     schema = render_xml_capability(capability)
     schema["description"] = description
     return schema
 
 
-def _render_native_with_description(capability: Any, *, description: str) -> NativeToolSchema:
+def _render_native_with_description(capability: BaseTool, *, description: str) -> NativeToolSchema:
     schema = render_native_capability(capability)
     schema["description"] = description
     return schema
 
 
 def xml_definition(
-    capability_type: type,
-    capability_factory: Callable[[], Any] | None = None,
+    capability_type: type[BaseTool],
+    capability_factory: Callable[[], BaseTool] | None = None,
     *,
     description: str | None = None,
-) -> XmlToolDefinition[Any]:
+) -> XmlToolDefinition:
     resolved_description = description if description is not None else _description(capability_type)
     return XmlToolDefinition(
         name=str(capability_type.name),
@@ -96,11 +97,11 @@ def xml_definition(
 
 
 def native_definition(
-    capability_type: type,
-    capability_factory: Callable[[], Any] | None = None,
+    capability_type: type[BaseTool],
+    capability_factory: Callable[[], BaseTool] | None = None,
     *,
     description: str | None = None,
-) -> NativeToolDefinition[Any]:
+) -> NativeToolDefinition:
     resolved_description = description if description is not None else _description(capability_type)
     return NativeToolDefinition(
         name=str(capability_type.name),

@@ -229,7 +229,7 @@
         "present": true
       },
       "inference-workgraph-v1.yaml": {
-        "digest": "sha256:73c6bb48c264450b28ed208622aac7e7239bf78738c298a2f47607f555d0cf4d",
+        "digest": "sha256:0f5711aa2e8bb92d6757e951a1988e0990b82673459e7475f3e1ef72bf75454a",
         "present": true
       }
     }

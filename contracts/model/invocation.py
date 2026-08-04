@@ -7,10 +7,10 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mote.contracts.artifact import ArtifactRef
-from mote.contracts.events.envelope import freeze_json
+from mote.contracts.events.envelope import JsonValue, freeze_json
 from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.topology import RouteId
 
@@ -53,8 +53,16 @@ class CanonicalMessage(_FrozenContract):
 class CanonicalToolDefinition(_FrozenContract):
     name: str = Field(min_length=1)
     description: str = ""
-    input_schema: dict[str, JsonValue] = Field(default_factory=dict)
+    input_schema: Mapping[str, JsonValue] = Field(default_factory=dict)
     defer_loading: bool = False
+
+    @field_validator("input_schema")
+    @classmethod
+    def _freeze_input_schema(cls, value: object) -> Mapping[str, JsonValue]:
+        frozen = freeze_json(value, path="tool input schema")
+        if not isinstance(frozen, Mapping):
+            raise ValueError("tool input schema must be a JSON object")
+        return frozen
 
 
 class GenerateInput(_FrozenContract):
@@ -62,7 +70,17 @@ class GenerateInput(_FrozenContract):
     messages: tuple[CanonicalMessage, ...]
     system_prompt: str = ""
     tools: tuple[CanonicalToolDefinition, ...] = ()
-    output_schema: dict[str, JsonValue] | None = None
+    output_schema: Mapping[str, JsonValue] | None = None
+
+    @field_validator("output_schema")
+    @classmethod
+    def _freeze_output_schema(cls, value: object | None) -> Mapping[str, JsonValue] | None:
+        if value is None:
+            return None
+        frozen = freeze_json(value, path="model output schema")
+        if not isinstance(frozen, Mapping):
+            raise ValueError("model output schema must be a JSON object")
+        return frozen
 
 
 class WebSearchInput(_FrozenContract):
@@ -88,20 +106,20 @@ class EmbeddingInput(_FrozenContract):
 class ImageGenerationInput(_FrozenContract):
     kind: Literal["image_generation"] = "image_generation"
     prompt: str = Field(min_length=1)
-    options: dict[str, JsonValue] = Field(default_factory=dict)
+    options: Mapping[str, JsonValue] = Field(default_factory=dict)
 
 
 class SpeechInput(_FrozenContract):
     kind: Literal["speech"] = "speech"
     text: str = Field(min_length=1)
     voice: str = Field(min_length=1)
-    options: dict[str, JsonValue] = Field(default_factory=dict)
+    options: Mapping[str, JsonValue] = Field(default_factory=dict)
 
 
 class TranscriptionInput(_FrozenContract):
     kind: Literal["transcription"] = "transcription"
     artifact: ArtifactRef
-    options: dict[str, JsonValue] = Field(default_factory=dict)
+    options: Mapping[str, JsonValue] = Field(default_factory=dict)
 
 
 CanonicalModelInput = Annotated[
@@ -159,8 +177,15 @@ class ModelInvocation(_FrozenContract):
 class GenerateOutput(_FrozenContract):
     kind: Literal["generate"] = "generate"
     content: str = ""
+    content_artifact: ArtifactRef | None = None
     tool_calls: tuple[CanonicalToolCall, ...] = ()
     structured: JsonValue = None
+
+    @model_validator(mode="after")
+    def _content_location(self) -> "GenerateOutput":
+        if self.content_artifact is not None and self.content:
+            raise ValueError("generate content must be inline or ArtifactRef, not both")
+        return self
 
 
 class WebSearchHitOutput(_FrozenContract):
@@ -187,7 +212,7 @@ class EmbeddingOutput(_FrozenContract):
 class ImageGenerationOutput(_FrozenContract):
     kind: Literal["image_generation"] = "image_generation"
     artifacts: tuple[ArtifactRef, ...] = ()
-    provider_items: tuple[dict[str, JsonValue], ...] = ()
+    provider_items: tuple[Mapping[str, JsonValue], ...] = ()
 
 
 class SpeechOutput(_FrozenContract):
@@ -256,9 +281,8 @@ class ResolvedModelResponse(_FrozenContract):
     credential_slot_id: str = Field(min_length=1)
     provider: str = "unknown"
     transport: str = "unknown"
-    model_call_id: str = ""
-    successful_attempt_id: str = ""
-    summary: Any = None
+    model_call_id: str = Field(min_length=1)
+    successful_attempt_id: str | None = None
 
 
 __all__ = [

@@ -1,60 +1,18 @@
 {
   "schema_version": 1,
   "cases": [
-    {
-      "file": "typecheck/cases/fail/component_key_mismatch.py",
-      "rule": "reportAssignmentType",
-      "line": 15
-    },
-    {
-      "file": "typecheck/cases/fail/catalog_invariance.py",
-      "rule": "reportArgumentType",
-      "line": 15
-    },
-    {
-      "file": "typecheck/cases/fail/consumer_mismatch.py",
-      "rule": "reportArgumentType",
-      "line": 15
-    },
-    {
-      "file": "typecheck/cases/fail/function_tool_projector_mismatch.py",
-      "rule": "reportArgumentType",
-      "line": 22
-    },
-    {
-      "file": "typecheck/cases/fail/output_transaction_mismatch.py",
-      "rule": "reportArgumentType",
-      "line": 15
-    },
-    {
-      "file": "typecheck/cases/fail/presentation_mismatch.py",
-      "rule": "reportArgumentType",
-      "line": 7
-    },
-    {
-      "file": "typecheck/cases/fail/toolset_direction.py",
-      "rule": "reportArgumentType",
-      "line": 25
-    },
-    {
-      "file": "typecheck/cases/fail/telemetry_mismatch.py",
-      "rule": "reportArgumentType",
-      "line": 23
-    },
-    {
-      "file": "typecheck/cases/fail/root_request_child_builder.py",
-      "rule": "reportArgumentType",
-      "line": 11
-    },
-    {
-      "file": "typecheck/cases/fail/wrong_builder_output.py",
-      "rule": "reportArgumentType",
-      "line": 13
-    },
-    {
-      "file": "typecheck/cases/fail/xml_native_mismatch.py",
-      "rule": "reportArgumentType",
-      "line": 15
-    }
+    {"file":"typecheck/cases/fail/catalog_invariance.py","rule":"reportArgumentType","line":15},
+    {"file":"typecheck/cases/fail/component_key_mismatch.py","rule":"reportAssignmentType","line":13},
+    {"file":"typecheck/cases/fail/consumer_mismatch.py","rule":"reportArgumentType","line":15},
+    {"file":"typecheck/cases/fail/function_tool_projector_mismatch.py","rule":"reportArgumentType","line":22},
+    {"file":"typecheck/cases/fail/output_transaction_mismatch.py","rule":"reportArgumentType","line":12},
+    {"file":"typecheck/cases/fail/output_transaction_mismatch.py","rule":"reportArgumentType","line":13},
+    {"file":"typecheck/cases/fail/output_transaction_mismatch.py","rule":"reportArgumentType","line":14},
+    {"file":"typecheck/cases/fail/presentation_mismatch.py","rule":"reportArgumentType","line":7},
+    {"file":"typecheck/cases/fail/root_request_child_builder.py","rule":"reportArgumentType","line":11},
+    {"file":"typecheck/cases/fail/telemetry_mismatch.py","rule":"reportArgumentType","line":22},
+    {"file":"typecheck/cases/fail/toolset_direction.py","rule":"reportCallIssue","line":25},
+    {"file":"typecheck/cases/fail/wrong_builder_output.py","rule":"reportArgumentType","line":13},
+    {"file":"typecheck/cases/fail/xml_native_mismatch.py","rule":"reportArgumentType","line":15}
   ]
 }

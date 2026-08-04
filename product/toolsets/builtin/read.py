@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import replace
 from typing import ClassVar, Optional
 
 from mote.contracts.file import (
@@ -510,17 +511,17 @@ class Read(BaseTool):
                 result = await self._read_video(file_path, raw, ext)
                 self._mark_read(snapshot)
                 if result.success:
-                    result.resource_path = full_path
+                    result = replace(result, resource_path=full_path)
                 return result
             if ext in _IMAGE_EXTENSIONS:
                 result = await self._read_image(file_path, full_path, ext, raw, detail)
                 self._mark_read(snapshot)
-                result.resource_path = full_path
+                result = replace(result, resource_path=full_path)
                 return result
             if ext == "pdf":
                 result = await self._read_pdf(file_path, full_path, raw)
                 self._mark_read(snapshot)
-                result.resource_path = full_path
+                result = replace(result, resource_path=full_path)
                 return result
             out = self._read_notebook(file_path, raw)
             self._mark_read(snapshot)
@@ -617,7 +618,7 @@ class Read(BaseTool):
         )
         return ToolResult(
             output="\n".join(descriptions),
-            media=[
+            media=[  # type: ignore[arg-type]
                 ToolMedia(
                     kind="image",
                     ref=f"{full_path}#page={page.page_number}",
@@ -698,7 +699,7 @@ class Read(BaseTool):
         )
         return ToolResult(
             output=_MSG_IMAGE_OUTPUT.format(path=file_path, ext=ext, size=size, note=note),
-            media=[
+            media=[  # type: ignore[arg-type]
                 ToolMedia(
                     kind="image",
                     ref=full_path,
@@ -751,7 +752,7 @@ class Read(BaseTool):
         media = [ToolMedia(kind="image", mime="image/jpeg", artifact=artifact) for artifact in artifacts]
         return ToolResult(
             output=video_summary(file_path, result, kept=len(media)),
-            media=media,
+            media=tuple(media),
             payload=json_tool_payload(
                 {
                     "type": "video",
@@ -791,7 +792,7 @@ class Read(BaseTool):
         )
         return ToolResult(
             output=_MSG_PDF_OUTPUT.format(path=file_path, size=size),
-            media=[
+            media=[  # type: ignore[arg-type]
                 ToolMedia(
                     kind="pdf",
                     ref=full_path,

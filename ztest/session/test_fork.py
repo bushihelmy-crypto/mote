@@ -29,6 +29,7 @@ from mote.contracts.file.errors import SnapshotDurabilityError
 from mote.contracts.file.mutations import ReplaceMutation
 from mote.contracts.tool import CommandProtocol, ToolsetIdentity
 from mote.product.agents.factory import CodingAgentFactory
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.fileops.edit_plans import LiteralEditPlanRequest
 from mote.runtime.fileops.identity import path_token
 from mote.runtime.fileops.mutation.artifacts import FileMutationArtifactRepository
@@ -531,6 +532,7 @@ async def test_role_fork_session_inherits_history_and_lineage(tmp_path, monkeypa
             context,
             application_composition=composition,
             dependencies=CodingAgentFactory(
+                model_checkpoint_policy=approved_model_checkpoint_policy(),
                 paths=paths,
                 routing_strategy_builders_factory=lambda: {"squilla": object},
             ).dependencies(deps=None, output_contract=text_output_contract()),

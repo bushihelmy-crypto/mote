@@ -2,10 +2,12 @@
 
 from mote.runtime.models.failover.model_journal import (
     LocalModelCallJournal,
+    ModelCallCapacityError,
     ModelCallJournalError,
     ModelCallJournalIntegrityError,
     ModelCallJournalUnavailableError,
     model_call_journal_root,
+    validate_model_call_record_stream,
 )
 from mote.runtime.models.failover.orchestrator import DEFAULT_MAX_WIRE_ATTEMPTS, AttemptOrchestrator, AttemptResumeSeed
 from mote.runtime.models.failover.planner import FailoverPlanner
@@ -24,7 +26,9 @@ __all__ = [
     "ModelCallJournalError",
     "ModelCallJournalIntegrityError",
     "ModelCallJournalUnavailableError",
+    "ModelCallCapacityError",
     "RuntimeFailoverGroup",
     "build_canonical_model_runtime_snapshot",
     "model_call_journal_root",
+    "validate_model_call_record_stream",
 ]

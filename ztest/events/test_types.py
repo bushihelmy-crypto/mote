@@ -3,13 +3,18 @@
 """Tests for the three observation events added to unify the parallel paths:
 
 ``RecoveryEvent`` / ``TaskProgressEvent`` / ``ResourceReportEvent`` — their
-discriminators, default fields, and re-export from ``mote.runtime.events``.
+discriminators and default fields. Event types are imported from their
+authoritative Contracts modules, never re-exported by Runtime.
 """
 
 from __future__ import annotations
 
-import mote.runtime.events as ev
+import pytest
+
 from mote.contracts.events.conversation import PROMPT_REJECTED, PromptRejectedEvent
+from mote.contracts.events.file.facts import FileTransactionPreparedEvent
+from mote.contracts.events.model import RoutingDecisionEvent
+from mote.contracts.events.output import OutputCandidateReceivedEvent
 from mote.contracts.events.task import TASK_PROGRESS, TaskProgressEvent
 from mote.contracts.events.telemetry import RECOVERY, RESOURCE_REPORT, RecoveryEvent, ResourceReportEvent
 from mote.contracts.task.progress import ProgressPhase
@@ -64,16 +69,6 @@ def test_resource_report_event_uses_name_underscore():
     assert ResourceReportEvent().extra is None
 
 
-def test_reexported_from_events_package():
-    assert ev.RecoveryEvent is RecoveryEvent
-    assert ev.TaskProgressEvent is TaskProgressEvent
-    assert ev.ResourceReportEvent is ResourceReportEvent
-    for n in ("RECOVERY", "TASK_PROGRESS", "RESOURCE_REPORT"):
-        assert n in ev.__all__
-    for n in ("RecoveryEvent", "TaskProgressEvent", "ResourceReportEvent"):
-        assert n in ev.__all__
-
-
 def test_prompt_rejected_is_a_distinct_safe_observation_fact():
     event = PromptRejectedEvent(
         prompt_digest="sha256:deadbeef",
@@ -84,6 +79,64 @@ def test_prompt_rejected_is_a_distinct_safe_observation_fact():
     )
 
     assert event.name == PROMPT_REJECTED == "prompt_rejected"
-    assert ev.PromptRejectedEvent is PromptRejectedEvent
-    assert "PROMPT_REJECTED" in ev.__all__
-    assert "PromptRejectedEvent" in ev.__all__
+
+
+@pytest.mark.parametrize(
+    ("decoder", "canonical", "wrong_primitive_field"),
+    (
+        (
+            RoutingDecisionEvent.from_payload,
+            {"decision": {}, "state": {}, "route_schema_version": 2},
+            "route_schema_version",
+        ),
+        (
+            PromptRejectedEvent.from_payload,
+            {
+                "prompt_digest": "sha256:deadbeef",
+                "redacted_excerpt": "safe",
+                "classification": "deny",
+                "reason": "denied",
+                "terminate": False,
+            },
+            "terminate",
+        ),
+        (
+            OutputCandidateReceivedEvent.from_payload,
+            {
+                "candidate_id": "candidate-1",
+                "contract_id": "contract-1",
+                "schema_fingerprint": "sha256:schema",
+                "representation": "json",
+                "raw": None,
+                "run_id": "run-1",
+                "run_kind": "agent",
+            },
+            "run_id",
+        ),
+        (
+            FileTransactionPreparedEvent.from_payload,
+            {"mutation_set": {}, "hunks": []},
+            "hunks",
+        ),
+    ),
+)
+def test_registered_d3_decoders_reject_noncanonical_payloads(
+    decoder,
+    canonical,
+    wrong_primitive_field,
+):
+    missing = dict(canonical)
+    missing.pop(next(iter(missing)))
+    with pytest.raises(ValueError):
+        decoder(missing)
+
+    extra = dict(canonical)
+    extra["unexpected"] = None
+    with pytest.raises(ValueError):
+        decoder(extra)
+
+    wrong_primitive = dict(canonical)
+    original = wrong_primitive[wrong_primitive_field]
+    wrong_primitive[wrong_primitive_field] = "wrong" if type(original) is not str else 7
+    with pytest.raises((TypeError, ValueError)):
+        decoder(wrong_primitive)

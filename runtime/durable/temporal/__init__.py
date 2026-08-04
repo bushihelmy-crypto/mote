@@ -13,12 +13,12 @@ from mote.runtime.durable.temporal._activities import (
     StepInput,
     TemporalActivityCatalog,
 )
-from mote.runtime.durable.temporal._backend import TemporalBackend
 from mote.runtime.durable.temporal._converter import data_converter
 from mote.runtime.durable.temporal.plugin import build_worker, connect_client
+from mote.runtime.durable.temporal.runtime import TemporalActivityRuntime
 
 __all__ = [
-    "TemporalBackend",
+    "TemporalActivityRuntime",
     "StepActivities",
     "TemporalActivityCatalog",
     "StepInput",

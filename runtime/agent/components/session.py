@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import Callable, Optional
 from uuid import uuid4
 
+from mote.contracts.conversation import UserMessage
 from mote.contracts.events.file.facts import FILE_TRANSACTION_COMMITTED
 from mote.contracts.events.governance import SideEffectPolicy
+from mote.contracts.model.inference import FinalizedGenerateRequest
 from mote.contracts.ports.events.subscription import (
     CheckpointPolicy,
     EventFilter,
@@ -64,14 +66,14 @@ from mote.runtime.events.dispatcher import SubscriptionBinding, SubscriptionMani
 from mote.runtime.events.fabric import EventFabric
 from mote.runtime.fileops import FileOperations
 from mote.runtime.interactive.checkpoint_store import ArtifactCheckpointPayloadStore
-from mote.runtime.models.model_calls import generate
+from mote.runtime.models.model_calls import generate_finalized
 from mote.runtime.projections import (
     CanvasArtifactProjector,
     NotebookArtifactProjector,
     RuntimeProjectionReconciler,
     RuntimeProjectionRegistry,
 )
-from mote.runtime.secrets.cipher import build_cipher
+from mote.runtime.secrets.cipher import build_aes_cipher
 from mote.runtime.session import (
     SESSION_PROJECTION_SUBSCRIPTION,
     RuntimeCheckpointRecorder,
@@ -161,7 +163,7 @@ def _build_session_log(ctx) -> SessionLog:
     return SessionLog(
         ctx.role.state.session_id,
         base_dir=str(workspace.sessions_root),
-        writer=ctx.role.context.disk_writer,
+        writer=ctx.role._context.disk_writer,
     )
 
 
@@ -256,10 +258,11 @@ def _build_artifact_repository_bundle(ctx) -> ArtifactRepositoryBundle:
         session_id=ctx.role.state.session_id,
         project_root=ctx.role.state.project_root or ctx.role.get_cwd(),
     )
-    repository = layout.open(ownership).repository
+    repository = layout.build_repository()
     fileops_artifacts = SessionFileOpsArtifactRoots(session_log.path.parent.parent, repository)
     return layout.open(
         ownership,
+        repository=repository,
         root_sources=(fileops_artifacts,),
         metadata_sources=(fileops_artifacts,),
     )
@@ -289,10 +292,7 @@ def _build_checkpoint_payload_store(ctx, inputs: SessionComponentInputs) -> Arti
         raise ValueError("Agent composition requires a secrets root")
     return ArtifactCheckpointPayloadStore(
         ctx.dep(ARTIFACT_STORE),
-        build_cipher(
-            ctx.role.config.secrets,
-            default_key_path=secrets_root / "vault.key",
-        ),
+        build_aes_cipher(secrets_root / "vault.key"),
     )
 
 
@@ -353,13 +353,15 @@ def _build_title_subscriber(ctx) -> Optional[TitleSubscriber]:
         return None
 
     async def _generate(prompt: str) -> Optional[str]:
-        output, _resolved = await generate(
+        output, _resolved = await generate_finalized(
             ctx.dep(ROUTER).model_route_for_task("session_title"),
-            prompt,
+            FinalizedGenerateRequest(
+                messages=(UserMessage(content=prompt),),
+                task="session_title",
+                system_prompt=_TITLE_SYSTEM_PROMPT,
+                stream=False,
+            ),
             model_call_id=uuid4().hex,
-            task="session_title",
-            system_prompt=_TITLE_SYSTEM_PROMPT,
-            stream=False,
         )
         title = output.content
         return (title or "").strip().strip('"').strip()[:_TITLE_MAX_LEN] or None

@@ -1,4 +1,5 @@
 """Media-specific frontends hosted by the shared Chromium live-window shell."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -265,7 +266,15 @@ _NOTEBOOK_SCRIPT = r"""
       stdin.addEventListener('submit', (event) => {
         event.preventDefault();
         if (!inputRequest || !editable) return;
-        window.__moteEmit('notebook.input_reply', JSON.stringify({request_id: inputRequest.request_id, value: stdinValue.value}));
+        window.__moteEmit('notebook.input_reply', JSON.stringify({
+          request_id: inputRequest.request_id,
+          value: stdinValue.value,
+          document_revision: inputRequest.document_revision,
+          kernel_epoch: inputRequest.kernel_epoch,
+          connection_generation: inputRequest.connection_generation,
+          human_generation: inputRequest.human_generation,
+          expected_request_revision: inputRequest.request_revision
+        }));
         stdinValue.value = '';
       });
       source.addEventListener('keydown', (event) => {

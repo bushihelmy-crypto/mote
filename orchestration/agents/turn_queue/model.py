@@ -17,8 +17,10 @@ class TurnPriority(IntEnum):
 
 
 class TurnQueueState(StrEnum):
+    PREPARED = "prepared"
     ACCEPTED = "accepted"
     CLAIMED = "claimed"
+    EXECUTION_SETTLEMENT_PREPARED = "execution_settlement_prepared"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -42,6 +44,8 @@ class TurnAdmissionDisposition(StrEnum):
     BACKPRESSURED = "backpressured"
     REJECTED_CAPACITY = "rejected_capacity"
     CONFLICT = "conflict"
+    STALE_FENCE = "stale_fence"
+    OWNER_LOST = "owner_lost"
 
 
 class TurnMutationDisposition(StrEnum):
@@ -192,6 +196,8 @@ class TurnQueueItem:
     maximum_attempts: int
     next_eligible_at: AbsoluteInstant | None
     claim: TurnClaimBinding | None = None
+    payload_digest: str = ""
+    settlement_state: TurnQueueState | None = None
     terminal_reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -209,6 +215,8 @@ class TurnQueueItem:
             raise TypeError("turn queue state is invalid")
         if not isinstance(self.accepted_at, AbsoluteInstant):
             raise TypeError("turn accepted instant is invalid")
+        if type(self.payload_digest) is not str or not self.payload_digest:
+            raise ValueError("turn payload digest is invalid")
         for instant in (self.deadline, self.next_eligible_at):
             if instant is not None:
                 if not isinstance(instant, AbsoluteInstant):
@@ -218,15 +226,22 @@ class TurnQueueItem:
             raise ValueError("turn deadline must be after durable acceptance")
         if self.next_eligible_at is not None and not self.next_eligible_at.is_at_or_after(self.accepted_at):
             raise ValueError("turn retry eligibility precedes acceptance")
-        if self.state is TurnQueueState.CLAIMED:
+        if self.state in {TurnQueueState.CLAIMED, TurnQueueState.EXECUTION_SETTLEMENT_PREPARED}:
             if self.claim is None or self.claim.queue_revision != self.revision:
                 raise ValueError("claimed turn must bind its current queue revision")
         elif self.claim is not None:
             raise ValueError("only a claimed turn may carry a claim binding")
+        if self.state is TurnQueueState.EXECUTION_SETTLEMENT_PREPARED:
+            if self.settlement_state not in {TurnQueueState.SUCCEEDED, TurnQueueState.FAILED}:
+                raise ValueError("prepared turn settlement requires a terminal outcome")
+            if type(self.terminal_reason) is not str or not self.terminal_reason:
+                raise ValueError("prepared turn settlement requires a reason")
+        elif self.settlement_state is not None:
+            raise ValueError("only prepared turn settlement may carry an outcome")
         if self.state.terminal:
             if type(self.terminal_reason) is not str or not self.terminal_reason:
                 raise ValueError("terminal turn requires a typed non-empty reason")
-        elif self.terminal_reason is not None:
+        elif self.state is not TurnQueueState.EXECUTION_SETTLEMENT_PREPARED and self.terminal_reason is not None:
             raise ValueError("non-terminal turn cannot carry a terminal reason")
 
     @property
@@ -242,6 +257,7 @@ class TurnAcceptanceRequest:
     accepted_at: AbsoluteInstant
     deadline: AbsoluteInstant | None
     maximum_attempts: int
+    payload_digest: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.identity, TurnQueueIdentity):
@@ -259,6 +275,8 @@ class TurnAcceptanceRequest:
                 raise ValueError("turn acceptance deadline must be in the future")
         if type(self.maximum_attempts) is not int or self.maximum_attempts < 1:
             raise ValueError("turn acceptance attempt bound is invalid")
+        if type(self.payload_digest) is not str or not self.payload_digest:
+            raise ValueError("turn acceptance payload digest is invalid")
 
 
 @dataclass(frozen=True, slots=True)

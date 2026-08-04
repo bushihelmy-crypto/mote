@@ -20,6 +20,7 @@ OS-level sandbox, only the logical boundary.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Literal, Optional
 
 from pydantic import Field, model_validator
@@ -30,7 +31,14 @@ from mote.runtime.sandbox.network.patterns import matches_pattern
 # Which OS-level isolation backend to use. ``auto`` probes the host
 # (``shutil.which("bwrap")`` + platform); ``bwrap`` forces bubblewrap; ``none``
 # disables OS-level isolation (the runtime becomes a passthrough).
-SandboxBackendKind = Literal["auto", "bwrap", "none"]
+SandboxBackendKind = Literal["auto", "bwrap"]
+
+
+class SandboxProfile(StrEnum):
+    WORKSPACE_GOVERNED = "workspace-governed"
+    NETWORKED_GOVERNED = "networked-governed"
+    ISOLATED_COMPUTE = "isolated-compute"
+
 
 # How to shape the injected credential into an HTTP request header:
 #   * ``bearer`` — ``Authorization: Bearer <secret>`` (OAuth / GitHub PAT).
@@ -91,20 +99,17 @@ class SandboxRuntimeConfig(ConfigModel):
     rejection.
     """
 
-    enabled: bool = Field(
-        default=False,
-        description="Master switch for OS-level isolation (off by default — opt-in).",
+    profile: SandboxProfile = Field(
+        default=SandboxProfile.NETWORKED_GOVERNED,
+        description="Closed Product-approved execution profile.",
     )
     backend: SandboxBackendKind = Field(
         default="auto",
         description="Isolation backend: auto (probe host) | bwrap | none.",
     )
     fail_if_unavailable: bool = Field(
-        default=False,
-        description=(
-            "When the requested backend is unavailable: True raises (hard fail), "
-            "False runs the command unsandboxed with a warning (graceful degrade)."
-        ),
+        default=True,
+        description=("Required fail-closed behavior when the selected backend is unavailable."),
     )
     harden_process: bool = Field(
         default=True,
@@ -119,7 +124,7 @@ class SandboxRuntimeConfig(ConfigModel):
             "libseccomp/pyseccomp is unavailable."
         ),
     )
-    network: Literal["off", "proxy", "open"] = Field(
+    network: Literal["off", "proxy"] = Field(
         default="proxy",
         description=(
             "Network stance: off (no egress) | proxy (HTTP(S) via local allowlist "
@@ -202,6 +207,15 @@ class SandboxRuntimeConfig(ConfigModel):
         subset check is the exact matching the proxy uses (one source of truth,
         no upward dependency on the sandbox runtime package).
         """
+        if self.backend == "none":
+            raise ValueError("sandbox backend cannot disable required enforcement")
+        if not self.fail_if_unavailable:
+            raise ValueError("sandbox runtime must fail closed when enforcement is unavailable")
+        required_network = "proxy" if self.profile is SandboxProfile.NETWORKED_GOVERNED else "off"
+        if self.network != required_network:
+            raise ValueError(f"{self.profile.value} requires network={required_network!r}")
+        if self.profile is SandboxProfile.NETWORKED_GOVERNED and not self.network_enforcement:
+            raise ValueError("networked-governed requires OS network enforcement")
         if not self.credentials:
             return self
 
@@ -215,4 +229,4 @@ class SandboxRuntimeConfig(ConfigModel):
         return self
 
 
-__all__ = ["SandboxRuntimeConfig", "SandboxBackendKind", "CredentialConfig", "CredentialScheme"]
+__all__ = ["SandboxRuntimeConfig", "SandboxBackendKind", "SandboxProfile", "CredentialConfig", "CredentialScheme"]

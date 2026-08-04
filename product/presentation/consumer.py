@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 """``BaseConsumer`` — the eat/dispatch plumbing behind the ``Consumer`` contract.
 
-A subclass overrides only the event kinds it cares about: ``handle(ev)``
-dispatches to a method named ``on_<ev.kind>`` (e.g. ``on_tool_call_started``); a
-missing method routes to ``on_unhandled`` which eats by default. Handlers may be
+A subclass explicitly declares the event handlers it cares about; a missing
+handler routes to ``on_unhandled`` which eats by default. Handlers may be
 sync **or** async — a returned awaitable is awaited — so a rich-console consumer
 (sync prints) and a webhook consumer (async I/O) share one base without ceremony.
 
@@ -15,11 +14,11 @@ the structural contract it implements is
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Mapping
 from typing import Awaitable, Callable, Iterable, Optional, Protocol
 
 from mote.product.presentation.events.capabilities import Capabilities
+from mote.product.presentation.events.catalog import require_view_event
 from mote.product.presentation.events.events import ViewEvent
 from mote.product.presentation.wire_types import WireMapping
 from mote.runtime.telemetry.logging import logger
@@ -31,8 +30,8 @@ WireObject = WireMapping
 Sink = Callable[[WireObject], Awaitable[None]]
 
 
-class ViewEventHandler(Protocol):
-    def __call__(self, event: ViewEvent) -> object: ...
+class SyncViewEventHandler(Protocol):
+    def __call__(self, __event: ViewEvent) -> None: ...
 
 
 class BaseConsumer:
@@ -44,16 +43,16 @@ class BaseConsumer:
     async def handle(self, ev: ViewEvent) -> None:
         """Dispatch one projected event to ``on_<kind>`` (eat if absent).
 
-        The async path: a handler may be sync or async — an awaitable return is
-        awaited. Used for the bulk of telemetry events delivered asynchronously.
+        Base consumers publish synchronous handlers. Async transports override
+        this method as an explicit async Port instead of returning a coroutine
+        from a handler whose lifecycle would be guessed at runtime.
         """
+        require_view_event(ev)
         handler = self._handler_for(ev)
         if handler is None:
             self.on_unhandled(ev)
             return
-        result = handler(ev)
-        if inspect.isawaitable(result):
-            await result
+        handler(ev)
 
     def handle_sync(self, ev: ViewEvent) -> None:
         """Synchronous dispatch for telemetry delivered via ``emit_sync``.
@@ -64,17 +63,20 @@ class BaseConsumer:
         avoid a dangling coroutine — so async-only consumers should rely on the
         ``handle`` path (they declare ``streaming=False`` to be fed whole blocks).
         """
+        require_view_event(ev)
         handler = self._handler_for(ev)
         if handler is None:
             self.on_unhandled(ev)
             return
-        result = handler(ev)
-        if inspect.iscoroutine(result):  # async handler on the sync path — close it
-            result.close()
+        handler(ev)
 
-    def _handler_for(self, ev: ViewEvent) -> ViewEventHandler | None:
-        candidate = getattr(self, f"on_{ev.kind}", None)
-        return candidate if callable(candidate) else None
+    def _handler_for(self, ev: ViewEvent) -> SyncViewEventHandler | None:
+        """Return an explicitly declared handler for ``ev``.
+
+        Consumers that render individual kinds override this method with a
+        closed table. Consumers that fold every event use ``on_unhandled``.
+        """
+        return None
 
     def on_unhandled(self, ev: ViewEvent) -> None:
         """Eat an event this consumer can't render. Override to log/forward."""

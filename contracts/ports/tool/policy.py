@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from mote.contracts.authorization import PermissionFacts
+from mote.contracts.tool.arguments import ToolArguments
 from mote.contracts.tool.identity import ToolInvocationIdentity
 from mote.contracts.tool.policy import (
     ToolCallDecision,
@@ -16,7 +17,7 @@ from mote.contracts.tool.policy import (
     ToolResultPresentation,
 )
 
-PermissionFactsResolver = Callable[[dict[str, Any]], PermissionFacts]
+PermissionFactsResolver = Callable[[ToolArguments], PermissionFacts]
 
 
 class ToolCallPolicy(Protocol):
@@ -33,7 +34,7 @@ class ToolPermissionFactsProvider(Protocol):
 
     def permission_facts(
         self,
-        arguments: dict[str, Any],
+        arguments: ToolArguments,
         identity: ToolInvocationIdentity,
     ) -> PermissionFacts: ...
 

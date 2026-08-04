@@ -29,7 +29,7 @@ def test_turn_queue_is_agent_owned_and_does_not_duplicate_adjacent_state_machine
             elif isinstance(node, ast.Import):
                 imports.update(alias.name for alias in node.names)
     assert all(not any(module.startswith(prefix) for prefix in forbidden) for module in imports)
-    assert TURN_QUEUE_SCHEMA == "mote.agent-turn-queue/v1"
+    assert TURN_QUEUE_SCHEMA == "mote.agent-turn-queue/v2"
 
 
 def test_turn_queue_reuses_canonical_fence_clock_atomic_write_and_execution_permit() -> None:

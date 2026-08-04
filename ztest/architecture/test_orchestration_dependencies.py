@@ -138,7 +138,7 @@ def test_background_task_model_has_no_workflow_state() -> None:
         "retry_count",
         "max_restarts",
     }
-    task_meta = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "TaskMeta")
+    task_meta = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "TaskSnapshot")
     fields = {
         target.id
         for node in task_meta.body

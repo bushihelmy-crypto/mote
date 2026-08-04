@@ -49,9 +49,28 @@ class EngineState(S):
     nextstep: Annotated[Any, Output] = None
 
 
+class _EngineWorkflowBuilder(_WorkflowBuilder):
+    def add_node(self, name, node, *, implementation_id=None, **kwargs):
+        return super().add_node(
+            name,
+            node,
+            implementation_id=implementation_id or f"test.engine.node.{name}/v1",
+            **kwargs,
+        )
+
+    def add_conditional_edges(self, from_node, router, mapping, *, projector, implementation_id=None):
+        return super().add_conditional_edges(
+            from_node,
+            router,
+            mapping,
+            projector=projector,
+            implementation_id=implementation_id or f"test.engine.router.{from_node}/v1",
+        )
+
+
 def WorkflowBuilder(name: str, **options) -> _WorkflowBuilder:
     options.pop("state_schema", None)
-    return _WorkflowBuilder(name, state_schema=EngineState, **options)
+    return _EngineWorkflowBuilder(name, state_schema=EngineState, **options)
 
 
 async def _run(graph: _WorkflowBuilder, **inputs):
@@ -176,7 +195,12 @@ class TestConditional:
         g.add_node("big", sync_node(lambda s: "BIG", field="big"))
         g.add_node("small", sync_node(lambda s: "SMALL", field="small"))
         g.add_edge(START, "a")
-        g.add_conditional_edges("a", lambda s: "big" if s.a > 10 else "small", {"big": "big", "small": "small"})
+        g.add_conditional_edges(
+            "a",
+            lambda s: "big" if s.a > 10 else "small",
+            {"big": "big", "small": "small"},
+            projector=lambda state: state,
+        )
         g.add_edge("big", END)
         g.add_edge("small", END)
         assert (await _run(g, x=20))["big"] == "BIG"
@@ -190,7 +214,7 @@ class TestCycle:
         g.add_node("b", sync_node(lambda s: (s.a or 0) + 1, field="b"))
         g.add_edge(START, "a")
         g.add_edge("a", "b")
-        g.add_conditional_edges("b", lambda s: "loop", {"loop": "a", "done": END})
+        g.add_conditional_edges("b", lambda s: "loop", {"loop": "a", "done": END}, projector=lambda state: state)
         with pytest.raises(GraphRecursionError):
             await _run(g, x=0)
 
@@ -200,7 +224,9 @@ class TestCycle:
         g.add_node("a", sync_node(lambda s: (getattr(s, "a", None) or 0) + 1, field="a"))
         g.add_edge(START, "a")
         # Loop back to 'a' until its result reaches 3, then go to END.
-        g.add_conditional_edges("a", lambda s: "done" if s.a >= 3 else "loop", {"loop": "a", "done": END})
+        g.add_conditional_edges(
+            "a", lambda s: "done" if s.a >= 3 else "loop", {"loop": "a", "done": END}, projector=lambda state: state
+        )
         assert (await _run(g, x=0))["a"] == 3
 
     async def test_and_join_inside_cycle_re_waits_each_lap(self):
@@ -247,6 +273,7 @@ class TestCycle:
             "merge",
             lambda s: "loop" if s.fast < 2 else "done",
             {"loop": "a", "done": END},
+            projector=lambda state: state,
         )
 
         res = await g.compile()(x=0)
@@ -456,7 +483,7 @@ class TestStall:
         g.add_node("c", sync_node(lambda s: "c", field="c"))
         g.add_edge(START, "entry")
         # entry routes only to ``a`` (``b`` is never entered).
-        g.add_conditional_edges("entry", lambda s: "only_a", {"only_a": "a"})
+        g.add_conditional_edges("entry", lambda s: "only_a", {"only_a": "a"}, projector=lambda state: state)
         g.add_edge(["a", "b"], "c")  # AND-join needing both a and b
         g.add_edge("c", END)
 
@@ -478,7 +505,9 @@ class TestStall:
         g.add_node("taken", sync_node(lambda s: "t", field="taken"))
         g.add_node("skipped", sync_node(lambda s: "s", field="skipped"))
         g.add_edge(START, "entry")
-        g.add_conditional_edges("entry", lambda s: "go", {"go": "taken", "other": "skipped"})
+        g.add_conditional_edges(
+            "entry", lambda s: "go", {"go": "taken", "other": "skipped"}, projector=lambda state: state
+        )
         g.add_edge("taken", END)
         g.add_edge("skipped", END)
 

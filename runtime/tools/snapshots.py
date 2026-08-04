@@ -19,8 +19,11 @@ from mote.runtime.tools.tool_binding import ExecutableToolBinding
 
 
 class RuntimeToolSnapshotManager:
-    def __init__(self, executor) -> None:
+    def __init__(self, executor, *, composition_generation_id: str) -> None:
+        if not composition_generation_id:
+            raise ValueError("tool snapshots require an approved composition generation")
         self._executor = executor
+        self._composition_generation_id = composition_generation_id
         self._registry = BoundToolRegistry()
         self._revision = 0
         self._references: dict[tuple[str, int], int] = {}
@@ -40,7 +43,9 @@ class RuntimeToolSnapshotManager:
         tools = {
             item.name: PinnedToolInvocation(
                 item.semantic_identity,
-                self._bound_invoke(item.name, self._revision),
+                item.name,
+                self._bound_binding(item.name),
+                self._executor.tool_binding_generation,
             )
             for item in definitions
         }
@@ -49,6 +54,7 @@ class RuntimeToolSnapshotManager:
         self._references[key] = 1
         return ToolBindingSnapshot(
             snapshot_id=snapshot_id,
+            composition_generation_id=self._composition_generation_id,
             catalog=catalog,
             target_id=target.lease.target_id,
             capability_fingerprint=target.capability_fingerprint,
@@ -58,7 +64,17 @@ class RuntimeToolSnapshotManager:
         )
 
     async def dispatch(self, request: ToolDispatchRequest) -> ToolDispatchResult[ToolExecutionOutcome]:
-        return await self._registry.dispatch(request)
+        pinned, conflict = self._registry.resolve(request)
+        if pinned is None:
+            return ToolDispatchResult(False, conflict=conflict)
+        value = await self._executor.run_pinned_command(
+            pinned.binding,
+            pinned.canonical_name,
+            dict(request.arguments),
+            catalog_generation=pinned.catalog_generation,
+            result_id=request.call_id or None,
+        )
+        return ToolDispatchResult(True, value=value)
 
     def release(self, snapshot: ToolBindingSnapshot) -> bool:
         key = (snapshot.snapshot_id, snapshot.registry_revision)
@@ -85,7 +101,7 @@ class RuntimeToolSnapshotManager:
                 MaterializedToolDefinition(
                     name=name,
                     description=compiled.description,
-                    input_schema=compiled.input_schema,
+                    input_schema=dict(compiled.input_schema),
                     semantic_identity=compiled.semantic_identity,
                     effect=compiled.effect.value,
                     defer_loading=bool(spec.get("defer_loading")),
@@ -99,22 +115,12 @@ class RuntimeToolSnapshotManager:
             raise TypeError(f"tool '{name}' is not an executable binding")
         return tool.compiled_definition
 
-    def _bound_invoke(self, name: str, registry_revision: int):
+    def _bound_binding(self, name: str) -> ExecutableToolBinding:
         pinned_tool = self._executor._catalog.get(name)
         if not isinstance(pinned_tool, ExecutableToolBinding):
             raise TypeError(f"tool '{name}' is not an executable binding")
 
-        async def invoke(arguments):
-            call_id = str(arguments.pop("__mote_call_id", "")) or None
-            return await self._executor.run_pinned_command(
-                pinned_tool,
-                name,
-                arguments,
-                catalog_generation=registry_revision,
-                result_id=call_id,
-            )
-
-        return invoke
+        return pinned_tool
 
 
 __all__ = ["RuntimeToolSnapshotManager"]

@@ -14,15 +14,16 @@ artifacts alone (no ``-x``). Each of those is asserted explicitly.
 
 Tests needing the ``git`` binary skip when it is unavailable.
 """
+
 from __future__ import annotations
 
 import shutil
 
 import pytest
 
+from mote.contracts.events.conversation import UserPromptSubmitEvent
 from mote.contracts.events.session import TurnEndEvent
 from mote.contracts.file import RewindFailedError
-from mote.runtime.events import UserPromptSubmitEvent
 from mote.runtime.fileops import WorktreeCheckpointStore
 from mote.runtime.session.checkpoint import list_checkpoints
 from mote.runtime.session.codec import iter_file_operations_events

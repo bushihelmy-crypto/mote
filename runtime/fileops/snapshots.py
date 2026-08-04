@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.content.identity import ContentDigest, ContentIdentity
 from mote.contracts.file.errors import ContentChangedError, IdentityChangedError, SnapshotDurabilityError
 from mote.contracts.file.identity import EditableTextSnapshot, FileSnapshot, PathToken, PresentVersion, ProjectIdentity
 from mote.runtime.fileops.encoding import decode_text, editable_text
@@ -196,7 +196,7 @@ class SealedSnapshotReader:
                     expected_size=maximum_bytes,
                     actual_size=size,
                 )
-        return ContentIdentity(digest=digest.hexdigest(), size=size)
+        return ContentIdentity(digest=ContentDigest(digest.hexdigest()), size=size)
 
     @staticmethod
     def _hash_second_pass(source_fd: int) -> str:

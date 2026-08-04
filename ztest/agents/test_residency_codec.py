@@ -27,7 +27,6 @@ def _record() -> ResidencyRecord:
         record_revision=2,
         materialization_fence=ResidencyFence("residency:agent-1", "owner-1", 9),
         state_snapshot={"context": {"messages": []}},
-        mailbox_snapshot={"schema": "mote.agent-mailbox/v1"},
         message_buffer_snapshot=[],
     )
 
@@ -38,7 +37,7 @@ def _raw() -> dict[str, object]:
     return raw
 
 
-def test_residency_v1_round_trip_preserves_all_authority_fields() -> None:
+def test_residency_v2_round_trip_preserves_all_authority_fields() -> None:
     record = _record()
     assert decode_residency_record(encode_residency_record(record), expected_agent_id="agent-1") == record
 
@@ -57,7 +56,7 @@ def test_residency_codec_rejects_missing_and_extra_fields(field: str) -> None:
 
 def test_residency_codec_rejects_unknown_version_and_agent_mismatch() -> None:
     raw = _raw()
-    raw["schema"] = "mote.agent-residency/v2"
+    raw["schema"] = "mote.agent-residency/v9"
     with pytest.raises(ValueError, match="unsupported"):
         decode_residency_record(json.dumps(raw).encode(), expected_agent_id="agent-1")
     with pytest.raises(ValueError, match="identity mismatch"):
@@ -108,7 +107,6 @@ def test_residency_codec_rejects_identity_extra_and_non_json_state() -> None:
             record_revision=record.record_revision,
             materialization_fence=record.materialization_fence,
             state_snapshot={"bad": object()},
-            mailbox_snapshot=record.mailbox_snapshot,
             message_buffer_snapshot=record.message_buffer_snapshot,
         )
 

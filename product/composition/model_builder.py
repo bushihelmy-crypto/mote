@@ -137,6 +137,7 @@ async def build_application_candidate(
                 cost_tracker=cost_tracker,
                 admission_controller=admission_controller,
                 model_call_journal=model_call_journal,
+                response_artifact_publisher=artifacts.publish,
             )
             gateway_decorator: Callable[[ModelGateway], ModelGateway] | None = None
             exact_cache = config.inference.cache.exact

@@ -10,6 +10,8 @@ from typing import Any, List, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field, field_validator
 
+from mote.contracts.events.envelope import JsonValue
+
 
 class LexerState(int, Enum):
     SEARCH_FUNCTION = 1
@@ -48,7 +50,7 @@ class FunctionObject(BaseModel):
 
 class Command(BaseModel):
     command_name: str
-    args: dict
+    args: dict[str, JsonValue]
 
     @field_validator("args")
     @classmethod
@@ -409,11 +411,10 @@ class PythonObjectParser(BaseModel):
                         c_path[map_keys.pop()] = tmp
                     tmp = NOT_SET
 
-    def get_commands(self) -> list[dict]:
-        result = []
+    def get_commands(self) -> list[Command]:
+        result: list[Command] = []
         for i in self.commands:
-            v = Command.model_validate(i)
-            result.append(v.model_dump())
+            result.append(Command.model_validate(i))
         return result
 
     def _recursive_tokenize_map(self, value: dict) -> list:

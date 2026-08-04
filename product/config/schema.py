@@ -15,7 +15,7 @@ from mote.product.config.resilience import ResilienceConfig
 from mote.product.config.secrets import SecretsConfig
 from mote.product.config.tools import ToolsConfig
 from mote.product.config.ui import UIConfig
-from mote.product.config.workspace import WorkspaceConfig
+from mote.product.config.workflows import WorkflowConfig
 
 
 class Config(YamlModel):
@@ -25,8 +25,7 @@ class Config(YamlModel):
     knobs), ``context`` (context engineering), ``multimodal`` (media services),
     ``mcp`` (the MCP master switch — servers live in their own
     ``mcp_config.json``, never here), ``observability`` (Sentry/Langfuse), ``ui``
-    (human display), ``secrets`` (redaction/vault) and ``workspace`` (disk-layer
-    TTL cleanup).
+    (human display) and ``secrets`` (redaction/vault).
     """
 
     # Which models run: the default LLM, per-task overrides, routing switch and
@@ -40,6 +39,8 @@ class Config(YamlModel):
             persistence=PersistenceConfig(encryption_key_ref="env://MOTE_INFERENCE_STORAGE_KEY")
         )
     )
+
+    workflows: WorkflowConfig = Field(default_factory=WorkflowConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -72,11 +73,6 @@ class Config(YamlModel):
     # Always-on secret disclosure boundary. Storage and cipher are configurable;
     # prompt/result protection itself is a core policy and cannot be disabled.
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
-
-    # On-disk workspace settings — currently the periodic TTL cleanup sweep that
-    # reclaims stale per-session artifacts (rollout / tool_results /
-    # task_outputs). Grouped here so the workspace tree has one config home.
-    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
 
     # Circuit-breaker thresholds for per-resource health gating (LLM provider
     # failover today; MCP / egress tomorrow).

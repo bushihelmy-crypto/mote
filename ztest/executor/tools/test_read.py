@@ -16,8 +16,9 @@ import os
 
 import pytest
 
+from mote.contracts.tool.errors import ToolError
 from mote.product.toolsets.builtin.read import FILE_UNCHANGED_STUB, Read
-from mote.runtime.tools.tool_result import ToolError, ToolResult
+from mote.runtime.tools.tool_result import ToolResult
 
 from .conftest import CapRole, bind, run, write_file
 

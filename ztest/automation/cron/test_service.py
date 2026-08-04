@@ -8,6 +8,7 @@ from datetime import datetime
 import pytest
 
 from mote.contracts.conversation.queue import MessageQueue
+from mote.contracts.ports.agent.delivery import AgentDeliveryCommandDisposition, AgentDeliveryCommandReceipt
 from mote.orchestration.agents.control import AgentControl
 from mote.orchestration.agents.identity.path import AgentPath
 from mote.orchestration.agents.identity.registry import AgentMetadata
@@ -42,6 +43,7 @@ class FakeControl:
         self._rt = runtimes or {}
         self._raise_on = raise_on
         self.sent = []
+        self._receipts = {}
 
     def runtimes(self):
         return dict(self._rt)
@@ -51,10 +53,18 @@ class FakeControl:
             raise KeyError(agent_id)
         self.sent.append((agent_id, message, mode))
 
-    def dispatch_automation(self, target, content):
+    def dispatch(self, command):
         from mote.contracts.conversation import UserMessage
 
-        return self.send_input(target, UserMessage(content=content))
+        if command.source_id in self._receipts:
+            return self._receipts[command.source_id]
+        self.send_input(
+            command.target_agent_id,
+            UserMessage(id=command.source_id, content=command.content),
+        )
+        receipt = AgentDeliveryCommandReceipt(AgentDeliveryCommandDisposition.ACCEPTED, f"delivery:{command.source_id}")
+        self._receipts[command.source_id] = receipt
+        return receipt
 
 
 class FakeSink:
@@ -202,18 +212,18 @@ def test_agent_adapter_is_idempotent_after_acceptance(tmp_path):
     second = svc._on_fire(task, occurrence(task))
     assert len(control.sent) == 1
     assert first == second
-    assert first.receipt_id == occurrence(task).occurrence_id
+    assert first.receipt_id == f"delivery:{occurrence(task).occurrence_id}"
 
 
-def test_agent_adapter_defers_active_target(tmp_path):
+def test_agent_adapter_durably_accepts_active_target(tmp_path):
     control = FakeControl({"a": FakeRuntime(active_turn=True)})
     svc = make_service(tmp_path, AgentTriggerAdapter(control))
     task = CronTask.new("* * * * *", "do it", _ms(2026, 6, 15), target_session_id="a")
 
     receipt = svc._on_fire(task, occurrence(task))
 
-    assert receipt.disposition is TriggerDisposition.DEFERRED
-    assert control.sent == []
+    assert receipt.disposition is TriggerDisposition.ACCEPTED
+    assert len(control.sent) == 1
 
 
 # --- integration with a real AgentControl ----------------------------------
@@ -247,6 +257,7 @@ def test_fire_delivers_to_real_runtime_mailbox(tmp_path):
         ),
         residency_lease_coordinator=residency_leases,
         lineage_path=tmp_path / "agent-lineage.json",
+        turn_queue_capacity=256,
     )
     runtime = AgentRuntime(FakeRole("sess"))
     control.add_agent(runtime, metadata=AgentMetadata(agent_path=AgentPath.from_string("/root/sess")))

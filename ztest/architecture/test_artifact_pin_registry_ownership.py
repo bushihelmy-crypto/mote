@@ -36,6 +36,6 @@ def test_every_production_cas_writer_has_one_canonical_reachability_owner() -> N
     assert "WHERE released = 0" in store
     assert "artifact_publication_outbox_representations" in store
     assert "WHERE outbox.state IN ('queued', 'failed')" in store
-    cleanup = (ROOT / "runtime/session/workspace/cleanup.py").read_text(encoding="utf-8")
-    assert "session_id in legal_hold_session_ids" in cleanup
-    assert cleanup.index("release_session_scope()") < cleanup.index("collector.collect()")
+    # Generic workspace cleanup was a second deletion authority and is retired;
+    # Session edge release and Artifact collection remain separate owners.
+    assert not (ROOT / "runtime/session/workspace/cleanup.py").exists()

@@ -7,7 +7,7 @@ import pytest
 
 from mote.contracts.interaction.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
 from mote.contracts.runtime import RuntimeRef
-from mote.contracts.surface import CanvasDocument, CanvasElement, CanvasOperation
+from mote.contracts.surface import CanvasArrow, CanvasDocument, CanvasEllipse, CanvasOperation, CanvasRectangle
 from mote.product.interfaces.textual.surfaces.canvas import CanvasWindowPresentationSession
 from mote.runtime.interactive.canvas.backends.drawio import DrawioCanvasBackend
 from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
@@ -27,27 +27,24 @@ async def test_real_drawio_window_round_trip():
             width=800,
             height=600,
             elements=[
-                CanvasElement(
+                CanvasRectangle(
                     id="node-a",
-                    kind="rect",
                     x=80,
                     y=100,
                     width=180,
                     height=90,
                     text="Agent",
                 ),
-                CanvasElement(
+                CanvasEllipse(
                     id="node-b",
-                    kind="ellipse",
                     x=500,
                     y=300,
                     width=180,
                     height=90,
                     text="User",
                 ),
-                CanvasElement(
+                CanvasArrow(
                     id="edge-a-b",
-                    kind="arrow",
                     x=260,
                     y=145,
                     x2=500,
@@ -59,8 +56,7 @@ async def test_real_drawio_window_round_trip():
         )
     )
     try:
-        await session._graph_eval(
-            """
+        await session._graph_eval("""
 const parent = graph.getDefaultParent();
 graph.getModel().beginUpdate();
 try {
@@ -68,8 +64,7 @@ try {
     'rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;');
 } finally { graph.getModel().endUpdate(); }
 return true;
-"""
-        )
+""")
         scene = await session.snapshot_scene()
         rendered = await session.render()
         exported = await session.export("drawio")
@@ -89,7 +84,7 @@ return true;
 
 @pytest.mark.asyncio
 async def test_drawio_window_observes_agent_edits_after_handoff_returns():
-    driver = CanvasRuntimeDriver(CanvasDocument(elements=[CanvasElement(id="before", kind="rect", text="Before")]))
+    driver = CanvasRuntimeDriver(CanvasDocument(elements=[CanvasRectangle(id="before", text="Before")]))
     await driver.start()
     handle = await driver.prepare_handoff(
         HandoffRequest(runtime_ref=RuntimeRef(runtime_id="canvas-live-observer", kind="canvas"))
@@ -101,8 +96,7 @@ async def test_drawio_window_observes_agent_edits_after_handoff_returns():
         await presentation.attach(surface)
         assert await backend._graph_eval("return graph.isEnabled();") is True
 
-        await backend._graph_eval(
-            """
+        await backend._graph_eval("""
 const parent = graph.getDefaultParent();
 graph.getModel().beginUpdate();
 try {
@@ -110,8 +104,7 @@ try {
     'rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;');
 } finally { graph.getModel().endUpdate(); }
 return true;
-"""
-        )
+""")
         await presentation.synchronize()
         await presentation.release()
         await driver.finish_handoff(handle, HumanHandoffOutcome(status=HandoffStatus.COMPLETED))
@@ -122,7 +115,7 @@ return true;
             [
                 CanvasOperation(
                     op="upsert",
-                    element=CanvasElement(id="agent-live", kind="ellipse", x=600, y=200, text="Agent"),
+                    element=CanvasEllipse(id="agent-live", x=600, y=200, text="Agent"),
                 )
             ]
         )

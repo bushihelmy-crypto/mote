@@ -1,7 +1,6 @@
 """mote.runtime.hook — opt-in agent-lifecycle hook subsystem.
 
-A bottom-layer package (imports only stdlib + ``common``) so any layer may use
-it directly. Provides a Codex-compatible hook engine: matcher groups, the JSON
+Provides a Codex-compatible hook engine: matcher groups, the JSON
 stdin/stdout command contract, deny > ask > allow aggregation, plus an in-process
 Python callback path native to an embeddable framework.
 
@@ -10,12 +9,11 @@ the executor seam (``ToolExecutor.run_command``) — this package never imports
 the executor.
 """
 
-from mote.runtime.hook.manager import HookCallback, HookManager
+from mote.runtime.hook.manager import HookManager
 from mote.runtime.hook.types import EMPTY, HookBehavior, HookEvent, HookOutcome, fold
 
 __all__ = [
     "HookManager",
-    "HookCallback",
     "HookEvent",
     "HookBehavior",
     "HookOutcome",

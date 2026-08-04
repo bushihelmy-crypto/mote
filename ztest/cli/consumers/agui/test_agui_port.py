@@ -107,8 +107,8 @@ async def test_decide_approval_rejects_without_backchannel():
 def test_interrupt_and_steer_are_noops():
     port = AguiPort("x")
     # These must not raise — Phase 2 has no mid-stream steer/interrupt control.
-    assert port.signal_interrupt(None) is None
-    assert port.submit_steer(None, "later") is None
+    assert port.signal_interrupt(None).disposition.value == "ignored"
+    assert port.submit_steer(None, "later").disposition.value == "ignored"
 
 
 # ── Phase 3: HITL round-trips over a wired sink + broker ────────────────────

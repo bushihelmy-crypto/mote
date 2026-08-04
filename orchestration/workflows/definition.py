@@ -7,16 +7,16 @@ import copy
 import hashlib
 import json
 import math
-import types
 import uuid
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Mapping, cast, get_args, get_origin
 
 from pydantic import BaseModel
 
+from mote.contracts.events.envelope import JsonValue
 from mote.contracts.workflow.identity import WorkflowDefinitionId
 from mote.kernel.output import OutputContract
 from mote.orchestration.workflows.control import WorkflowPause
@@ -32,10 +32,20 @@ from mote.orchestration.workflows.events import (
     set_checkpoint_sink,
     set_progress_sink,
 )
-from mote.orchestration.workflows.types import GraphPause, GraphRunState, NodeRecord, WorkflowNodeStatus
+from mote.orchestration.workflows.types import (
+    GraphPause,
+    GraphRunState,
+    GraphState,
+    NodeRecord,
+    WorkflowDeferredExecutor,
+    WorkflowNodeStatus,
+)
+
+if TYPE_CHECKING:
+    from mote.orchestration.workflows.graph import WorkflowBuilder
 
 
-def _deep_freeze(value: Any) -> Any:
+def _deep_freeze(value: object) -> object:
     if isinstance(value, BaseModel):
         value = value.model_dump(mode="python")
     if isinstance(value, Mapping):
@@ -53,7 +63,7 @@ def _deep_freeze(value: Any) -> Any:
 
 @dataclass(frozen=True, slots=True)
 class Succeeded:
-    output: Any
+    output: "GraphState"
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +97,7 @@ def _reject_non_finite_json(value: str) -> object:
 class RunSnapshot:
     execution_id: str
     definition_id: WorkflowDefinitionId
-    state: Mapping[str, Any]
+    state: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +107,6 @@ class WorkflowDefinition:
     definition_version: int
     digest: str
     canonical_payload: str
-    _graph: Any = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.schema_version != "mote.workflow-definition/v1":
@@ -165,12 +174,20 @@ class WorkflowDefinition:
             if type(edge["implementation_id"]) is not str or not edge["implementation_id"]:
                 raise ValueError("WorkflowDefinition router identity is invalid")
 
+
+@dataclass(frozen=True, slots=True)
+class WorkflowExecutable:
+    """Process-local executable bound to one validated durable definition."""
+
+    definition: WorkflowDefinition
+    _graph: "WorkflowBuilder" = field(repr=False, compare=False)
+
     def start(
         self,
-        initial_input: dict[str, Any],
+        initial_input: Mapping[str, object],
         *,
-        checkpoint: Any = None,
-        run_state: Any = None,
+        checkpoint: "GraphState | None" = None,
+        run_state: GraphRunState | None = None,
         from_nodes: tuple[str, ...] = (),
         skip_nodes: tuple[str, ...] = (),
         progress_sink_binding: ProgressEventSink | None = None,
@@ -189,11 +206,11 @@ class WorkflowDefinition:
             checkpoint_sink=checkpoint_sink,
         )
 
-    def compile(self):
+    def compile(self) -> WorkflowDeferredExecutor:
         """Create the deferred executor from this canonical definition."""
         return _build_executor(self._graph)
 
-    def restore_checkpoint(self, payload: str) -> tuple[Any, GraphRunState]:
+    def restore_checkpoint(self, payload: str) -> tuple["GraphState", GraphRunState]:
         try:
             raw = json.loads(payload, parse_constant=_reject_non_finite_json)
         except json.JSONDecodeError as exc:
@@ -285,8 +302,8 @@ class WorkflowDefinition:
             ),
         )
 
-    def encode_checkpoint(self, state: Any, run_state: GraphRunState) -> str:
-        state_value = state.model_dump(mode="python") if isinstance(state, BaseModel) else dict(state)
+    def encode_checkpoint(self, state: "GraphState", run_state: GraphRunState) -> str:
+        state_value = state.model_dump(mode="python")
         return json.dumps(
             {
                 "schema": "mote.workflow-checkpoint/v2",
@@ -302,8 +319,8 @@ class WorkflowDefinition:
         self,
         *,
         run_state: GraphRunState | None = None,
-        **initial_state: Any,
-    ) -> Any:
+        **initial_state: object,
+    ) -> "GraphState | GraphPause":
         """Execute this definition inline without creating a durable run owner."""
         state = self._graph.state_schema(**initial_state)
         run_state = run_state or GraphRunState.for_graph(self._graph)
@@ -322,11 +339,11 @@ class WorkflowDefinition:
 class WorkflowRun:
     def __init__(
         self,
-        definition: WorkflowDefinition,
-        initial_input: dict[str, Any],
+        executable: WorkflowExecutable,
+        initial_input: Mapping[str, object],
         *,
-        checkpoint: Any = None,
-        run_state: Any = None,
+        checkpoint: "GraphState | None" = None,
+        run_state: GraphRunState | None = None,
         from_nodes: tuple[str, ...] = (),
         skip_nodes: tuple[str, ...] = (),
         progress_sink_binding: ProgressEventSink | None = None,
@@ -334,8 +351,8 @@ class WorkflowRun:
         checkpoint_sink: WorkflowCheckpointSink | None = None,
     ) -> None:
         self.execution_id = "wfx_" + uuid.uuid4().hex
-        self.definition = definition
-        self._initial_input = initial_input
+        self.executable = executable
+        self._initial_input = dict(initial_input)
         self._checkpoint = checkpoint
         self._run_state = run_state
         self._from_nodes = from_nodes
@@ -345,14 +362,19 @@ class WorkflowRun:
         self._checkpoint_sink = checkpoint_sink
         self._executing = False
         self._task: asyncio.Task | None = None
-        self._state: Any = copy.deepcopy(checkpoint) if checkpoint is not None else dict(initial_input)
+        self._state: GraphState | Mapping[str, object] = (
+            copy.deepcopy(checkpoint) if checkpoint is not None else dict(initial_input)
+        )
         self._status = "pending"
 
     def snapshot(self) -> RunSnapshot:
+        state = _deep_freeze(self._state)
+        if not isinstance(state, Mapping):
+            raise TypeError("Workflow run snapshot state must be an object")
         return RunSnapshot(
             execution_id=self.execution_id,
-            definition_id=self.definition.definition_id,
-            state=_deep_freeze(self._state),
+            definition_id=self.executable.definition.definition_id,
+            state=cast(Mapping[str, object], state),
         )
 
     def bind_checkpoint_sink(self, sink: WorkflowCheckpointSink) -> None:
@@ -377,12 +399,12 @@ class WorkflowRun:
             await self._progress_sink.emit(
                 ActivityRunStarted(
                     activity_run_id=self.execution_id,
-                    activity_definition_id=str(self.definition.definition_id),
+                    activity_definition_id=str(self.executable.definition.definition_id),
                 )
             )
         try:
             if self._checkpoint is None:
-                output = await self.definition.arun(
+                output = await self.executable.arun(
                     run_state=self._run_state,
                     **self._initial_input,
                 )
@@ -416,32 +438,32 @@ class WorkflowRun:
             reset_progress_sink(token)
             reset_checkpoint_sink(checkpoint_token)
 
-    async def _resume_graph(self) -> Any:
-        graph = self.definition._graph
+    async def _resume_graph(self) -> "GraphState | GraphPause":
+        graph = self.executable._graph
+        checkpoint = self._checkpoint
+        if checkpoint is None:
+            raise RuntimeError("Workflow resume requires a checkpoint")
         if self._skip_nodes and self._from_nodes:
             deferred = graph.resume_skip_and_from(
-                state=self._checkpoint,
+                state=checkpoint,
                 skip_nodes=list(self._skip_nodes),
                 from_nodes=list(self._from_nodes),
                 run_state=self._run_state,
             )
         elif self._skip_nodes:
             deferred = graph.resume_skip(
-                state=self._checkpoint,
+                state=checkpoint,
                 skip_nodes=list(self._skip_nodes),
                 run_state=self._run_state,
             )
         elif self._from_nodes:
             deferred = graph.resume(
-                state=self._checkpoint,
+                state=checkpoint,
                 from_nodes=list(self._from_nodes),
                 run_state=self._run_state,
             )
         else:
-            if isinstance(self._checkpoint, BaseModel):
-                values = self._checkpoint.model_dump(mode="python")
-            else:
-                values = dict(self._checkpoint)
+            values = checkpoint.model_dump(mode="python")
             return await graph.arun(run_state=self._run_state, **values)
         if deferred.poll_factory is None:
             raise RuntimeError("resumed workflow did not provide an execution factory")
@@ -454,13 +476,34 @@ class WorkflowRun:
             await asyncio.gather(task, return_exceptions=True)
 
 
-def _type_identity(value: type) -> str:
-    return f"{value.__module__}.{value.__qualname__}"
+_PRIMITIVE_SCHEMA_IDENTITIES: Mapping[type[object], str] = MappingProxyType(
+    {
+        str: "mote.schema.primitive/string/v1",
+        int: "mote.schema.primitive/integer/v1",
+        float: "mote.schema.primitive/number/v1",
+        bool: "mote.schema.primitive/boolean/v1",
+    }
+)
 
 
-def _canonical_value(value: Any, *, path: str) -> Any:
+def _canonical_type(value: object, *, path: str) -> dict[str, JsonValue]:
+    if isinstance(value, type) and value in _PRIMITIVE_SCHEMA_IDENTITIES:
+        return {"schema_id": _PRIMITIVE_SCHEMA_IDENTITIES[value]}
+    origin = get_origin(value)
+    if origin is list:
+        arguments = get_args(value)
+        if len(arguments) != 1:
+            raise ValueError(f"{path} list type must declare exactly one item type")
+        return {
+            "schema_id": "mote.schema.collection/list/v1",
+            "items": _canonical_type(arguments[0], path=f"{path}.items"),
+        }
+    raise ValueError(f"{path} type requires an explicit versioned schema identity")
+
+
+def _canonical_value(value: object, *, path: str) -> JsonValue:
     if value is None or type(value) in (str, int, bool):
-        return value
+        return cast(JsonValue, value)
     if type(value) is float:
         if not math.isfinite(value):
             raise ValueError(f"{path} contains a non-finite float")
@@ -496,96 +539,32 @@ def _canonical_value(value: Any, *, path: str) -> Any:
                 for validator in value.validators
             ],
         }
-    if isinstance(value, type):
-        return {"type": _type_identity(value)}
+    if isinstance(value, type) or get_origin(value) is not None:
+        return _canonical_type(value, path=path)
     if isinstance(value, Mapping):
         if any(type(key) is not str for key in value):
             raise ValueError(f"{path} mapping keys must be strings")
-        return {key: _canonical_value(value[key], path=f"{path}.{key}") for key in sorted(value)}
+        mapping = cast(Mapping[str, object], value)
+        return {key: _canonical_value(mapping[key], path=f"{path}.{key}") for key in sorted(mapping)}
     if isinstance(value, (tuple, list)):
         return [_canonical_value(item, path=f"{path}[{index}]") for index, item in enumerate(value)]
     if isinstance(value, (set, frozenset)):
         encoded = [_canonical_value(item, path=f"{path}[]") for item in value]
         return sorted(encoded, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
-    if isinstance(value, types.CodeType):
-        return _code_payload(value, path=path)
     if callable(value):
-        return {"callable": _callable_identity(value, path=path)}
-    state = getattr(value, "__dict__", None)
-    if type(state) is dict and value.__class__.__module__.startswith("mote."):
-        return {
-            "instance": _type_identity(type(value)),
-            "state": _canonical_value(state, path=f"{path}.state"),
-        }
+        raise ValueError(f"{path} callable requires an explicit versioned implementation identity")
     raise ValueError(
         f"{path} contains unencoded {type(value).__module__}.{type(value).__qualname__}; "
         "register a stable implementation identity"
     )
 
 
-def _code_payload(code: types.CodeType, *, path: str) -> dict[str, Any]:
-    return {
-        "argcount": code.co_argcount,
-        "posonlyargcount": code.co_posonlyargcount,
-        "kwonlyargcount": code.co_kwonlyargcount,
-        "flags": code.co_flags,
-        "bytecode": code.co_code.hex(),
-        "consts": _canonical_value(code.co_consts, path=f"{path}.consts"),
-        "names": list(code.co_names),
-        "varnames": list(code.co_varnames),
-        "freevars": list(code.co_freevars),
-        "cellvars": list(code.co_cellvars),
-    }
-
-
-def _callable_identity(value: Any, *, path: str) -> str:
-    if isinstance(value, type):
-        methods: dict[str, Any] = {}
-        constants: dict[str, Any] = {}
-        for name, member in sorted(value.__dict__.items()):
-            function = member.__func__ if isinstance(member, (classmethod, staticmethod)) else member
-            code = getattr(function, "__code__", None)
-            if isinstance(code, types.CodeType):
-                methods[name] = _code_payload(code, path=f"{path}.{name}")
-            elif not name.startswith("__") and (
-                member is None or type(member) in (str, int, float, bool, bytes, tuple)
-            ):
-                constants[name] = _canonical_value(member, path=f"{path}.{name}")
-        payload = {
-            "class": _type_identity(value),
-            "methods": methods,
-            "constants": constants,
-        }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        return f"python-class/v1/{_type_identity(value)}/sha256-{hashlib.sha256(encoded.encode()).hexdigest()}"
-    function = value.__func__ if isinstance(value, types.MethodType) else value
-    code = getattr(function, "__code__", None)
-    if not isinstance(code, types.CodeType):
-        raise ValueError(f"{path} callable requires an explicit stable implementation identity")
-    closure = getattr(function, "__closure__", None) or ()
-    payload: dict[str, Any] = {
-        "module": function.__module__,
-        "qualname": function.__qualname__,
-        "code": _code_payload(code, path=f"{path}.code"),
-        "defaults": _canonical_value(getattr(function, "__defaults__", None), path=f"{path}.defaults"),
-        "kwdefaults": _canonical_value(getattr(function, "__kwdefaults__", None), path=f"{path}.kwdefaults"),
-        "closure": [
-            _canonical_value(cell.cell_contents, path=f"{path}.closure[{index}]") for index, cell in enumerate(closure)
-        ],
-    }
-    owner = value.__self__ if isinstance(value, types.MethodType) else None
-    if owner is not None and not isinstance(owner, type):
-        payload["owner"] = _canonical_value(owner, path=f"{path}.owner")
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return f"python-callable/v1/{function.__module__}.{function.__qualname__}/sha256-{hashlib.sha256(encoded.encode()).hexdigest()}"
-
-
-def _implementation_id(value: Any, explicit: str, *, path: str) -> str:
+def _implementation_id(value: object, explicit: str, *, path: str) -> str:
     if explicit:
         if not explicit.strip() or explicit != explicit.strip():
             raise ValueError(f"{path} implementation identity is invalid")
         return explicit
-    return _callable_identity(value, path=path)
+    raise ValueError(f"{path} requires an explicit versioned implementation identity")
 
 
 class WorkflowDefinitionCompiler:
@@ -594,7 +573,7 @@ class WorkflowDefinitionCompiler:
     schema_version = "mote.workflow-definition/v1"
 
     @classmethod
-    def compile(cls, builder: Any) -> WorkflowDefinition:
+    def compile(cls, builder: "WorkflowBuilder") -> WorkflowExecutable:
         graph = copy.deepcopy(builder)
         graph._prepare()
         version = graph.definition_version
@@ -657,7 +636,7 @@ class WorkflowDefinitionCompiler:
                 "output_engine_factory": (
                     _implementation_id(
                         graph.output_engine_factory,
-                        "",
+                        graph.output_engine_identity,
                         path="output_engine_factory",
                     )
                     if graph.output_engine_factory is not None
@@ -674,14 +653,14 @@ class WorkflowDefinitionCompiler:
         )
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         graph._definition_id = WorkflowDefinitionId(f"mote.workflow.v1.sha256-{digest}")
-        return WorkflowDefinition(
+        definition = WorkflowDefinition(
             cls.schema_version,
             graph._definition_id,
             version,
             digest,
             payload,
-            graph,
         )
+        return WorkflowExecutable(definition, graph)
 
 
 __all__ = [
@@ -693,6 +672,7 @@ __all__ = [
     "Succeeded",
     "TimedOut",
     "WorkflowDefinition",
+    "WorkflowExecutable",
     "WorkflowDefinitionCompiler",
     "WorkflowOutcome",
     "WorkflowRun",

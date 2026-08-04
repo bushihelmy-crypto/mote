@@ -7,13 +7,18 @@ task's disk output and surface to the LLM via the existing
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 from mote.contracts.foundation.errors.report import ErrorReport, render_error_block
+from mote.contracts.task.graph_errors import GraphBatchFailureError
 from mote.contracts.workflow.identity import WorkflowDefinitionId, WorkflowRunId
 from mote.orchestration.workflows.events import _as_text, emit_workflow_progress
-from mote.orchestration.workflows.types import END, GraphRunState, WorkflowNodeStatus
+from mote.orchestration.workflows.types import END, GraphRunState, GraphState, WorkflowNodeStatus, _LlmEdge
+
+if TYPE_CHECKING:
+    from mote.orchestration.workflows.graph import WorkflowBuilder
 
 # ---------------------------------------------------------------------------
 # Per-node progress message templates
@@ -155,7 +160,7 @@ def _format_auto_retries(run_state: Optional[GraphRunState], node_name: str) -> 
     return f"{attempted}/{limit} (all failed)"
 
 
-def _resolve_param_source(source: str, state: Any, initial_params: dict) -> Any:
+def _resolve_param_source(source: str, state: GraphState, initial_params: Mapping[str, object]) -> object:
     """Resolve a ``params['from']`` source against the state / initial params.
 
     A non-``$input`` source references a state *field* (first dotted segment),
@@ -177,7 +182,7 @@ def _resolve_param_source(source: str, state: Any, initial_params: dict) -> Any:
     return getattr(field_value, key, None)
 
 
-def _render_node_params(node_name: str, graph: Any, state: Any) -> str:
+def _render_node_params(node_name: str, graph: "WorkflowBuilder", state: GraphState) -> str:
     node_def = graph._nodes.get(node_name)
     if not node_def or not node_def.params:
         return "      (none)"
@@ -194,7 +199,7 @@ def _render_node_params(node_name: str, graph: Any, state: Any) -> str:
     return "\n".join(lines) if lines else "      (none)"
 
 
-def _waiting_names(graph: Any, completed: set) -> set:
+def _waiting_names(graph: "WorkflowBuilder", completed: set[str]) -> set[str]:
     """Names of completed nodes parked on an LLM-route edge (waiting_for_route).
 
     These take precedence over the ``completed nodes`` section so a node is
@@ -203,7 +208,7 @@ def _waiting_names(graph: Any, completed: set) -> set:
     return {le.from_node for le in graph._llm_edges if le.from_node in completed and le.from_node in graph._nodes}
 
 
-def _render_waiting_nodes(graph: Any, completed: set) -> str:
+def _render_waiting_nodes(graph: "WorkflowBuilder", completed: set[str]) -> str:
     blocks = []
     for llm_edge in graph._llm_edges:
         if llm_edge.from_node in completed and llm_edge.from_node in graph._nodes:
@@ -217,11 +222,11 @@ def _render_waiting_nodes(graph: Any, completed: set) -> str:
 
 
 def _render_completed_nodes(
-    graph: Any,
-    state: Any,
+    graph: "WorkflowBuilder",
+    state: GraphState,
     run_state: GraphRunState,
-    completed: Optional[set] = None,
-    failed_names: Optional[set] = None,
+    completed: Optional[set[str]] = None,
+    failed_names: Optional[set[str]] = None,
 ) -> str:
     """Render SUCCESS nodes (with a result). SKIPPED nodes go to their own
     section; nodes parked on an LLM route are reported under waiting_for_route,
@@ -247,7 +252,7 @@ def _render_completed_nodes(
     return "\n".join(blocks) if blocks else "  (none)"
 
 
-def _render_status_nodes(graph: Any, run_state: GraphRunState, status: WorkflowNodeStatus) -> str:
+def _render_status_nodes(graph: "WorkflowBuilder", run_state: GraphRunState, status: WorkflowNodeStatus) -> str:
     """Render nodes whose run-state status equals *status* as bare name blocks.
 
     Used for the ``skipped`` and ``pending`` sections — these report node
@@ -260,23 +265,22 @@ def _render_status_nodes(graph: Any, run_state: GraphRunState, status: WorkflowN
     return "\n".join(blocks) if blocks else "  (none)"
 
 
-def _dedup_failures(failures: list) -> list:
+def _dedup_failures(
+    failures: list[tuple[str, BaseException]],
+) -> list[tuple[str, BaseException]]:
     """Collapse repeated failures of the same node (cyclic re-runs) into one
     entry, keeping the last failure (final retry counts) in first-seen order.
     """
-    seen: dict = {}
+    seen: dict[str, BaseException] = {}
     for name, exc in failures:
         seen[name] = exc  # last-wins; reassigning a key preserves its position
     return list(seen.items())
 
 
 def _render_failed_nodes(
-    error: Optional[BaseException], graph: Any, state: Any, run_state: Optional[GraphRunState]
+    error: Optional[BaseException], graph: "WorkflowBuilder", state: GraphState, run_state: Optional[GraphRunState]
 ) -> str:
-    # Any error carrying a ``failures`` list (today: GraphBatchFailureError)
-    # drives the per-node section — no hard isinstance coupling, so a future
-    # batch-style error participates uniformly.
-    failures = getattr(error, "failures", None) or []
+    failures = error.failures if isinstance(error, GraphBatchFailureError) else []
     blocks = []
     for name, exc in _dedup_failures(failures):
         if name in graph._nodes:
@@ -308,12 +312,14 @@ def _render_terminal_error_block(error: Optional[BaseException]) -> str:
     return render_error_block(report)
 
 
-def _render_running_nodes(running_names: list[str], graph: Any) -> str:
+def _render_running_nodes(running_names: list[str], graph: "WorkflowBuilder") -> str:
     blocks = [_FMT_BARE_NODE_BLOCK.format(node_name=name) for name in running_names if name in graph._nodes]
     return "\n".join(blocks) if blocks else "  (none)"
 
 
-def _workflow_identity(graph: Any, run_state: GraphRunState) -> tuple[WorkflowRunId, WorkflowDefinitionId]:
+def _workflow_identity(
+    graph: "WorkflowBuilder", run_state: GraphRunState
+) -> tuple[WorkflowRunId, WorkflowDefinitionId]:
     definition_id = graph._definition_id
     if not isinstance(definition_id, WorkflowDefinitionId):
         raise RuntimeError("Workflow notification requires a canonical definition identity")
@@ -374,7 +380,7 @@ class WorkflowNotification:
 
 
 def push_started_notification(
-    graph: Any,
+    graph: "WorkflowBuilder",
     run_state: GraphRunState,
 ) -> None:
     run_id, definition_id = _workflow_identity(graph, run_state)
@@ -388,11 +394,11 @@ def push_started_notification(
 
 
 def push_terminal_notification(
-    graph: Any,
-    state: Any,
+    graph: "WorkflowBuilder",
+    state: GraphState,
     status: WorkflowNodeStatus,
     *,
-    result: Any = None,
+    result: object = None,
     error: Optional[BaseException] = None,
     initial_params: Optional[dict] = None,
     run_state: Optional[GraphRunState] = None,
@@ -425,10 +431,10 @@ def push_terminal_notification(
 def push_node_notification(
     node_name: str,
     status: WorkflowNodeStatus,
-    state: Any,
-    graph: Any,
+    state: GraphState,
+    graph: "WorkflowBuilder",
     *,
-    completed: set,
+    completed: set[str],
     running_names: list[str],
     run_state: Optional[GraphRunState] = None,
     exc: Optional[BaseException] = None,
@@ -482,9 +488,9 @@ def push_node_notification(
 
 
 def push_llm_route_notification(
-    llm_edge: Any,
-    state: Any,
-    graph: Any,
+    llm_edge: _LlmEdge,
+    state: GraphState,
+    graph: "WorkflowBuilder",
     run_state: GraphRunState,
 ) -> None:
     run_id, definition_id = _workflow_identity(graph, run_state)
@@ -535,7 +541,7 @@ def push_llm_route_notification(
     )
 
 
-def _render_stall_nodes(graph: Any, stalled_nodes: tuple[str, ...], completed: set) -> str:
+def _render_stall_nodes(graph: "WorkflowBuilder", stalled_nodes: tuple[str, ...], completed: set[str]) -> str:
     """Render each deadlocked AND-join with its arrived / missing sources.
 
     A join's ``sources`` come from the graph's waiting-edges; a source counts as
@@ -564,11 +570,11 @@ def _render_stall_nodes(graph: Any, stalled_nodes: tuple[str, ...], completed: s
 
 
 def push_stall_notification(
-    graph: Any,
-    state: Any,
+    graph: "WorkflowBuilder",
+    state: GraphState,
     stalled_nodes: tuple[str, ...],
     *,
-    completed: set,
+    completed: set[str],
     run_state: Optional[GraphRunState] = None,
 ) -> None:
     """Push a decision notification when the frontier drains on a deadlocked join.

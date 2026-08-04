@@ -5,7 +5,15 @@ import json
 import nbformat
 import pytest
 
-from mote.contracts.surface import NOTEBOOK_EXPORT_MIME_TYPE, NotebookCell, NotebookDocument, NotebookOutput
+from mote.contracts.surface import (
+    NOTEBOOK_EXPORT_MIME_TYPE,
+    NotebookCell,
+    NotebookDisplayDataOutput,
+    NotebookDocument,
+    NotebookErrorOutput,
+    NotebookExecuteResultOutput,
+    NotebookStreamOutput,
+)
 from mote.runtime.interactive.kernel.driver import KernelRuntimeDriver
 from mote.runtime.interactive.kernel.notebook_export import export_notebook_ipynb
 
@@ -29,22 +37,18 @@ def _document() -> NotebookDocument:
                 origin="human",
                 extensions={"cell-extension": [1, 2]},
                 outputs=[
-                    NotebookOutput(
-                        output_type="stream",
+                    NotebookStreamOutput(
                         name="stdout",
                         text="hello\n",
                     ),
-                    NotebookOutput(
-                        output_type="execute_result",
+                    NotebookExecuteResultOutput(
                         execution_count=3,
                         data={"text/plain": "2", "image/png": _PNG_B64},
                     ),
-                    NotebookOutput(
-                        output_type="display_data",
+                    NotebookDisplayDataOutput(
                         data={"text/plain": "display"},
                     ),
-                    NotebookOutput(
-                        output_type="error",
+                    NotebookErrorOutput(
                         ename="ValueError",
                         evalue="bad value",
                         traceback=["Traceback", "ValueError: bad value"],
@@ -124,8 +128,7 @@ def test_ipynb_export_rejects_invalid_png_base64():
                 id="cell-1",
                 source="display(image)",
                 outputs=[
-                    NotebookOutput(
-                        output_type="display_data",
+                    NotebookDisplayDataOutput(
                         data={"image/png": "not base64!"},
                     )
                 ],

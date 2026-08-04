@@ -11,11 +11,12 @@ import stat
 import struct
 import subprocess
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Mapping
 
+from mote.contracts.events.envelope import JsonValue
 from mote.product.inference.daemon.security import SharedAuthenticationError, current_incarnation
 
 
@@ -38,7 +39,41 @@ class DaemonDiscovery:
     process_start_ticks: int
     boot_id: str
     protocol_version: int
-    state: str
+    state: DaemonState
+
+    @classmethod
+    def from_payload(cls, payload: object) -> "DaemonDiscovery":
+        fields = {
+            "schema_version",
+            "socket_generation",
+            "socket_path",
+            "pid",
+            "process_start_ticks",
+            "boot_id",
+            "protocol_version",
+            "state",
+        }
+        if type(payload) is not dict or set(payload) != fields:
+            raise ValueError("Shared discovery fields are not canonical")
+        assert isinstance(payload, dict)
+        for name in ("socket_generation", "socket_path", "boot_id", "state"):
+            if type(payload[name]) is not str or not payload[name]:
+                raise ValueError(f"Shared discovery {name} is invalid")
+        for name in ("schema_version", "pid", "process_start_ticks", "protocol_version"):
+            if type(payload[name]) is not int or payload[name] < 1:
+                raise ValueError(f"Shared discovery {name} is invalid")
+        if payload["schema_version"] != 2:
+            raise ValueError("Shared discovery schema is unsupported")
+        return cls(
+            payload["schema_version"],
+            payload["socket_generation"],
+            payload["socket_path"],
+            payload["pid"],
+            payload["process_start_ticks"],
+            payload["boot_id"],
+            payload["protocol_version"],
+            DaemonState(payload["state"]),
+        )
 
 
 class SupervisorOwnershipError(RuntimeError):
@@ -156,16 +191,16 @@ class SharedDaemonSupervisor:
             raise PermissionError("daemon socket ownership or mode is unsafe")
         incarnation = current_incarnation(pid)
         discovery = DaemonDiscovery(
-            schema_version=1,
+            schema_version=2,
             socket_generation=socket_generation,
             socket_path=str(socket_path),
             pid=pid,
             process_start_ticks=incarnation.process_start_ticks,
             boot_id=incarnation.boot_id,
             protocol_version=self._protocol_version,
-            state=DaemonState.READY.value,
+            state=DaemonState.READY,
         )
-        self._atomic_write(self._discovery_path, asdict(discovery))
+        self._atomic_write(self._discovery_path, _discovery_payload(discovery))
         self._state = DaemonState.READY
         return discovery
 
@@ -174,7 +209,7 @@ class SharedDaemonSupervisor:
         discovery = self.read_discovery()
         if discovery is None:
             raise RuntimeError("daemon discovery does not exist")
-        payload = asdict(discovery)
+        payload = _discovery_payload(discovery)
         payload["state"] = state.value
         self._atomic_write(self._discovery_path, payload)
         self._state = state
@@ -185,18 +220,15 @@ class SharedDaemonSupervisor:
             if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
                 raise PermissionError("Shared discovery ownership or mode is unsafe")
             payload = json.loads(self._discovery_path.read_text(encoding="utf-8"))
-            return DaemonDiscovery(**payload)
+            return DaemonDiscovery.from_payload(payload)
         except FileNotFoundError:
             return None
 
     def discover_ready_socket(self) -> tuple[DaemonDiscovery, Path]:
         discovery = self.read_discovery()
-        if discovery is None or discovery.state != DaemonState.READY.value:
+        if discovery is None or discovery.state is not DaemonState.READY:
             raise RuntimeError("Shared daemon has no READY discovery record")
-        if discovery.protocol_version not in {
-            self._protocol_version,
-            self._protocol_version - 1,
-        }:
+        if discovery.protocol_version != self._protocol_version:
             raise RuntimeError("Shared daemon discovery protocol is incompatible")
         socket_path = Path(discovery.socket_path)
         if socket_path.parent != self._directory or not socket_path.name.startswith(
@@ -239,7 +271,7 @@ class SharedDaemonSupervisor:
             raise SupervisorOwnershipError("Shared daemon lock is not held")
 
     @staticmethod
-    def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
+    def _atomic_write(path: Path, payload: Mapping[str, JsonValue]) -> None:
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{path.name}.",
             dir=path.parent,
@@ -268,6 +300,19 @@ def _incarnation_matches(discovery: DaemonDiscovery) -> bool:
     except SharedAuthenticationError:
         return False
     return current.process_start_ticks == discovery.process_start_ticks and current.boot_id == discovery.boot_id
+
+
+def _discovery_payload(discovery: DaemonDiscovery) -> dict[str, JsonValue]:
+    return {
+        "schema_version": discovery.schema_version,
+        "socket_generation": discovery.socket_generation,
+        "socket_path": discovery.socket_path,
+        "pid": discovery.pid,
+        "process_start_ticks": discovery.process_start_ticks,
+        "boot_id": discovery.boot_id,
+        "protocol_version": discovery.protocol_version,
+        "state": discovery.state.value,
+    }
 
 
 def _probe_socket(path: Path, *, timeout_seconds: float = 0.2) -> bool:

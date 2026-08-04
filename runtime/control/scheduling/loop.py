@@ -15,13 +15,31 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Awaitable, Callable, Optional, Union
+from collections.abc import Awaitable, Callable
+from typing import Optional, TypeAlias
 
 from mote.runtime.telemetry.logging import logger
 
 #: A tick callback. May be sync or async. Returning ``False`` stops the loop;
 #: any other value (including ``None``) keeps it running.
-Tick = Callable[[], Union[None, bool, Awaitable[Optional[bool]]]]
+SyncTick: TypeAlias = Callable[[], bool | None]
+AsyncTick: TypeAlias = Callable[[], Awaitable[bool | None]]
+Tick: TypeAlias = SyncTick | AsyncTick
+
+
+def _bind_tick(tick: Tick) -> AsyncTick:
+    """Classify a tick once, before the scheduling loop starts."""
+
+    if inspect.iscoroutinefunction(tick):
+        return tick
+
+    async def invoke_sync() -> bool | None:
+        result = tick()
+        if result is not None and type(result) is not bool:
+            raise TypeError("synchronous periodic tick must return bool or None")
+        return result
+
+    return invoke_sync
 
 
 class PeriodicLoop:
@@ -48,7 +66,7 @@ class PeriodicLoop:
         sleep_first: bool = False,
     ):
         self._interval = interval
-        self._tick = tick
+        self._tick = _bind_tick(tick)
         self._name = name
         self._sleep_first = sleep_first
         self._stopped = True
@@ -87,9 +105,7 @@ class PeriodicLoop:
                 if self._stopped:
                     break
             try:
-                result = self._tick()
-                if inspect.isawaitable(result):
-                    result = await result
+                result = await self._tick()
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 — best-effort tick; keep looping
@@ -101,4 +117,4 @@ class PeriodicLoop:
                 await asyncio.sleep(self._interval)
 
 
-__all__ = ["PeriodicLoop", "Tick"]
+__all__ = ["AsyncTick", "PeriodicLoop", "SyncTick", "Tick"]

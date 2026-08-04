@@ -55,6 +55,12 @@ except ImportError:  # pragma: no cover - optional cli extra
     LatexSpecialsNode = None
     LatexWalker = None
 
+
+def _is_node(value: object, node_type: type | None) -> bool:
+    """Check an optional pylatexenc node class without widening the parser path."""
+    return node_type is not None and isinstance(value, node_type)
+
+
 # ``^``/``_`` scripts we can map to real Unicode super/subscript glyphs. Sourced
 # from the same code-point set KaTeX ships (``unicodeSupOrSub``): every letter /
 # digit / operator that HAS a dedicated codepoint, so a run maps fully or is left
@@ -525,11 +531,11 @@ def _split_matrix(env_node) -> list[list[list]]:
     cur_row: list[list] = []
     cur_cell: list = []
     for n in env_node.nodelist:
-        if isinstance(n, LatexMacroNode) and n.macroname in _ROW_BREAK:
+        if _is_node(n, LatexMacroNode) and n.macroname in _ROW_BREAK:
             cur_row.append(cur_cell)
             rows.append(cur_row)
             cur_row, cur_cell = [], []
-        elif isinstance(n, LatexSpecialsNode) and n.specials_chars == "&":
+        elif _is_node(n, LatexSpecialsNode) and n.specials_chars == "&":
             cur_row.append(cur_cell)
             cur_cell = []
         else:
@@ -571,10 +577,10 @@ def _big_operator(nodes: list, i: int, *, display: bool) -> tuple[int, MathBox |
         nonlocal j
         if (
             j < len(nodes)
-            and isinstance(nodes[j], LatexCharsNode)
+            and _is_node(nodes[j], LatexCharsNode)
             and nodes[j].chars == mark
             and j + 1 < len(nodes)
-            and isinstance(nodes[j + 1], LatexGroupNode)
+            and _is_node(nodes[j + 1], LatexGroupNode)
         ):
             body = _group_nodelist(nodes[j + 1])
             j += 2
@@ -600,7 +606,7 @@ def _big_operator(nodes: list, i: int, *, display: bool) -> tuple[int, MathBox |
     if (
         (sub_nodes is None or sup_nodes is None)
         and j < len(nodes)
-        and isinstance(nodes[j], LatexCharsNode)
+        and _is_node(nodes[j], LatexCharsNode)
         and nodes[j].chars[:1] in ("_", "^")
     ):
         sub_str, sup_str, trailing, dangling = _parse_fused_scripts(nodes[j].chars)
@@ -760,14 +766,14 @@ def _walk_nodes(nodes: list, *, display: bool) -> MathBox:
     i = 0
     while i < len(nodes):
         n = nodes[i]
-        if isinstance(n, LatexMacroNode) and n.macroname in _BIG_OPS:
+        if _is_node(n, LatexMacroNode) and n.macroname in _BIG_OPS:
             consumed, box = _big_operator(nodes, i, display=display)
             if box is not None:
                 flush()
                 pieces.append(box)
                 i = consumed
                 continue
-        if isinstance(n, LatexMacroNode) and n.macroname == "frac" and n.nodeargd:
+        if _is_node(n, LatexMacroNode) and n.macroname == "frac" and n.nodeargd:
             args = n.nodeargd.argnlist
             if len(args) >= 2 and args[0] is not None and args[1] is not None:
                 flush()
@@ -776,7 +782,7 @@ def _walk_nodes(nodes: list, *, display: bool) -> MathBox:
                 pieces.append(frac(num, den) if display else frac_inline(num, den))
                 i += 1
                 continue
-        if isinstance(n, LatexMacroNode) and n.macroname == "sqrt" and n.nodeargd:
+        if _is_node(n, LatexMacroNode) and n.macroname == "sqrt" and n.nodeargd:
             args = n.nodeargd.argnlist
             # \sqrt{x} → args=[None, {x}]; \sqrt[n]{x} → args=[[n], {x}].
             if args and args[-1] is not None:
@@ -788,7 +794,7 @@ def _walk_nodes(nodes: list, *, display: bool) -> MathBox:
                 pieces.append(sqrt(radicand, index_str) if display else sqrt_inline(radicand, index_str))
                 i += 1
                 continue
-        if isinstance(n, LatexEnvironmentNode) and n.environmentname in _MATRIX_DELIMS:
+        if _is_node(n, LatexEnvironmentNode) and n.environmentname in _MATRIX_DELIMS:
             flush()
             left, right = _MATRIX_DELIMS[n.environmentname]
             cells = [[_walk_nodes(cell, display=display) for cell in row] for row in _split_matrix(n)]

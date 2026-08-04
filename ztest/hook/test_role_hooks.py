@@ -16,6 +16,7 @@ import pytest_asyncio
 from mote.contracts.events.conversation import PromptRejectedEvent, UserPromptSubmitEvent
 from mote.contracts.output import RunRejected, RunRejectionKind
 from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent import AgentWiring, Role
 from mote.runtime.agent.role_schema import RoleSchema
 from mote.runtime.events.telemetry import AllTelemetryBinding
@@ -91,9 +92,9 @@ async def role_in_tmp(tmp_path, monkeypatch):
         wiring=AgentWiring.for_context(
             context,
             application_composition=composition,
-            dependencies=CodingAgentFactory(paths=paths).dependencies(
-                deps=None, output_contract=text_output_contract()
-            ),
+            dependencies=CodingAgentFactory(
+                model_checkpoint_policy=approved_model_checkpoint_policy(), paths=paths
+            ).dependencies(deps=None, output_contract=text_output_contract()),
         ),
     )
     # Replace the loop with a no-op stub so run() exercises only the hook seams.
@@ -302,6 +303,7 @@ async def test_global_hooks_json_engages_manager(tmp_path, monkeypatch):
     hook_config = load_global_hooks(hook_sources)
     assert hook_config is not None
     dependencies = CodingAgentFactory(
+        model_checkpoint_policy=approved_model_checkpoint_policy(),
         paths=paths,
         hooks=ApprovedDeclaration(
             hook_config,

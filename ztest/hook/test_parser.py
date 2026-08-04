@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for parse_command_output / parse_callback_result (codex-compatible contract)."""
+
 from __future__ import annotations
 
 import json
+
+import pytest
 
 from mote.runtime.hook.parser import parse_callback_result, parse_command_output
 from mote.runtime.hook.types import HookOutcome
@@ -18,7 +21,7 @@ def test_exit_2_blocks_with_stderr_reason():
 def test_exit_0_non_json_is_passthrough():
     out = parse_command_output(stdout="just some text", stderr="", exit_code=0)
     assert out.behavior is None
-    assert out.additional_context == []
+    assert out.additional_context == ()
 
 
 def test_exit_0_empty_is_passthrough():
@@ -29,7 +32,7 @@ def test_exit_0_empty_is_passthrough():
 def test_other_nonzero_is_nonblocking_passthrough():
     out = parse_command_output(stdout="", stderr="boom", exit_code=1)
     assert out.behavior is None
-    assert out.stop is False
+    assert out.stop is None
 
 
 def test_json_decision_approve_and_block():
@@ -58,21 +61,21 @@ def test_json_updated_input_maps_to_updated_args():
 
 def test_json_additional_context_string_and_list():
     s = parse_command_output(json.dumps({"additionalContext": "ctx"}), "", 0)
-    assert s.additional_context == ["ctx"]
+    assert s.additional_context == ("ctx",)
     lst = parse_command_output(json.dumps({"additionalContext": ["a", "b"]}), "", 0)
-    assert lst.additional_context == ["a", "b"]
+    assert lst.additional_context == ("a", "b")
 
 
 def test_json_hook_specific_additional_context():
     payload = {"hookSpecificOutput": {"additionalContext": "extra"}}
-    assert parse_command_output(json.dumps(payload), "", 0).additional_context == ["extra"]
+    assert parse_command_output(json.dumps(payload), "", 0).additional_context == ("extra",)
 
 
 def test_json_continue_false_sets_stop():
     payload = {"continue": False, "stopReason": "user halted"}
     out = parse_command_output(json.dumps(payload), "", 0)
-    assert out.stop is True
-    assert out.stop_reason == "user halted"
+    assert out.stop is not None
+    assert out.stop.reason == "user halted"
 
 
 def test_json_system_message():
@@ -105,3 +108,19 @@ def test_callback_outcome_returned_as_is():
 def test_callback_unknown_type_ignored():
     out = parse_callback_result(42)
     assert out.behavior is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"unknown": True},
+        {"continue": "false"},
+        {"systemMessage": 7},
+        {"additionalContext": ["valid", 7]},
+        {"updatedInput": []},
+        {"hookSpecificOutput": {"unknown": True}},
+    ],
+)
+def test_strict_command_output_rejects_malformed_payload(payload):
+    with pytest.raises(ValueError):
+        parse_command_output(json.dumps(payload), "", 0, strict=True)

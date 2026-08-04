@@ -35,7 +35,7 @@ from mote.contracts.file.identity import (
     PathToken,
     ProjectIdentity,
 )
-from mote.contracts.file.mutations import CreateMutation, MutationSet, ReplaceMutation
+from mote.contracts.file.mutations import CreateMutation, DeleteMutation, MutationSet, ReplaceMutation
 from mote.contracts.file.views import TextViewMode
 from mote.runtime.fileops.candidate_discovery import CandidateDiscoveryService
 from mote.runtime.fileops.encoding import decode_text, editable_text
@@ -388,6 +388,8 @@ class EditPlanner:
             ttl_seconds=ARTIFACT_WRITE_TTL_SECONDS,
         ) as scope:
             if isinstance(request, RegexEditPlanRequest):
+                if regex_preparation is None:
+                    raise RuntimeError("regex preparation is unavailable")
                 program, discovery = regex_preparation
                 return self._plan_regex(
                     request,
@@ -983,10 +985,11 @@ def _validate_plan_artifacts(
             metadata,
             maximum_bytes=MAX_METADATA_MANIFEST_BYTES,
         )
-        artifacts.read_bounded(
-            mutation.after,
-            maximum_bytes=MAX_EDIT_PLAN_OUTPUT_BYTES,
-        )
+        if not isinstance(mutation, DeleteMutation):
+            artifacts.read_bounded(
+                mutation.after,
+                maximum_bytes=MAX_EDIT_PLAN_OUTPUT_BYTES,
+            )
         artifacts.read_bounded(
             fact.before_utf8,
             maximum_bytes=MAX_EDIT_PLAN_REVIEW_FACT_BYTES,

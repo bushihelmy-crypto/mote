@@ -20,8 +20,8 @@ def _node(field: str):
 
 def _graph():
     graph = WorkflowBuilder("state", state_schema=SimpleState)
-    graph.add_node("a", _node("a"))
-    graph.add_node("b", _node("b"))
+    graph.add_node("a", _node("a"), implementation_id="test.run-state.a/v1")
+    graph.add_node("b", _node("b"), implementation_id="test.run-state.b/v1")
     graph.add_edge(START, "a")
     graph.add_edge("a", "b")
     graph.add_edge("b", END)
@@ -48,9 +48,7 @@ def test_transitions_preserve_attempt_count_and_terminal_names() -> None:
     assert state.completed_names() == {"a", "b"}
 
 
-def test_inference_does_not_guess_completion_from_state_fields() -> None:
+def test_fresh_run_state_does_not_guess_completion_from_state_fields() -> None:
     graph = _graph()
-    snapshot = SimpleState(x=5)
-    setattr(snapshot, "a", 10)
-    state = GraphRunState.infer_from_state(graph, snapshot)
+    state = GraphRunState.for_graph(graph)
     assert state.completed_names() == set()

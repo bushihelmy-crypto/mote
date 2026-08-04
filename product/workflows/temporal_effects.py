@@ -12,13 +12,11 @@ from mote.orchestration.workflows.durable import WorkflowEffect
 from mote.runtime.durable.temporal import (
     StepInput,
     TemporalActivityCatalog,
-    TemporalBackend,
+    TemporalActivityRuntime,
     build_worker,
     connect_client,
 )
 from mote.runtime.durable.temporal._operation_workflow import TypedOperationWorkflow
-from mote.runtime.ledger import RunJournal
-from mote.runtime.session.workspace.store import SessionWorkspace
 
 _HANDLER_ID = "mote.workflow.effect-dispatch/v1"
 EffectDispatch = Callable[[StepInput], Awaitable[str]]
@@ -29,17 +27,12 @@ class TemporalWorkflowEffects:
         self,
         config: TemporalConfig,
         *,
-        workspace: SessionWorkspace,
         dispatch: EffectDispatch,
     ) -> None:
         self._config = config
         catalog = TemporalActivityCatalog()
         catalog.register(_HANDLER_ID, dispatch)
-        self._backend = TemporalBackend(
-            config,
-            RunJournal("application-workflow-effects", workspace),
-            activity_catalog=catalog,
-        )
+        self._runtime = TemporalActivityRuntime(config, catalog)
         self._client = None
         self._worker = None
         self._worker_task: asyncio.Task[None] | None = None
@@ -50,7 +43,7 @@ class TemporalWorkflowEffects:
         self._client = await connect_client(self._config)
         self._worker = build_worker(
             self._client,
-            self._backend,
+            self._runtime,
             workflows=(TypedOperationWorkflow,),
         )
         self._worker_task = asyncio.create_task(self._worker.run(), name="mote-temporal-workflow-effects")

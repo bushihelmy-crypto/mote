@@ -50,11 +50,20 @@ RoleT = TypeVar("RoleT")
 StateT = TypeVar("StateT")
 
 
-@dataclass(frozen=True, slots=True)
 class ComponentKey(Generic[ComponentT]):
-    """Nominal graph key carrying the component's static value type."""
+    """Unforgeable nominal token carrying one component's static value type.
 
-    name: str
+    Equality and hashing intentionally retain object identity. ``name`` is only
+    a diagnostic/manifest label; constructing another key with the same name
+    never grants access to the registered component.
+    """
+
+    __slots__ = ("name",)
+
+    def __init__(self, name: str) -> None:
+        if not name:
+            raise ValueError("component key name must be non-empty")
+        self.name = name
 
 
 class ComponentGraphError(Exception):
@@ -155,24 +164,25 @@ class ComponentGraph(Generic[RoleT, StateT]):
     ):
         self._role = role
         self._state = state
-        self._specs: dict[str, ComponentSpec[RoleT, StateT, object]] = {}
+        self._specs: dict[ComponentKey[object], ComponentSpec[RoleT, StateT, object]] = {}
+        names: set[str] = set()
         for spec in specs:
-            if spec.name in self._specs:
+            if spec.name in names:
                 raise ComponentGraphError(f"Duplicate component spec: {spec.name!r}")
-            self._specs[spec.name] = spec
-        self._slots: dict[str, object] = {}
-        self._resolving: list[str] = []
+            names.add(spec.name)
+            self._specs[spec.key] = spec
+        self._slots: dict[ComponentKey[object], object] = {}
+        self._resolving: list[ComponentKey[object]] = []
 
     def get(self, key: ComponentKey[ComponentT]) -> ComponentT:
         """Resolve (and cache) component ``name``; ``None`` for an unavailable layer."""
-        name = key.name
-        if name in self._slots:
-            return cast(ComponentT, self._slots[name])
+        if key in self._slots:
+            return cast(ComponentT, self._slots[key])
 
         try:
-            spec = self._specs[name]
+            spec = self._specs[key]
         except KeyError:
-            raise UnknownComponentError(name) from None
+            raise UnknownComponentError(key.name) from None
 
         # Opt-in gate: an unavailable layer resolves to None and is NOT cached, so
         # a later engagement (e.g. register_hook flipping the hook layer on) is
@@ -180,11 +190,11 @@ class ComponentGraph(Generic[RoleT, StateT]):
         if spec.available is not None and not spec.available(self._role, self._state):
             return cast(ComponentT, None)
 
-        if name in self._resolving:
-            path = " -> ".join([*self._resolving, name])
+        if key in self._resolving:
+            path = " -> ".join(item.name for item in (*self._resolving, key))
             raise ComponentCycleError(f"Construction cycle detected: {path}")
 
-        self._resolving.append(name)
+        self._resolving.append(key)
         try:
             value = spec.build(BuildContext(self, self._role, self._state))
         finally:
@@ -193,20 +203,18 @@ class ComponentGraph(Generic[RoleT, StateT]):
         # None (a precondition unmet, e.g. file-watch with no consumer) is not
         # cached — mirrors the historic "slot stays None => rebuilt next time".
         if value is not None:
-            self._slots[name] = value
+            self._slots[key] = value
         return cast(ComponentT, value)
 
     def peek(self, key: ComponentKey[ComponentT]) -> ComponentT | None:
         """The built component if it already exists, else ``None`` (no build)."""
-        name = key.name
-        if name not in self._specs:
-            raise UnknownComponentError(name)
-        return cast(ComponentT | None, self._slots.get(name))
+        if key not in self._specs:
+            raise UnknownComponentError(key.name)
+        return cast(ComponentT | None, self._slots.get(key))
 
     def is_built(self, key: ComponentKey[object]) -> bool:
         """Whether ``name`` has a cached (non-None) component."""
-        name = key.name
-        return name in self._slots
+        return key in self._slots
 
     def seed(self, key: ComponentKey[ComponentT], value: ComponentT) -> None:
         """Pre-populate a slot, bypassing the builder (test/DI injection seam).
@@ -217,10 +225,9 @@ class ComponentGraph(Generic[RoleT, StateT]):
         place of the real collaborator, mirroring the old "assign the private
         slot" pattern but going through the one resolver.
         """
-        name = key.name
-        if name not in self._specs:
-            raise UnknownComponentError(name)
-        self._slots[name] = value
+        if key not in self._specs:
+            raise UnknownComponentError(key.name)
+        self._slots[key] = value
 
 
 __all__ = [

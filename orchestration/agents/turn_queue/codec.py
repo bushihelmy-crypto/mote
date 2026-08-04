@@ -1,4 +1,4 @@
-"""Strict v1 codec for durable Agent turn-queue state."""
+"""Strict v2 codec for authoritative Agent turn state."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from mote.orchestration.agents.turn_queue.model import (
     TurnSubtreeCursor,
 )
 
-TURN_QUEUE_SCHEMA = "mote.agent-turn-queue/v1"
+TURN_QUEUE_SCHEMA = "mote.agent-turn-queue/v2"
 
 JsonObject: TypeAlias = dict[str, object]
 
@@ -40,6 +40,8 @@ _ITEM_FIELDS = {
     "maximum_attempts",
     "next_eligible_at",
     "claim",
+    "payload_digest",
+    "settlement_state",
     "terminal_reason",
 }
 _IDENTITY_FIELDS = {"queue_id", "request_id", "root_id", "subtree_id", "agent_id", "delivery_ids"}
@@ -192,6 +194,8 @@ def _encode_item(item: TurnQueueItem) -> dict[str, object]:
         "maximum_attempts": item.maximum_attempts,
         "next_eligible_at": None if item.next_eligible_at is None else item.next_eligible_at.to_dict(),
         "claim": None if item.claim is None else _encode_claim(item.claim),
+        "payload_digest": item.payload_digest,
+        "settlement_state": None if item.settlement_state is None else item.settlement_state.value,
         "terminal_reason": item.terminal_reason,
     }
 
@@ -220,6 +224,11 @@ def _decode_item(raw: object) -> TurnQueueItem:
         state = TurnQueueState(state_raw)
     except ValueError as exc:
         raise ValueError("turn queue state is unsupported") from exc
+    settlement_raw = _optional_string(value["settlement_state"], "settlement_state")
+    try:
+        settlement_state = None if settlement_raw is None else TurnQueueState(settlement_raw)
+    except ValueError as exc:
+        raise ValueError("turn settlement state is unsupported") from exc
     return TurnQueueItem(
         identity=identity,
         enqueue_sequence=_integer(value["enqueue_sequence"], "enqueue_sequence", minimum=1),
@@ -233,6 +242,8 @@ def _decode_item(raw: object) -> TurnQueueItem:
         maximum_attempts=_integer(value["maximum_attempts"], "maximum_attempts", minimum=1),
         next_eligible_at=_optional_instant(value["next_eligible_at"]),
         claim=None if value["claim"] is None else _decode_claim(value["claim"]),
+        payload_digest=_string(value["payload_digest"], "payload_digest"),
+        settlement_state=settlement_state,
         terminal_reason=_optional_string(value["terminal_reason"], "terminal_reason"),
     )
 

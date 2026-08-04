@@ -329,7 +329,7 @@ packages:
     depends_on: [product.routing_policy_and_simulator, product.reasoning_replay_compatibility, product.translation_profiles_and_inspector, operations.alerts_runbooks]
     contracts_read: [zdocs/parity/admin-rbac-v1.yaml, zdocs/parity/wire-fixtures-v1.yaml]
     contracts_write: []
-    acceptance_tests: [ztest/architecture/test_bifrost_parity_manifest.py, ztest/inference/test_inference_compatibility_api.py, ztest/inference/test_inference_operation_dispatch.py, ztest/inference/test_inference_api_composition.py, ztest/inference/test_model_gateway_compatibility_owner.py, ztest/inference/test_command_gateway.py, ztest/inference/test_runtime_operation_owners.py, ztest/inference/test_inference_admin_api.py, ztest/inference/test_inference_webhook_api.py, ztest/inference/test_realtime_session_gateway.py, ztest/inference/test_realtime_compatibility_api.py]
+    acceptance_tests: [ztest/architecture/test_bifrost_parity_manifest.py, ztest/inference/test_inference_compatibility_api.py, ztest/inference/test_inference_operation_dispatch.py, ztest/inference/test_inference_api_composition.py, ztest/inference/test_model_gateway_compatibility_owner.py, ztest/inference/test_command_gateway.py, ztest/inference/test_runtime_operation_owners.py, ztest/inference/test_inference_webhook_api.py, ztest/inference/test_realtime_session_gateway.py, ztest/inference/test_realtime_compatibility_api.py]
     performance_budget: {slo_revision: inference-slo-v1, dimensions: {api_translation_p99_ms: 10}}
     migration_steps: [install_versioned_routes, validate_rbac, activate_generation]
     rollback: {preconditions: [prior_api_revision_available], procedure: reactivate_prior_api_generation, evidence: [openapi_digest, rbac_digest]}

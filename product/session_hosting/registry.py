@@ -26,18 +26,22 @@ from dataclasses import dataclass, field
 from typing import Generic, Protocol, TypeVar
 
 from mote.contracts.agent import RunnableAgent
+from mote.contracts.ports.agent.hosting import ResidentAgentHostingSnapshot
 from mote.contracts.ports.interaction.role import RoleHumanInteractionPort
-from mote.contracts.session import SessionHostingError, SessionHostingErrorKind
+from mote.contracts.session import SessionHostingError, SessionHostingErrorKind, SessionLifecycleState
+from mote.contracts.session.identity import SessionId
 from mote.orchestration.agents.control import AgentControl
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime
 from mote.product.config.schema import Config
 from mote.product.session_hosting.composition import compose_resident_agent
+from mote.runtime.agent.role import Role
 from mote.runtime.agent.role_state import RoleState
 from mote.runtime.agent.wiring import AgentWiring
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleStack
 from mote.runtime.engine import EngineAgentRequest
 from mote.runtime.events.telemetry import TelemetryRuntime
 from mote.runtime.models.clients.context import Context
+from mote.runtime.session.lifecycle import SessionLifecycleStore
 from mote.runtime.telemetry.logging import logger
 
 OutputT = TypeVar("OutputT")
@@ -46,9 +50,9 @@ OutputT = TypeVar("OutputT")
 class HostedAgent(RunnableAgent[OutputT], Protocol[OutputT]):
     """Product-owned capabilities required to host one resident Agent."""
 
-    wiring: AgentWiring[None, OutputT]
-    context: Context
     config: Config
+
+    def resident_hosting_snapshot(self) -> ResidentAgentHostingSnapshot: ...
 
     @property
     def state(self) -> RoleState: ...
@@ -76,21 +80,17 @@ class HostedAgentOwner(Protocol[OutputT]):
 
 
 def _build_control(role: HostedAgent[OutputT]) -> tuple[AgentControl, AgentRuntime[OutputT]]:
-    projection = role.wiring.dependencies.component_projection
-    if projection is None:
-        raise RuntimeError("resident Agent requires a component projection")
-    workspace_root = projection.session_workspace_root()
-    services = role.wiring.services
-    if services is None or services.agent_budget is None:
-        raise RuntimeError("resident Agent requires canonical budget governance")
+    hosting = role.resident_hosting_snapshot()
+    workspace_root = hosting.workspace_root
     return compose_resident_agent(
         role,
         residency_dir=workspace_root / ".agent_residency",
         sessions_dir=workspace_root / ".agent_sessions",
-        writer=role.context.disk_writer,
+        writer=hosting.writer,
         governance=role.config.agents,
-        budget=services.agent_budget,
-        workflow_governance=services.workflow_governance,
+        budget=hosting.budget,
+        workflow_governance=hosting.workflow_governance,
+        workflow_delivery=hosting.workflow_delivery,
     )
 
 
@@ -214,7 +214,9 @@ class SessionRegistry(Generic[OutputT]):
         role = self._role_factory(EngineAgentRequest(name=self._name, session_id=session_id))
         if role is None:  # pragma: no cover — factory only returns None on typed-agent miss
             raise ValueError(f"role_factory returned None for session_id={session_id!r}")
-        return self._start(role)
+        session = self._start(role)
+        self._activate_lifecycle(role)
+        return session
 
     def adopt(self, role: HostedAgent[OutputT]) -> ResidentSession[OutputT]:
         """Register an ALREADY-built role as a resident session (the fork path).
@@ -232,8 +234,17 @@ class SessionRegistry(Generic[OutputT]):
         if existing is not None:
             return existing
         session = self._start(role)
+        self._activate_lifecycle(role)
         self._sessions[session.session_id] = session
         return session
+
+    @staticmethod
+    def _activate_lifecycle(role: HostedAgent[OutputT]) -> None:
+        """Activate the canonical durable lifecycle before exposing residency."""
+        if not isinstance(role, Role):
+            return
+        root = role.resident_hosting_snapshot().workspace_root
+        SessionLifecycleStore(root / "session-lifecycle.sqlite3").activate(SessionId(role.session_id))
 
     @staticmethod
     def _start(role: HostedAgent[OutputT]) -> ResidentSession[OutputT]:
@@ -260,11 +271,27 @@ class SessionRegistry(Generic[OutputT]):
             session = self._sessions.get(session_id)
         if session is None:
             return False
+        self._begin_draining(session)
         await self._teardown(session)
         async with self._lock:
             if self._sessions.get(session_id) is session:
                 self._sessions.pop(session_id)
         return True
+
+    @staticmethod
+    def _begin_draining(session: ResidentSession[OutputT]) -> None:
+        if not isinstance(session.role, Role):
+            return
+        root = session.role.resident_hosting_snapshot().workspace_root
+        store = SessionLifecycleStore(root / "session-lifecycle.sqlite3")
+        snapshot = store.get(SessionId(session.session_id))
+        if snapshot.state is SessionLifecycleState.ACTIVE:
+            store.set_state(
+                SessionId(session.session_id),
+                SessionLifecycleState.DRAINING,
+                expected_generation=snapshot.lifecycle_generation,
+                expected_revision=snapshot.revision,
+            )
 
     async def aclose(self) -> None:
         """Evict every resident session (host shutdown)."""

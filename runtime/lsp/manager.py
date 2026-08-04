@@ -16,7 +16,7 @@ from typing import Optional
 
 from mote.runtime.config.lsp import LspConfig
 from mote.runtime.lsp.registry import DiagnosticRegistry
-from mote.runtime.lsp.server import LspServerInstance
+from mote.runtime.lsp.server import LspQueryError, LspServerInstance
 
 
 class LspServerManager:
@@ -80,21 +80,21 @@ class LspServerManager:
         """documentSymbol for *path* via its server (``[]`` when none/failed)."""
         server = await self.server_for(path)
         if server is None:
-            return []
+            raise LspQueryError(f"no LSP server is configured for {path}")
         return await server.document_symbols(path)
 
     async def definition(self, path: str, line: int, character: int) -> list:
         """definition at ``(line, character)`` in *path* (``[]`` when none/failed)."""
         server = await self.server_for(path)
         if server is None:
-            return []
+            raise LspQueryError(f"no LSP server is configured for {path}")
         return await server.definition(path, line, character)
 
     async def references(self, path: str, line: int, character: int) -> list:
         """references to the symbol at ``(line, character)`` (``[]`` when none/failed)."""
         server = await self.server_for(path)
         if server is None:
-            return []
+            raise LspQueryError(f"no LSP server is configured for {path}")
         return await server.references(path, line, character)
 
     async def shutdown(self) -> None:

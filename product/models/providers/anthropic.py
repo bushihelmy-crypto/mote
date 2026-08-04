@@ -45,6 +45,7 @@ from mote.runtime.models.clients.base import BaseLLM
 from mote.runtime.models.clients.credentials import CredentialBindingMixin
 from mote.runtime.models.cost import CostTracker, TokenUsage
 from mote.runtime.models.media import parse_data_url, resolve_image_media_type
+from mote.runtime.models.message_wire import canonical_messages_from_model_wire
 from mote.runtime.models.ratelimit.capture import install_rate_limit_hook
 from mote.runtime.resilience.error_classification import classify_llm_error
 from mote.runtime.telemetry.logging import logger
@@ -95,14 +96,7 @@ class AnthropicLLM(CredentialBindingMixin, BaseLLM):
         kwargs: dict[str, Any] = {"max_retries": 0}
         if self.config.base_url:
             kwargs["base_url"] = self.config.base_url
-        if self._oauth is not None:
-            # OAuth path: send the bearer token via auth_token and merge any
-            # provider-specific extra headers (e.g. the anthropic-beta opt-in).
-            kwargs["auth_token"] = self._oauth.get_valid_token()
-            if self.config.oauth and self.config.oauth.headers_extra:
-                kwargs["default_headers"] = dict(self.config.oauth.headers_extra)
-        else:
-            kwargs["api_key"] = self._current_api_key()
+        kwargs["api_key"] = self._current_api_key()
         if http_client := self._make_http_client():
             kwargs["http_client"] = http_client
         client = AsyncAnthropic(**kwargs)
@@ -728,7 +722,7 @@ class AnthropicLLM(CredentialBindingMixin, BaseLLM):
         if not self.config.calc_usage:
             return TokenUsage()
         try:
-            prompt = count_message_tokens(messages, self.pricing_plan)
+            prompt = count_message_tokens(canonical_messages_from_model_wire(messages), self.pricing_plan)
             completion = count_string_tokens(rsp, self.pricing_plan)
             return TokenUsage(
                 input_tokens=prompt,
@@ -741,6 +735,6 @@ class AnthropicLLM(CredentialBindingMixin, BaseLLM):
 
     def count_tokens(self, messages: list[dict]) -> int:
         try:
-            return count_message_tokens(messages, self.model)
+            return count_message_tokens(canonical_messages_from_model_wire(messages), self.model)
         except Exception:  # noqa: BLE001
             return super().count_tokens(messages)

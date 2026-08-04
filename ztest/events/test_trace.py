@@ -8,11 +8,13 @@ for the duration of the body, and marks an error status when the body raises
 (re-raising). With no telemetry bound it stays a near-no-op (mints a uuid, runs the
 body, emits nothing).
 """
+
 from __future__ import annotations
 
 import asyncio
 
-from mote.runtime.events import SpanEndEvent, SpanStartEvent, bind_telemetry, current_span_id, span
+from mote.contracts.events.telemetry import SpanEndEvent, SpanStartEvent
+from mote.runtime.events import bind_telemetry, current_span_id, span
 from mote.runtime.telemetry.logging import bind_trace
 from mote.ztest.telemetry import InlineTelemetry
 

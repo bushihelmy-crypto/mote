@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Callable
 
 from mote.contracts.agent.capacity import TurnCapacityPermitReceipt
 from mote.contracts.agent.errors import AgentLimitReached
@@ -127,11 +128,12 @@ class DurableTurnScheduler:
         succeeded: bool,
         reason: str,
         lease: LeaseEpoch,
+        acknowledge: Callable[[], None] | None = None,
     ) -> TurnMutationReceipt:
         binding = claim.item.claim
         if binding is None:
             raise ValueError("active turn claim has no durable binding")
-        receipt = self._store.settle_claim(
+        prepared = self._store.prepare_execution_settlement(
             request_id=claim.item.identity.request_id,
             expected_item_revision=claim.item.revision,
             terminal_state=TurnQueueState.SUCCEEDED if succeeded else TurnQueueState.FAILED,
@@ -139,6 +141,21 @@ class DurableTurnScheduler:
             lease=lease,
             process_instance_id=binding.process_instance_id,
             execution_permit_receipt=claim.execution_permit_receipt,
+        )
+        if prepared.disposition is not TurnMutationDisposition.APPLIED or prepared.revision is None:
+            if prepared.disposition in {
+                TurnMutationDisposition.ALREADY_TERMINAL,
+                TurnMutationDisposition.STALE_FENCE,
+                TurnMutationDisposition.OWNER_LOST,
+            }:
+                claim._release_after_settlement()
+            return prepared
+        if acknowledge is not None:
+            acknowledge()
+        receipt = self._store.commit_execution_settlement(
+            request_id=claim.item.identity.request_id,
+            expected_item_revision=prepared.revision,
+            lease=lease,
         )
         if receipt.disposition in {
             TurnMutationDisposition.APPLIED,

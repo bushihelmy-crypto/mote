@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import inspect
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Optional, get_type_hints
+from typing import Annotated, ClassVar, Optional, cast, get_args, get_origin, get_type_hints
 
+from typing_extensions import TypeForm
+
+from mote.contracts.events.envelope import JsonValue, freeze_json
 from mote.kernel.tools.docstrings import first_line, parse_section
 from mote.kernel.tools.spec_adapter import annotation_to_json_schema
-from mote.orchestration.workflows.types import GraphState, Stage
+from mote.orchestration.workflows.types import GraphState, NodeParameterSpec, Stage
 
 # ---------------------------------------------------------------------------
 # Param source marker
@@ -49,27 +53,32 @@ class From:
     source: str
 
 
-def _split_annotated(hint) -> tuple[object, str]:
+def _split_annotated(hint: object) -> tuple[TypeForm[object] | None, str]:
     """Split an annotation into ``(actual_type, from_source)``.
 
     Extracts a :class:`From` marker from an ``Annotated[...]`` hint (the source
     is "" when absent). Plain hints pass through unchanged with an empty source.
     """
-    if hint is not None and hasattr(hint, "__metadata__"):
-        source = ""
-        for meta in hint.__metadata__:
+    source = ""
+    if get_origin(hint) is Annotated:
+        annotated_args = get_args(hint)
+        hint = annotated_args[0]
+        for meta in annotated_args[1:]:
             if isinstance(meta, From):
                 source = meta.source
                 break
-        return hint.__origin__, source
-    return hint, ""
+    if hint is None:
+        return None, source
+    if not isinstance(hint, type) and get_origin(hint) is None:
+        raise TypeError("Workflow node annotation must be a concrete type form")
+    return cast(TypeForm[object], hint), source
 
 
 # ---------------------------------------------------------------------------
 # Type resolution
 # ---------------------------------------------------------------------------
 
-_BUILTIN_TYPE_MAP: dict[str, type] = {
+_BUILTIN_TYPE_MAP: dict[str, TypeForm[object]] = {
     "str": str,
     "int": int,
     "float": float,
@@ -84,7 +93,7 @@ _BUILTIN_TYPE_MAP: dict[str, type] = {
 }
 
 
-def _resolve_type(type_str: str) -> type | None:
+def _resolve_type(type_str: str) -> TypeForm[object] | None:
     """Resolve a type-hint string to its Python type (builtins only).
 
     Returns None for unrecognized strings — callers skip type-checking when None.
@@ -124,7 +133,7 @@ class BaseNode(ABC):
         return first_line(cls)
 
     @classmethod
-    def get_params(cls) -> dict[str, dict]:
+    def get_params(cls) -> dict[str, NodeParameterSpec]:
         """Auto-extract param metadata from ``call()``'s docstring + typed kwargs.
 
         Precedence (signature is the structured authority, docstring the prose
@@ -160,7 +169,7 @@ class BaseNode(ABC):
         return params
 
     @classmethod
-    def get_json_schema(cls) -> dict:
+    def get_json_schema(cls) -> Mapping[str, JsonValue]:
         """Build a JSON Schema for this node's declared params.
 
         Returns ``{"type": "object", "properties": {...}, "required": [...]}``
@@ -172,7 +181,7 @@ class BaseNode(ABC):
         """
 
         params = cls.get_params()
-        properties: dict[str, dict] = {}
+        properties: dict[str, object] = {}
         required: list[str] = []
 
         for name, info in params.items():
@@ -191,10 +200,13 @@ class BaseNode(ABC):
             # All declared params are "required" in the schema sense (no default)
             required.append(name)
 
-        schema: dict = {"type": "object", "properties": properties}
+        schema: dict[str, object] = {"type": "object", "properties": properties}
         if required:
             schema["required"] = required
-        return schema
+        frozen = freeze_json(schema, path="workflow_node_schema")
+        if not isinstance(frozen, Mapping):
+            raise TypeError("Workflow node schema must be a JSON object")
+        return cast(Mapping[str, JsonValue], frozen)
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +214,7 @@ class BaseNode(ABC):
 # ---------------------------------------------------------------------------
 
 
-def _parse_params_from_docstring(fn) -> dict[str, dict]:
+def _parse_params_from_docstring(fn: object) -> dict[str, NodeParameterSpec]:
     """Parse ``Params:`` section into ``{name: {"from": source, "desc": desc, "type": type|None}}``.
 
     The convention is::
@@ -217,7 +229,7 @@ def _parse_params_from_docstring(fn) -> dict[str, dict]:
     """
     doc = inspect.getdoc(fn) or (fn.__doc__ if hasattr(fn, "__doc__") else None)
     entries = parse_section(doc, "Params")
-    result: dict[str, dict] = {}
+    result: dict[str, NodeParameterSpec] = {}
     for name, rest in entries:
         parts = _split_param_rest(rest)
         if len(parts) >= 3:

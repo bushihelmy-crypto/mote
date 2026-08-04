@@ -91,8 +91,8 @@ class MutationFactory:
                 path=requested.display,
             )
         root = path_token(self.get_project_root())
-        resolved_root = os.path.realpath(root.native)
-        resolved_parent = os.path.realpath(parent)
+        resolved_root = os.path.realpath(os.fsdecode(root.native))
+        resolved_parent = os.path.realpath(os.fsdecode(parent))
         try:
             common = os.path.commonpath((resolved_root, resolved_parent))
         except ValueError as exc:

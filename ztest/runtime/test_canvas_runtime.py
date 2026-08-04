@@ -12,9 +12,10 @@ from mote.contracts.interaction.handoff import HandoffRequest, HandoffStatus, Hu
 from mote.contracts.runtime import RuntimeCheckpoint, RuntimeOperationIntent, RuntimeProjectionIntent, RuntimeRef
 from mote.contracts.surface import (
     CanvasDocument,
-    CanvasElement,
     CanvasOperation,
+    CanvasRectangle,
     CanvasStyle,
+    CanvasText,
     SurfaceInput,
     SurfacePresentationMode,
 )
@@ -50,9 +51,8 @@ async def test_canvas_batch_is_atomic_and_checkpoint_restores():
     operations = [
         CanvasOperation(
             op="upsert",
-            element=CanvasElement(
+            element=CanvasRectangle(
                 id="box",
-                kind="rect",
                 x=20,
                 y=30,
                 width=200,
@@ -62,7 +62,7 @@ async def test_canvas_batch_is_atomic_and_checkpoint_restores():
         ),
         CanvasOperation(
             op="upsert",
-            element=CanvasElement(id="label", kind="text", x=40, y=70, text="A < B"),
+            element=CanvasText(id="label", x=40, y=70, text="A < B"),
         ),
     ]
 
@@ -106,9 +106,8 @@ async def test_canvas_recovers_prepared_wal_after_crash_before_commit(tmp_path):
     )
     operation = CanvasOperation(
         op="upsert",
-        element=CanvasElement(
+        element=CanvasRectangle(
             id="recovered-node",
-            kind="rect",
             x=10,
             y=20,
             width=120,
@@ -199,7 +198,9 @@ async def test_canvas_observer_survives_handoff_but_input_authority_does_not():
         [
             CanvasOperation(
                 op="upsert",
-                element=CanvasElement(id="agent-after-handoff", kind="rect"),
+                element=CanvasRectangle(
+                    id="agent-after-handoff",
+                ),
             )
         ]
     )

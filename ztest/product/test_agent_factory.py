@@ -3,6 +3,7 @@ import pytest
 from mote.contracts.agent import AgentConstructionRequest, BaseAgent, ContextPolicy, SpawnContext
 from mote.kernel.output import text_output_contract
 from mote.product.agents import CodingAgentFactory, RootAgentRequest
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role
 from mote.runtime.agent.role_schema import RoleSchema
 from mote.runtime.agent.role_state import RoleState
@@ -19,6 +20,7 @@ def test_root_builder_injects_explicit_product_dependencies():
     routing_policy = object()
     routing_builder = lambda: routing_policy
     factory = CodingAgentFactory(
+        model_checkpoint_policy=approved_model_checkpoint_policy(),
         toolsets_factory=lambda _protocol: toolsets,
         background_task_pool_builder=pool_builder,
         routing_strategy_builders_factory=lambda: {"tenant": routing_builder},
@@ -47,7 +49,10 @@ def test_root_builder_injects_explicit_product_dependencies():
 
 
 def test_root_builder_preserves_explicit_wiring():
-    factory = CodingAgentFactory(toolsets_factory=lambda _protocol: (_native_tools(),))
+    factory = CodingAgentFactory(
+        model_checkpoint_policy=approved_model_checkpoint_policy(),
+        toolsets_factory=lambda _protocol: (_native_tools(),),
+    )
     wiring = AgentWiring(
         dependencies=factory.dependencies(
             deps=None,
@@ -72,7 +77,9 @@ def test_child_builder_rejects_non_runnable_agent_result():
         def __init__(self, **_kwargs):
             pass
 
-    factory = CodingAgentFactory()
+    factory = CodingAgentFactory(
+        model_checkpoint_policy=approved_model_checkpoint_policy(),
+    )
     request = AgentConstructionRequest(
         logical_agent_id="child-agent",
         parent_session_id=None,

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 from mote.contracts.activity import ActivityKind, ActivityNodeState, ActivityOutcome, ActivityTopology
+from mote.contracts.events.scope import ScopePath
 from mote.contracts.task.progress import (
     ActivityProgressEvent,
     ActivityProgressIdentity,
@@ -39,7 +40,7 @@ class TaskProgressEvent:
     #: background-task progress line (today's behavior — folds to a flat
     #: ``TaskProgress`` view event). A non-empty scope whose head is an open
     #: activity routes the ping into that activity's subtree (a per-node update).
-    scope: tuple[object, ...] = ()
+    scope: ScopePath = ()
 
     name: ClassVar[str] = TASK_PROGRESS
 
@@ -52,7 +53,7 @@ class TaskProgressEvent:
         stage: str,
         phase: ProgressPhase,
         detail: str | None = None,
-        scope: tuple[object, ...] = (),
+        scope: ScopePath = (),
     ) -> "TaskProgressEvent":
         return cls(
             ActivityProgressEvent(
@@ -97,7 +98,7 @@ class ActivityStartedEvent:
     draw its shape before any node runs.
     """
 
-    scope: tuple[object, ...] = ()
+    scope: ScopePath = ()
     activity_kind: ActivityKind = ActivityKind.GRAPH
     label: str = ""
     topology: ActivityTopology | None = None
@@ -123,7 +124,7 @@ class ActivityCompletedEvent:
     Purely observational.
     """
 
-    scope: tuple[object, ...] = ()
+    scope: ScopePath = ()
     outcome: ActivityOutcome = ActivityOutcome.SUCCESS
     node_states: tuple[ActivityNodeState, ...] = ()
     summary: str = ""

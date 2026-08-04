@@ -29,13 +29,9 @@ _MSG_SPAWN_FAILED = "Error: could not spawn agent '{agent_type}' (agent limit re
 _MSG_NO_SUMMARY = "Agent finished without a final summary."
 
 
-class _CommandLowerer(Protocol):
-    def lower(self, text: str) -> str: ...
-
-
 @runtime_checkable
 class _SpawnMessageAgent(Protocol):
-    command_channel: _CommandLowerer
+    def lower_command_text(self, text: str) -> str: ...
 
 
 class _SpawnRouterConfig(Protocol):
@@ -46,17 +42,15 @@ class _SpawnConfig(Protocol):
     router: _SpawnRouterConfig
 
 
-class _SpawnRouter(Protocol):
-    routing_enabled: bool
-
-    async def seed_session(self, session_id: str, prompt: str) -> None: ...
-
-
 @runtime_checkable
 class _SpawnRoutingAgent(Protocol):
     session_id: str
     config: _SpawnConfig
-    router: _SpawnRouter
+
+    @property
+    def routing_enabled(self) -> bool: ...
+
+    async def seed_routing(self, prompt: str) -> None: ...
 
 
 class Agent(BaseTool):
@@ -132,7 +126,7 @@ class Agent(BaseTool):
             # the lowerer fails loudly on any unlowered symbol.
             if not isinstance(agent, _SpawnMessageAgent):
                 raise TypeError("spawned Agent does not publish command lowering")
-            return UserMessage(content=agent.command_channel.lower(task_brief))
+            return UserMessage(content=agent.lower_command_text(task_brief))
 
         invocation = current_authorized_invocation()
         request_id = uuid.uuid4().hex if invocation is None else str(invocation.identity.invocation_id)
@@ -152,13 +146,14 @@ class Agent(BaseTool):
             # children (no ``seed_session``), independent of the config switch.
             if not isinstance(role, _SpawnRoutingAgent):
                 raise TypeError("spawned Agent does not publish routing preparation")
-            if not role.config.router.spawn_routing:
+            routing_role: _SpawnRoutingAgent = role
+            if not routing_role.config.router.spawn_routing:
                 return
             # Seed is only ever *consumed* by a child that runs step routing.
             # The presence of ``seed_session`` (squilla strategy installed) already
             # implies routing is enabled for this child — this is a belt-and-suspenders
             # guard against a routing-disabled router that somehow exposes a seed hook.
-            if not role.router.routing_enabled:
+            if not routing_role.routing_enabled:
                 logger.warning(
                     f"Agent '{agent_type}': router.spawn_routing is on but this "
                     f"agent_type does not route (router.sub_agent.strategy is null) — "
@@ -166,7 +161,7 @@ class Agent(BaseTool):
                     f"'squilla' to consume it."
                 )
                 return
-            await role.router.seed_session(role.session_id, prompt)
+            await routing_role.seed_routing(prompt)
 
         report = await spawn_and_run(spec, build_message, on_spawn=_seed)
         if not isinstance(report, RunResult):

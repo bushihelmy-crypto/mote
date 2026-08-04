@@ -13,8 +13,13 @@ pulling in heavier layers.
 
 from __future__ import annotations
 
-import inspect
-from typing import Any, Callable, Optional
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Generic, TypeVar, cast
+
+from pydantic import BaseModel
+
+ValueT = TypeVar("ValueT")
 
 
 class Output:
@@ -39,12 +44,37 @@ class NoOutput:
     """Explicit declaration that a workflow returns no state payload."""
 
 
-def _is_output(obj: Any) -> bool:
+@dataclass(frozen=True, slots=True)
+class Reducer(Generic[ValueT]):
+    """Explicit typed state-channel merge binding."""
+
+    merge: Callable[[ValueT, ValueT], ValueT]
+
+    def __call__(self, current: ValueT, update: ValueT) -> ValueT:
+        return self.merge(current, update)
+
+    def bind_channel(self) -> "ChannelReducer":
+        """Erase one validated reducer only at the heterogeneous state map."""
+
+        return ChannelReducer(cast(Callable[[object, object], object], self.merge))
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelReducer:
+    """Owner-private relation-preserving binding for a heterogeneous channel."""
+
+    _merge: Callable[[object, object], object]
+
+    def merge(self, current: object, update: object) -> object:
+        return self._merge(current, update)
+
+
+def _is_output(obj: object) -> bool:
     """True if *obj* is the :class:`Output` marker (the class or an instance)."""
     return obj is Output or isinstance(obj, Output)
 
 
-def derive_output_fields(schema: type) -> set[str]:
+def derive_output_fields(schema: type[BaseModel]) -> set[str]:
     """Names of fields carrying the :class:`Output` marker in their metadata.
 
     Scans ``schema.model_fields[name].metadata`` the same way
@@ -52,55 +82,35 @@ def derive_output_fields(schema: type) -> set[str]:
     output; compilation requires an explicit ``NoOutput`` declaration otherwise.
     """
     fields: set[str] = set()
-    model_fields = getattr(schema, "model_fields", {})
+    model_fields = schema.model_fields
     for name, field_info in model_fields.items():
-        if any(_is_output(meta) for meta in getattr(field_info, "metadata", ())):
+        if any(_is_output(meta) for meta in field_info.metadata):
             fields.add(name)
     return fields
 
 
-def _is_reducer(obj: Any) -> bool:
-    """True if *obj* is a reducer: a callable taking exactly 2 positional args.
-
-    A reducer has the shape ``(current, update) -> merged``. We probe the
-    signature for exactly two parameters that can be passed positionally
-    (POSITIONAL_ONLY / POSITIONAL_OR_KEYWORD), mirroring langgraph's
-    ``_is_field_binop``. Builtins / C callables whose signature cannot be
-    introspected (``inspect.signature`` raises ``ValueError``/``TypeError``)
-    are conservatively treated as non-reducers.
-    """
-    if not callable(obj):
-        return False
-    try:
-        sig = inspect.signature(obj)
-    except (ValueError, TypeError):
-        return False
-    positional = [
-        p
-        for p in sig.parameters.values()
-        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    ]
-    return len(positional) == 2
-
-
-def derive_reducers(schema: type) -> dict[str, Callable]:
+def derive_reducers(schema: type[BaseModel]) -> dict[str, ChannelReducer]:
     """Map field name → reducer for every ``Annotated[T, reducer]`` field.
 
     Scans ``schema.model_fields[name].metadata`` and takes the first entry that
     looks like a reducer (:func:`_is_reducer`). Fields without a reducer in
     their metadata are omitted — they are last-value channels.
     """
-    reducers: dict[str, Callable] = {}
-    model_fields = getattr(schema, "model_fields", {})
+    reducers: dict[str, ChannelReducer] = {}
+    model_fields = schema.model_fields
     for name, field_info in model_fields.items():
-        for meta in getattr(field_info, "metadata", ()):
-            if _is_reducer(meta):
-                reducers[name] = meta
+        for meta in field_info.metadata:
+            if isinstance(meta, Reducer):
+                reducers[name] = meta.bind_channel()
                 break
     return reducers
 
 
-def apply_updates(state: Any, updates: dict, reducers: Optional[dict] = None) -> None:
+def apply_updates(
+    state: BaseModel,
+    updates: Mapping[str, object],
+    reducers: Mapping[str, ChannelReducer] | None = None,
+) -> None:
     """Merge a node's *updates* dict into *state* in place.
 
     For each ``key, value`` in *updates*:
@@ -113,6 +123,6 @@ def apply_updates(state: Any, updates: dict, reducers: Optional[dict] = None) ->
         reducer = reducers.get(key)
         if reducer is not None:
             current = getattr(state, key, None)
-            setattr(state, key, reducer(current, value))
+            setattr(state, key, reducer.merge(current, value))
         else:
             setattr(state, key, value)

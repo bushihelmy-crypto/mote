@@ -105,7 +105,7 @@ def test_known_fact_with_future_schema_requires_an_explicit_upcaster() -> None:
     envelope = EventEnvelope(
         event_id=EventId("future-1"),
         event_type=stable_event_type(MESSAGE),
-        schema_version=2,
+        schema_version=999,
         stream_id=StreamId("session/session-1"),
         sequence=1,
         occurred_at=timestamp,
@@ -113,5 +113,5 @@ def test_known_fact_with_future_schema_requires_an_explicit_upcaster() -> None:
         payload={"content": "future"},
     )
 
-    with pytest.raises(UnsupportedSessionFactVersion, match=r"expected=1 actual=2"):
+    with pytest.raises(UnsupportedSessionFactVersion, match=r"expected=2 actual=999"):
         decode_session_event(envelope)

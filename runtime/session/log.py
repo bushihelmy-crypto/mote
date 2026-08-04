@@ -15,23 +15,28 @@ shape, sequence allocation, checksums and fsync are owned by the journal.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Awaitable, Callable, Iterator, Mapping, Optional
+from typing import Awaitable, Callable, Iterator, Mapping, Optional, cast
 
-from mote.contracts.events.envelope import EventEnvelope, JsonValue, StreamId
+from mote.contracts.events.envelope import EventEnvelope, JsonValue, StreamId, thaw_json
 from mote.contracts.ports.events.journal import AppendResult
-from mote.runtime.events.journal import LocalEventJournal
-from mote.runtime.persistence import DiskWriter
+from mote.runtime.events.journal import LocalEventJournal, decode_event_record
+from mote.runtime.persistence import DiskWriter, disk_io
 from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.session.codec import decode_session_event, encode_session_event, session_stream_id
 from mote.runtime.session.events import SessionEvent, SessionMetaEvent
 from mote.runtime.session.layout import SessionLayout
+from mote.runtime.session.stream_ownership import SessionStreamOwnership
 from mote.runtime.telemetry.logging import log_class
 
 #: Directory name under the workspace root holding all session logs.
 SESSIONS_DIRNAME = SessionLayout().sessions_dir
 ROLLOUT_FILENAME = SessionLayout().rollout_file
+SESSION_STREAM_MANIFEST_SCHEMA = "mote.session-stream-activation/v2"
 
 
 def _default_base_dir() -> Path:
@@ -55,10 +60,12 @@ class SessionLog:
         self._dir = base / session_id
         self._path = self._dir / ROLLOUT_FILENAME
         self._stream_id = StreamId(session_stream_id(session_id))
+        self._stream_ownership = SessionStreamOwnership(self._runtime_root, session_id)
         self._journal = LocalEventJournal(
             self._path,
             self._stream_id,
             writer=writer,
+            commit_guard=self._stream_ownership,
         )
         self._schema_checked = False
         self._version = 0
@@ -100,6 +107,13 @@ class SessionLog:
     def committed_version(self) -> int:
         self._ensure_current_schema()
         return self._version
+
+    @property
+    def lifecycle_generation(self) -> int:
+        return self._stream_ownership.lifecycle_generation
+
+    def release_writer(self) -> None:
+        self._stream_ownership.release()
 
     def bind_async_sink(
         self,
@@ -188,6 +202,7 @@ class SessionLog:
     def _ensure_current_schema(self) -> None:
         if self._schema_checked:
             return
+        self._ensure_stream_activation()
         self.writer.flush_inline()
         report = self._journal.verify_committed(self._stream_id)
         if not report.valid:
@@ -196,5 +211,121 @@ class SessionLog:
         self._version = report.current_version
         self._schema_checked = True
 
+    def _ensure_stream_activation(self) -> None:
+        manifest = self._dir / "stream-manifest.json"
+        if manifest.exists():
+            try:
+                raw = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise RuntimeError("Session stream activation manifest is unreadable") from exc
+            if type(raw) is not dict or raw.get("schema") != SESSION_STREAM_MANIFEST_SCHEMA:
+                raise RuntimeError("Session stream activation manifest is unsupported")
+            kind = raw.get("activation_kind")
+            common = {
+                "schema",
+                "activation_kind",
+                "session_id",
+                "source_digest",
+                "candidate_digest",
+                "candidate_size",
+                "projection_digest",
+                "record_count",
+                "evidence_retention_days",
+                "legacy_production_reader",
+                "activated_at",
+                "retire_after",
+            }
+            expected = common | ({"artifact_edges_digest"} if kind == "migrated" else set())
+            if (
+                set(raw) != expected
+                or kind not in {"empty", "migrated"}
+                or raw.get("session_id") != self.session_id
+                or raw.get("legacy_production_reader") != "retired"
+                or type(raw.get("candidate_size")) is not int
+                or type(raw.get("record_count")) is not int
+            ):
+                raise RuntimeError("Session stream activation manifest is not strict v2")
+            candidate_size = raw["candidate_size"]
+            record_count = raw["record_count"]
+            try:
+                activated_at = datetime.fromisoformat(raw["activated_at"])
+                retire_after = datetime.fromisoformat(raw["retire_after"])
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("Session activation instants are invalid") from exc
+            if (
+                activated_at.tzinfo is None
+                or retire_after.tzinfo is None
+                or retire_after != activated_at + timedelta(days=180)
+            ):
+                raise RuntimeError("Session activation evidence retention is invalid")
+            if candidate_size < 0 or record_count < 0:
+                raise RuntimeError("Session stream activation bounds are invalid")
+            data = self._path.read_bytes() if self._path.exists() else b""
+            prefix = data[:candidate_size]
+            if (
+                len(prefix) != candidate_size
+                or "sha256:" + hashlib.sha256(prefix).hexdigest() != raw["candidate_digest"]
+            ):
+                raise RuntimeError("Session stream activation candidate digest mismatch")
+            projection = []
+            for line in prefix.splitlines(keepends=True):
+                envelope = decode_event_record(line)
+                projection.append(
+                    (
+                        envelope.sequence,
+                        str(envelope.event_type),
+                        "sha256:"
+                        + hashlib.sha256(
+                            json.dumps(
+                                thaw_json(cast(JsonValue, envelope.payload)),
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ).encode()
+                        ).hexdigest(),
+                    )
+                )
+            projection_digest = (
+                "sha256:"
+                + hashlib.sha256(json.dumps(projection, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            )
+            if len(projection) != record_count or projection_digest != raw["projection_digest"]:
+                raise RuntimeError("Session stream activation projection digest mismatch")
+            if kind == "migrated":
+                edges = self._dir / "artifact-edges.v2.json"
+                try:
+                    edge_data = edges.read_bytes()
+                except OSError as exc:
+                    raise RuntimeError("Session Artifact edge candidate is unavailable") from exc
+                if "sha256:" + hashlib.sha256(edge_data).hexdigest() != raw["artifact_edges_digest"]:
+                    raise RuntimeError("Session Artifact edge digest mismatch")
+            return
+        if self._path.exists():
+            raise RuntimeError("Session stream requires explicit v1 to v2 migration")
+        empty_digest = "sha256:" + hashlib.sha256(b"").hexdigest()
+        empty_projection = "sha256:" + hashlib.sha256(b"[]").hexdigest()
+        activated_at = datetime.now(timezone.utc)
+        disk_io.atomic_write(
+            manifest,
+            json.dumps(
+                {
+                    "schema": SESSION_STREAM_MANIFEST_SCHEMA,
+                    "activation_kind": "empty",
+                    "session_id": self.session_id,
+                    "source_digest": "empty",
+                    "candidate_digest": empty_digest,
+                    "candidate_size": 0,
+                    "projection_digest": empty_projection,
+                    "record_count": 0,
+                    "evidence_retention_days": 180,
+                    "legacy_production_reader": "retired",
+                    "activated_at": activated_at.isoformat(),
+                    "retire_after": (activated_at + timedelta(days=180)).isoformat(),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode(),
+            fsync=True,
+        )
 
-__all__ = ["SessionLog", "SESSIONS_DIRNAME", "ROLLOUT_FILENAME"]
+
+__all__ = ["SessionLog", "SESSIONS_DIRNAME", "ROLLOUT_FILENAME", "SESSION_STREAM_MANIFEST_SCHEMA"]

@@ -29,7 +29,7 @@ from contextlib import nullcontext
 from typing import Awaitable, Callable, ContextManager, Dict, Optional
 
 from mote.contracts.clock import AbsoluteInstant
-from mote.contracts.conversation import Message
+from mote.contracts.conversation import Message, dump_message
 from mote.contracts.ports.runtime.lease import LeaseEpoch
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime
 from mote.orchestration.agents.messaging.mailbox import DeliveryMode
@@ -37,6 +37,7 @@ from mote.orchestration.agents.turn_queue.limiter import AgentExecutionLimiter
 from mote.orchestration.agents.turn_queue.model import (
     TurnAcceptanceRequest,
     TurnAdmissionDisposition,
+    TurnMutationDisposition,
     TurnPriority,
     TurnQueueIdentity,
 )
@@ -56,6 +57,7 @@ class EventDrivenScheduler:
         control_binder: Optional[Callable[[], ContextManager]] = None,
         pending_flush: Optional[Callable[[], Awaitable]] = None,
         delivery_ack: Callable[[str, tuple[str, ...]], None] | None = None,
+        delivery_bind: Callable[[str, tuple[str, ...], str, str], None] | None = None,
         durable_store: DurableTurnQueueStore | None = None,
         durable_lease: LeaseEpoch | None = None,
         scheduling_config: TurnSchedulingConfig | None = None,
@@ -78,6 +80,7 @@ class EventDrivenScheduler:
         # could have improved — i.e. right after a turn frees a resident.
         self._pending_flush = pending_flush
         self._delivery_ack = delivery_ack
+        self._delivery_bind = delivery_bind
         durable_values = (durable_store, durable_lease, scheduling_config, now)
         if any(value is None for value in durable_values) != all(value is None for value in durable_values):
             raise ValueError("durable turn scheduling dependencies must be complete")
@@ -247,8 +250,14 @@ class EventDrivenScheduler:
             request_id = (
                 "turn_" + hashlib.sha256((runtime.session_id + "\0" + "\0".join(delivery_ids)).encode()).hexdigest()
             )
+            payload_digest = hashlib.sha256(
+                "\0".join(
+                    hashlib.sha256(dump_message(message).encode("utf-8")).hexdigest() for message in messages
+                ).encode()
+            ).hexdigest()
             assert self._now is not None and self._scheduling_config is not None
-            receipt = self._durable_store.accept(
+            assert self._durable_lease is not None
+            receipt = self._durable_store.prepare_acceptance(
                 TurnAcceptanceRequest(
                     TurnQueueIdentity(
                         self._durable_store.load().queue_id,
@@ -263,12 +272,27 @@ class EventDrivenScheduler:
                     self._now(),
                     None,
                     3,
-                )
+                    payload_digest,
+                ),
+                lease=self._durable_lease,
             )
             if receipt.disposition not in {
                 TurnAdmissionDisposition.ACCEPTED,
                 TurnAdmissionDisposition.DUPLICATE,
             }:
+                runtime.mailbox.restore_processing(messages, delivery_ids)
+                return None
+            if receipt.revision is None:
+                runtime.mailbox.restore_processing(messages, delivery_ids)
+                return None
+            if self._delivery_bind is not None:
+                self._delivery_bind(runtime.session_id, delivery_ids, request_id, payload_digest)
+            committed = self._durable_store.commit_acceptance(
+                request_id=request_id,
+                expected_item_revision=receipt.revision,
+                lease=self._durable_lease,
+            )
+            if committed.disposition is not TurnMutationDisposition.APPLIED:
                 runtime.mailbox.restore_processing(messages, delivery_ids)
                 return None
         for message in messages:
@@ -303,14 +327,18 @@ class EventDrivenScheduler:
                 lease=self._durable_lease,
             )
             raise
+        delivery_ack = self._delivery_ack
         receipt = self._durable.settle(
             claim,
             succeeded=succeeded,
             reason="turn_completed" if succeeded else "turn_failed",
             lease=self._durable_lease,
+            acknowledge=(
+                None
+                if not succeeded or delivery_ack is None
+                else lambda: delivery_ack(runtime.session_id, claim.item.identity.delivery_ids)
+            ),
         )
-        if succeeded and self._delivery_ack is not None:
-            self._delivery_ack(runtime.session_id, claim.item.identity.delivery_ids)
 
     def cancel_agent_turns(self, agent_id: str) -> None:
         if self._durable is not None and self._durable_lease is not None:

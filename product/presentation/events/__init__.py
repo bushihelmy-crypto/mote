@@ -78,6 +78,7 @@ from mote.product.presentation.events.events import (
     ToolCallStarted,
     TranscriptCleared,
     UsageUpdated,
+    UserMediaIdentity,
     ViewEvent,
 )
 from mote.product.presentation.events.folding import GROUP_READ_TOOLS, GROUP_SEARCH_TOOLS, FoldMode, fold_mode
@@ -98,6 +99,7 @@ __all__ = [
     "ToolCallStarted",
     "ToolCallCompleted",
     "MediaBlock",
+    "UserMediaIdentity",
     "ArtifactBlock",
     "FileDiffBlock",
     "TaskProgress",

@@ -205,6 +205,16 @@ class _StdioEndpoint:
             for task in list(self._inflight):
                 if not task.done():
                     task.cancel()
+            if self._inflight:
+                settlements = await asyncio.gather(*tuple(self._inflight), return_exceptions=True)
+                failures = [
+                    item
+                    for item in settlements
+                    if isinstance(item, BaseException) and not isinstance(item, asyncio.CancelledError)
+                ]
+                if failures:
+                    details = "; ".join(f"{type(item).__name__}: {item}" for item in failures)
+                    raise RuntimeError(f"ACP request shutdown failed: {details}")
 
     @staticmethod
     def _decode(line: bytes) -> Optional[JsonObject]:
@@ -334,6 +344,7 @@ class AcpServer:
         # the registry and interrupt it (the session object itself lives there —
         # no need to duplicate control+agent here).
         self._active_turns: Set[str] = set()
+        self._cancel_tasks: Set[asyncio.Task[object]] = set()
 
     # ------------------------------------------------------------------
     # Wire binding
@@ -354,6 +365,8 @@ class AcpServer:
         """Bind + run the read loop to completion (client closing stdin ends it)."""
         endpoint = self.bind(reader, writer)
         await endpoint.serve_forever()
+        if self._cancel_tasks:
+            await asyncio.gather(*tuple(self._cancel_tasks), return_exceptions=True)
         await self._registry.aclose()
 
     # ------------------------------------------------------------------
@@ -482,12 +495,22 @@ class AcpServer:
         session = self._registry.get(session_id)
         if session is None:
             return
-        # Interrupt the in-flight turn; its prompt reply then resolves cancelled.
-        # Best-effort, scheduled on the loop (the notification path is sync).
+        # Interrupt the in-flight turn; retain and observe the typed settlement.
+        task = asyncio.create_task(
+            session.control.interrupt(session.agent_id),
+            name=f"acp-cancel:{session_id}",
+        )
+        self._cancel_tasks.add(task)
+        task.add_done_callback(self._settle_cancel)
+
+    def _settle_cancel(self, task: asyncio.Task[object]) -> None:
+        self._cancel_tasks.discard(task)
         try:
-            asyncio.ensure_future(session.control.interrupt(session.agent_id))
-        except Exception as exc:  # noqa: BLE001 — cancel is best-effort
-            logger.debug(f"AcpServer: cancel for {session_id[:8]} failed: {exc}")
+            task.result()
+        except asyncio.CancelledError:
+            logger.debug("AcpServer: cancel command was cancelled during shutdown")
+        except Exception as exc:  # noqa: BLE001 - observed control settlement
+            logger.warning(f"AcpServer: cancel command failed: {exc}")
 
     # ------------------------------------------------------------------
     # Param helpers

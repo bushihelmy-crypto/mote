@@ -61,7 +61,7 @@ class ActionExecutionService:
                 turn = await channel.model_turn(self._inference_engine.result)
             commands = self._dispatcher.tool_commands(turn, set(self._context().tools))
             self._report_think_result(self._inference_engine.result)
-            content = self._inference_engine.result.content
+            content = self._inference_engine.result.content or ""
             operation_prefix = self._inference_engine.model_call_id or "inference"
 
             executed = [

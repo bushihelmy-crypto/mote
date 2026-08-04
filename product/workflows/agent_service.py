@@ -1,6 +1,10 @@
 """Per-Agent Product capability for durable Workflow submission and inspection."""
 
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import cast
 
 from mote.contracts.agent.runtime_identity import AgentId
 from mote.contracts.async_work import (
@@ -13,10 +17,10 @@ from mote.contracts.async_work import (
     WorkflowCancelReceipt,
     WorkflowResumeDisposition,
 )
-from mote.contracts.conversation import UserMessage
+from mote.contracts.events.envelope import JsonValue, freeze_json
 from mote.contracts.ports.artifact.store import ReliableArtifactPublisher
 from mote.contracts.ports.async_work.observation import AsyncWorkQueryDisposition, AsyncWorkQueryResult
-from mote.contracts.ports.task.operations import BackgroundMessageSink
+from mote.contracts.ports.task.operations import BackgroundTaskService
 from mote.contracts.ports.workflow.execution import WorkflowNodeExecutionPort
 from mote.contracts.runtime.operation_ownership import OperationOwnership
 from mote.contracts.session.identity import SessionId
@@ -29,17 +33,23 @@ from mote.contracts.workflow import (
     WorkflowRunReference,
 )
 from mote.contracts.workflow.command import WorkflowCancelReason
-from mote.orchestration.workflows.control_context import resolve_workflow_caller_control
+from mote.orchestration.agents.control_context import resolve_workflow_caller_control
 from mote.orchestration.workflows.deferred import WorkflowDeferredResult, WorkflowRunMetadata
 from mote.orchestration.workflows.durable import CreateWorkflowRun
-from mote.orchestration.workflows.types import GraphRunState
-from mote.product.agents.background_tasks import AgentBackgroundTasks
+from mote.orchestration.workflows.types import GraphPause, GraphRunState, GraphState
 from mote.product.async_work.service import CurrentAgentAsyncWorkCommandService, CurrentAgentAsyncWorkObservationService
 from mote.product.workflows.durability import ProductWorkflowDurability
 from mote.product.workflows.execution_adapter import WorkflowExecutionAdapter
-from mote.product.workflows.inspection import WorkflowRunView
+from mote.product.workflows.inspection import WorkflowGraphView, WorkflowNodeView, WorkflowRunView
 from mote.runtime.clock import SystemClock
 from mote.runtime.tools.execution_context import current_tool_call_id
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowResumePlan:
+    from_nodes: tuple[str, ...] = ()
+    skip_nodes: tuple[str, ...] = ()
+    overrides: dict[str, object] | None = None
 
 
 class AgentWorkflowService:
@@ -48,7 +58,7 @@ class AgentWorkflowService:
     def __init__(
         self,
         durability: ProductWorkflowDurability,
-        local_tasks: AgentBackgroundTasks,
+        local_tasks: BackgroundTaskService,
         artifact_publisher: ReliableArtifactPublisher,
         workflow_nodes: WorkflowNodeExecutionPort,
     ) -> None:
@@ -57,18 +67,10 @@ class AgentWorkflowService:
         self._workflow_nodes = workflow_nodes
         self._session_id = local_tasks.session_id
         self._agent_id = AgentId(str(self._session_id))
-        self._message_sink = local_tasks.message_sink
         self._local_async_work = local_tasks.async_work_adapter()
-        self._destinations: set[str] = set()
         self._durability.register_execution_activator(self._agent_id, self._reactivate)
-        prefix = f"agent:{self._session_id}:workflow:"
-        for destination_id in durability.pending_terminal_destinations(prefix):
-            self._register_destination(
-                destination_id,
-                WorkflowRunId(destination_id.removeprefix(prefix)),
-            )
 
-    def submit(self, deferred: WorkflowDeferredResult) -> DurableWorkflowRunSubmission:
+    def submit(self, deferred: WorkflowDeferredResult[GraphState | GraphPause]) -> DurableWorkflowRunSubmission:
         if deferred.graph_meta is None:
             raise ValueError("background Workflow requires durable graph metadata")
         run, projection = self._workflow_run(deferred.graph_meta)
@@ -85,30 +87,41 @@ class AgentWorkflowService:
         projection = self._durability.query(reference)
         if projection is None:
             return None
-        definition = self._durability.resolve_definition_source(
+        executable = self._durability.resolve_definition_source(
             projection.definition_source,
             expected_definition_id=projection.reference.definition_id,
             expected_digest=projection.definition_digest,
             workflow_nodes=self._workflow_nodes,
         )
+        definition = executable.definition
         initial = json.loads(projection.initial_input_payload)
         if projection.checkpoint_payload == "{}":
-            state = definition._graph.state_schema(**initial)
-            run_state = GraphRunState.for_graph(definition._graph)
+            state = executable._graph.state_schema(**initial)
+            run_state = GraphRunState.for_graph(executable._graph)
         else:
-            state, run_state = definition.restore_checkpoint(projection.checkpoint_payload)
-        run = self._restore_from_projection(projection, definition=definition)
+            state, run_state = executable.restore_checkpoint(projection.checkpoint_payload)
+        frozen_state = freeze_json(state.model_dump(mode="json"), path="workflow inspection state")
+        if not isinstance(frozen_state, Mapping):
+            raise TypeError("Workflow inspection state must be an object")
+        graph = executable._graph
+        graph_view = WorkflowGraphView(
+            nodes=MappingProxyType(
+                {
+                    name: WorkflowNodeView(
+                        name,
+                        node.description,
+                        MappingProxyType(dict(node.params)),
+                    )
+                    for name, node in graph._nodes.items()
+                }
+            ),
+            self_loop_nodes=frozenset(name for name in graph._nodes if graph.is_self_loop(name)),
+        )
         return WorkflowRunView(
             reference,
-            run,
-            WorkflowRunMetadata(
-                graph_ref=definition._graph,
-                initial_params=initial,
-                run_state=run_state,
-                state=state,
-                from_nodes=projection.frontier,
-                definition_source=projection.definition_source,
-            ),
+            run_state,
+            cast(Mapping[str, JsonValue], frozen_state),
+            graph_view,
             status=projection.phase,
         )
 
@@ -133,10 +146,12 @@ class AgentWorkflowService:
     def resume(
         self,
         reference: WorkflowRunReference,
-        deferred: WorkflowDeferredResult,
+        deferred: WorkflowDeferredResult[GraphState | GraphPause],
     ) -> WorkflowRunReference:
         if deferred.graph_meta is None:
             raise ValueError("Workflow resume requires durable graph metadata")
+        if deferred.graph_meta.executable is not None:
+            raise ValueError("Workflow resume cannot accept a live graph continuation")
         observed = self._async_work_service().get(DurableWorkflowRunReference(reference))
         if observed.disposition is not AsyncWorkQueryDisposition.FOUND or not isinstance(
             observed.observation, DurableWorkflowRunObservation
@@ -158,16 +173,17 @@ class AgentWorkflowService:
                 workflow_nodes=self._workflow_nodes,
             )
             metadata = deferred.graph_meta
-            if metadata.state is None or metadata.run_state is None:
-                raise ValueError("Workflow resume requires checkpoint state")
-            checkpoint_payload = definition.encode_checkpoint(metadata.state, metadata.run_state)
+            # LangGraph-style resume: the durable projection owns checkpoint
+            # and pending frontier.  Deferred metadata is presentation-only.
+            checkpoint_payload = durable_projection.checkpoint_payload
+            frontier = durable_projection.frontier
             receipt = self._bound_async_work(execution_ownership).resume(
                 ResumeDurableWorkflowRun(
                     DurableWorkflowRunReference(reference),
                     observed.observation.revision,
                     pause.resume_nonce,
                     checkpoint_payload,
-                    tuple(metadata.from_nodes),
+                    tuple(frontier),
                 )
             )
             if receipt.disposition is not WorkflowResumeDisposition.RESUMED:
@@ -190,20 +206,66 @@ class AgentWorkflowService:
                 self._durability.release_execution(execution_ownership)
         return reference
 
+    async def resume_plan(self, reference: WorkflowRunReference, plan: WorkflowResumePlan) -> WorkflowRunReference:
+        """Resolve the approved definition and build continuation inside Product composition."""
+        projection = self._durability.query(reference)
+        if projection is None:
+            raise KeyError(reference)
+        executable = self._durability.resolve_definition_source(
+            projection.definition_source,
+            expected_definition_id=reference.definition_id,
+            expected_digest=projection.definition_digest,
+            workflow_nodes=self._workflow_nodes,
+        )
+        initial = json.loads(projection.initial_input_payload)
+        if projection.checkpoint_payload == "{}":
+            state = executable._graph.state_schema(**initial)
+            run_state = GraphRunState.for_graph(executable._graph)
+        else:
+            state, run_state = executable.restore_checkpoint(projection.checkpoint_payload)
+        if plan.overrides:
+            valid_fields = set(type(state).model_fields)
+            unknown = set(plan.overrides) - valid_fields
+            if unknown:
+                raise ValueError(f"unknown Workflow override fields: {sorted(unknown)}")
+            state = type(state).model_validate(
+                {**state.model_dump(mode="python"), **plan.overrides},
+                strict=True,
+            )
+        graph = executable._graph
+        for name in plan.from_nodes + plan.skip_nodes:
+            if name not in graph._nodes:
+                raise ValueError(f"unknown Workflow node: {name}")
+        if plan.skip_nodes and plan.from_nodes:
+            deferred = graph.resume_skip_and_from(
+                state=state,
+                skip_nodes=list(plan.skip_nodes),
+                from_nodes=list(plan.from_nodes),
+                run_state=run_state,
+            )
+        elif plan.skip_nodes:
+            deferred = graph.resume_skip(state=state, skip_nodes=list(plan.skip_nodes), run_state=run_state)
+        elif plan.from_nodes:
+            deferred = graph.resume(state=state, from_nodes=list(plan.from_nodes), run_state=run_state)
+        else:
+            deferred = await executable.compile()(**{**initial, **(plan.overrides or {})})
+        return self.resume(reference, deferred)
+
     def _workflow_run(self, graph_meta):
-        graph = graph_meta.graph_ref
-        if graph is None:
-            raise ValueError("Workflow metadata requires a graph")
-        live_definition = graph.build()
+        live_executable = graph_meta.executable
+        if live_executable is None:
+            raise ValueError("Workflow metadata requires an executable")
+        live_definition = live_executable.definition
         source = graph_meta.definition_source
         if source is None:
             raise ValueError("durable Workflow requires a declarative source or trusted blueprint")
-        definition = self._durability.resolve_definition_source(
+        executable = self._durability.resolve_definition_source(
             source,
             expected_definition_id=live_definition.definition_id,
             expected_digest=live_definition.digest,
             workflow_nodes=self._workflow_nodes,
         )
+        definition = executable.definition
         request_id = graph_meta.request_id or current_tool_call_id()
         if not request_id:
             raise ValueError("durable Workflow create request identity is required")
@@ -242,12 +304,12 @@ class AgentWorkflowService:
             caller,
             control,
         )
-        run = self._restore_from_projection(projection, definition=definition)
+        run = self._restore_from_projection(projection, executable=executable)
         return run, projection
 
-    def _restore_from_projection(self, projection, *, definition=None):
-        if definition is None:
-            definition = self._durability.resolve_definition_source(
+    def _restore_from_projection(self, projection, *, executable=None):
+        if executable is None:
+            executable = self._durability.resolve_definition_source(
                 projection.definition_source,
                 expected_definition_id=projection.reference.definition_id,
                 expected_digest=projection.definition_digest,
@@ -255,9 +317,9 @@ class AgentWorkflowService:
             )
         initial = json.loads(projection.initial_input_payload)
         if projection.checkpoint_payload == "{}":
-            return definition.start(initial)
-        checkpoint, run_state = definition.restore_checkpoint(projection.checkpoint_payload)
-        return definition.start(
+            return executable.start(initial)
+        checkpoint, run_state = executable.restore_checkpoint(projection.checkpoint_payload)
+        return executable.start(
             initial,
             checkpoint=checkpoint,
             run_state=run_state,
@@ -285,29 +347,9 @@ class AgentWorkflowService:
     def _bind_delivery(self, reference: WorkflowRunReference, operation: WorkflowExecutionAdapter) -> None:
         destination_id = f"agent:{self._session_id}:workflow:{reference.run_id}"
         operation.bind_terminal_destination(destination_id)
-        if destination_id not in self._destinations:
-            self._register_destination(destination_id, reference.run_id)
-
-    def _register_destination(self, destination_id: str, run_id: WorkflowRunId) -> None:
-        if not run_id:
-            raise ValueError("durable Workflow destination requires a RunId")
-
-        def deliver(delivery) -> bool:
-            self._message_sink.push(
-                UserMessage(
-                    content=(f"<workflow-result run_id={run_id!r}>" f"{delivery.outcome_payload}</workflow-result>")
-                )
-            )
-            return True
-
-        self._durability.register_terminal_deliverer(destination_id, deliver)
-        self._destinations.add(destination_id)
 
     async def aclose(self) -> None:
         self._durability.unregister_execution_activator(self._agent_id)
-        for destination_id in self._destinations:
-            self._durability.unregister_terminal_deliverer(destination_id)
-        self._destinations.clear()
 
 
 __all__ = ["AgentWorkflowService"]

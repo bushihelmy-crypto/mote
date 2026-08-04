@@ -155,7 +155,8 @@ def test_shared_uds_authentication_start_and_cursor_resume(tmp_path):
             assert observed.artifact_digest == artifact.artifact_digest
             readiness = await client.get_readiness()
             assert readiness.ready is True
-            assert readiness.components == {"admission": "ready"}
+            assert readiness.components == (("admission", "ready"),)
+            assert readiness.component("admission") == "ready"
             response = await client.start_unary(
                 pb.StartRequest(
                     envelope=client.envelope(idempotency_key="start:execution"),

@@ -29,7 +29,7 @@ def test_atomic_write_shape(tmp_path):
     store = make_store(tmp_path)
     store.add(CronTask.new("* * * * *", "ping", 1000), capacity_limit=50)
     data = json.loads(store.path.read_text())
-    assert data["schema"] == "mote.cron-schedule/v2"
+    assert data["schema"] == "mote.cron-schedule/v3"
     assert data["revision"] == 1
     assert "tasks" in data
     assert isinstance(data["tasks"], list)
@@ -90,11 +90,11 @@ def test_load_missing_file(tmp_path):
     assert make_store(tmp_path).load() == []
 
 
-def test_mtime_none_when_absent(tmp_path):
+def test_snapshot_revision_advances_without_filesystem_metadata(tmp_path):
     store = make_store(tmp_path)
-    assert store.mtime() is None
+    assert store.load_snapshot().revision == 0
     store.add(CronTask.new("* * * * *", "ping", 1000), capacity_limit=50)
-    assert store.mtime() is not None
+    assert store.load_snapshot().revision == 1
 
 
 def test_save_requires_matching_schedule_revision(tmp_path):

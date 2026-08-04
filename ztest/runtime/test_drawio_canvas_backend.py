@@ -5,7 +5,7 @@ from xml.etree import ElementTree
 
 import pytest
 
-from mote.contracts.surface import CanvasDocument, CanvasElement
+from mote.contracts.surface import CanvasArrow, CanvasDocument, CanvasEllipse, CanvasRectangle, CanvasText
 from mote.runtime.interactive.canvas.backends.drawio import (
     DrawioCanvasBackend,
     DrawioCanvasSession,
@@ -40,10 +40,9 @@ def test_drawio_file_maps_canonical_shapes_and_edges():
         width=900,
         height=600,
         elements=[
-            CanvasElement(id="node", kind="ellipse", x=20, y=30, width=120, height=80),
-            CanvasElement(
+            CanvasEllipse(id="node", x=20, y=30, width=120, height=80),
+            CanvasArrow(
                 id="edge",
-                kind="arrow",
                 x=80,
                 y=110,
                 x2=400,
@@ -66,9 +65,8 @@ def test_drawio_file_maps_canonical_shapes_and_edges():
 def test_drawio_file_auto_sizes_unbounded_text_and_uses_fill_as_font_color():
     scene = CanvasDocument(
         elements=[
-            CanvasElement(
+            CanvasText(
                 id="label",
-                kind="text",
                 x=30,
                 y=40,
                 text="中文 Canvas 标签",
@@ -92,9 +90,8 @@ def test_drawio_file_auto_sizes_unbounded_text_and_uses_fill_as_font_color():
 def test_drawio_file_preserves_explicit_text_box_wrapping():
     scene = CanvasDocument(
         elements=[
-            CanvasElement(
+            CanvasText(
                 id="label",
-                kind="text",
                 text="wrapped label",
                 width=180,
                 height=60,
@@ -139,7 +136,7 @@ def test_drawio_cell_round_trip_preserves_native_extension_and_stable_id():
 
 @pytest.mark.asyncio
 async def test_drawio_document_export_is_deterministic_and_opens_no_session():
-    scene = CanvasDocument(elements=[CanvasElement(id="box", kind="rect")])
+    scene = CanvasDocument(elements=[CanvasRectangle(id="box")])
     backend = DrawioCanvasBackend(executable="unused")
 
     first = await backend.export(scene, "drawio")

@@ -106,14 +106,14 @@ class MCPToolAdapter(BaseTool):
         """Invoke the underlying MCP tool with LLM-specified parameters."""
         return await self._mcp.call_tool(self.name, kwargs)
 
-    def xml_definition(self) -> XmlToolDefinition[Any]:
+    def xml_definition(self) -> XmlToolDefinition:
         """Build the explicit XML registration with scalar argument decoding."""
 
         description = self._tool.description
         input_schema = self._input_schema
         decoder = _xml_mcp_decoder(self.name, input_schema)
 
-        def render(_capability: Any) -> XmlToolSchema:
+        def render(_capability: BaseTool) -> XmlToolSchema:
             return {
                 "name": self.name,
                 "description": description,
@@ -135,12 +135,12 @@ class MCPToolAdapter(BaseTool):
             category="mcp",
         )
 
-    def native_definition(self) -> NativeToolDefinition[Any]:
+    def native_definition(self) -> NativeToolDefinition:
         """Build the explicit Native registration discovered from MCP."""
 
         description = self._tool.description
 
-        def render(_capability: Any) -> NativeToolSchema:
+        def render(_capability: BaseTool) -> NativeToolSchema:
             return {
                 "name": self.name,
                 "description": description,

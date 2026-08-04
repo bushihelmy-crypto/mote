@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any, Literal
 
 from mote.contracts.config.tool import DEFAULT_MAX_RESULT_SIZE_CHARS, ToolResultLimitConfig
+from mote.contracts.events.envelope import freeze_json
 from mote.contracts.events.file.observation import FileMutatedEvent
 from mote.contracts.events.tool import ToolCallFinishedEvent, ToolInvocationStartedEvent, ToolsChangedEvent
 from mote.contracts.ports.events.telemetry import TelemetryEmitter
@@ -15,11 +16,12 @@ from mote.contracts.tool.effects import ToolEffect
 from mote.contracts.tool.identity import ToolInvocationIdentity
 from mote.contracts.tool.policy import ToolResultIntent
 from mote.runtime.events.scope import current_scope
-from mote.runtime.ledger import RunJournal
 from mote.runtime.resources import spill as tool_result_limit
 from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.telemetry.logging import logger
 from mote.runtime.tools.compress.tool_output import compress_tool_result
+from mote.runtime.tools.effect_store import ToolEffectStore
+from mote.runtime.tools.tool_binding import ExecutableToolBinding
 from mote.runtime.tools.tool_result import ToolResult
 from mote.runtime.tools.tool_result_receipt import encode_tool_result_receipt
 
@@ -34,8 +36,8 @@ class ToolSettlement:
         *,
         session_id: str,
         telemetry: TelemetryEmitter[ToolObservationEvent],
-        get_tool: Callable[[str], Any],
-        journal: RunJournal | None,
+        get_tool: Callable[[str], ExecutableToolBinding | None],
+        effect_store: ToolEffectStore | None,
         limit_config: ToolResultLimitConfig,
         workspace_store: SessionWorkspace,
         policy: ToolResultPolicy,
@@ -43,7 +45,7 @@ class ToolSettlement:
         self._session_id = session_id
         self._telemetry = telemetry
         self._get_tool = get_tool
-        self._journal = journal
+        self._effect_store = effect_store
         self._limit_config = limit_config
         self._workspace_store = workspace_store
         self._policy = policy
@@ -164,12 +166,13 @@ class ToolSettlement:
             config=self._limit_config,
         )
         result = self._limit_result(result, name, str(identity.invocation_id))
-        if ledgered and self._journal is not None:
+        if ledgered and self._effect_store is not None:
             receipt = encode_tool_result_receipt(result)
-            if execution_success:
-                self._journal.record_completed(str(identity.invocation_id), payload=receipt)
-            else:
-                self._journal.record_failed(str(identity.invocation_id), payload=receipt)
+            self._effect_store.settle(
+                str(identity.invocation_id),
+                succeeded=execution_success,
+                receipt=receipt,
+            )
         return result
 
     async def _present(
@@ -182,7 +185,9 @@ class ToolSettlement:
         executed: bool,
     ) -> ToolResult:
         tool = self._get_tool(name)
-        error = result.error.as_dict() if result.error is not None else None
+        error = freeze_json(result.error.as_dict(), path="tool result error") if result.error is not None else None
+        if error is not None and not isinstance(error, Mapping):
+            raise TypeError("tool result error must be a JSON object")
         presentation = await self._policy.present(
             ToolResultIntent(
                 identity=identity,
@@ -212,7 +217,7 @@ class ToolSettlement:
         if not config.enable_tool_result_limit or not result.output or result.media:
             return result
         tool = self._get_tool(name)
-        cap = getattr(tool, "max_result_size_chars", DEFAULT_MAX_RESULT_SIZE_CHARS)
+        cap = tool.max_result_size_chars if tool is not None else DEFAULT_MAX_RESULT_SIZE_CHARS
         output = tool_result_limit.enforce_tool_result_limit(
             result.output,
             name,

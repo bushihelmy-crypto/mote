@@ -54,13 +54,16 @@ class FileWatcher:
         self._ignore = list(ignore or [])
         self._runner = PeriodicLoop(
             check_interval,
-            self.poll,
+            self._tick,
             name="file-watcher",
         )  # type: ignore[arg-type]
         self._state: _State = {}
         self._state_lock = threading.Lock()
         self._poll_lock = asyncio.Lock()
         self._primed = False
+
+    async def _tick(self) -> None:
+        await self.poll()
 
     async def start_async(self) -> None:
         state = await self._snapshot_async()

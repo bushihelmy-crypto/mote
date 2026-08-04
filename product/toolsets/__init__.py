@@ -31,7 +31,7 @@ from mote.product.workflows.cancel_run import CancelWorkflowRun
 from mote.product.workflows.run_graph.get_node_state import GetNodeState
 from mote.product.workflows.run_graph.resume_tasks import ResumeTasks
 from mote.product.workflows.run_graph.tool import RunGraph
-from mote.runtime.tools.provider import AnyToolset
+from mote.runtime.tools.provider import ContextFreeToolset
 from mote.runtime.tools.tool_registry import NativeCatalogToolset, ToolCatalog, XmlCatalogToolset
 
 _BUILTIN_TOOL_TYPES = (
@@ -98,7 +98,7 @@ def builtin_toolsets(
     catalog: ToolCatalog | None = None,
     capability_factories: Mapping[str, Callable[[], Any]] | None = None,
     descriptions: Mapping[str, str] | None = None,
-) -> tuple[AnyToolset, ...]:
+) -> tuple[ContextFreeToolset, ...]:
     """Return the standard, mutually exclusive Product Toolsets.
 
     Every returned adapter reads the same immutable Application snapshot while

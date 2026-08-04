@@ -6,13 +6,46 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from mote.contracts.config.model.oauth import GrantType, OAuthProviderConfig
 from mote.runtime.models.auth.oauth.manager import OAuthManager
 from mote.runtime.models.auth.oauth.models import OAuthToken
+from mote.runtime.models.auth.oauth.storage.base import (
+    CredentialAction,
+    CredentialCommand,
+    CredentialCommandDisposition,
+    CredentialState,
+    CredentialUse,
+)
 from mote.runtime.models.auth.oauth.storage.file_store import FileCredentialStore
+
+
+def _publish(store: FileCredentialStore, token: OAuthToken) -> None:
+    current = store.load_metadata()
+    store.publish(token, expected_revision=0 if current is None else current.revision)
+
+
+def _borrow_token(store: FileCredentialStore) -> OAuthToken:
+    borrowed = store.borrow(
+        CredentialUse(store.external_name, "test-account", (), "test-consumer"),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    assert borrowed is not None
+    try:
+        return borrowed.token
+    finally:
+        store.release_borrow(borrowed)
+
+
+def _access(manager: OAuthManager) -> str:
+    borrowed = manager.acquire_valid_borrow(expires_at=datetime.now(timezone.utc) + timedelta(minutes=5))
+    try:
+        return borrowed.token.access_token
+    finally:
+        manager.release_borrow(borrowed)
 
 
 class FakeClient:
@@ -35,11 +68,14 @@ class FakeClient:
             expires_at=time.time() + self.ttl,
         )
 
+    def revoke(self, token: str, *, token_type_hint=None) -> bool:
+        return bool(token)
+
 
 def _manager(tmp_path, client, **cfg_kw):
     cfg = OAuthProviderConfig(token_url="https://issuer/token", client_id="cid", **cfg_kw)
     store = FileCredentialStore("provm", base_dir=tmp_path)
-    mgr = OAuthManager(cfg, provider="provm", store=store, client=client)
+    mgr = OAuthManager(cfg, provider="provm", consumer_id="test-manager", store=store, client=client)
     # Keep the cross-process lock inside tmp_path for hermeticity.
     mgr._lock_path = tmp_path / "provm.lock"
     return mgr, store
@@ -48,17 +84,17 @@ def _manager(tmp_path, client, **cfg_kw):
 def test_bootstrap_mints_via_client_credentials(tmp_path):
     client = FakeClient()
     mgr, store = _manager(tmp_path, client)
-    token = mgr.get_valid_token()
+    token = _access(mgr)
     assert token == "cc-1"
     assert client.cc_calls == 1
     # persisted
-    assert store.load().access_token == "cc-1"
+    assert _borrow_token(store).access_token == "cc-1"
 
 
 def test_untrusted_provider_name_cannot_escape_lock_root(tmp_path):
     cfg = OAuthProviderConfig(token_url="https://issuer/token", client_id="cid")
     store = FileCredentialStore("../../outside", base_dir=tmp_path)
-    manager = OAuthManager(cfg, provider="../../outside", store=store, client=FakeClient())
+    manager = OAuthManager(cfg, provider="../../outside", consumer_id="test-manager", store=store, client=FakeClient())
 
     assert manager._lock_path.parent == tmp_path.resolve()
     assert "outside" not in manager._lock_path.name
@@ -67,8 +103,8 @@ def test_untrusted_provider_name_cannot_escape_lock_root(tmp_path):
 def test_cached_token_not_refetched(tmp_path):
     client = FakeClient()
     mgr, _ = _manager(tmp_path, client)
-    assert mgr.get_valid_token() == "cc-1"
-    assert mgr.get_valid_token() == "cc-1"  # served from cache
+    assert _access(mgr) == "cc-1"
+    assert _access(mgr) == "cc-1"
     assert client.cc_calls == 1
 
 
@@ -76,8 +112,8 @@ def test_expired_token_triggers_refresh(tmp_path):
     client = FakeClient(ttl=3600)
     mgr, store = _manager(tmp_path, client)
     # Seed an already-expired token with a refresh token.
-    store.save(OAuthToken(access_token="old", refresh_token="r0", expires_at=time.time() - 10))
-    token = mgr.get_valid_token()
+    _publish(store, OAuthToken(access_token="old", refresh_token="r0", expires_at=time.time() - 10))
+    token = _access(mgr)
     assert token == "rf-1"
     assert client.refresh_calls == 1
 
@@ -86,8 +122,8 @@ def test_buffer_triggers_proactive_refresh(tmp_path):
     client = FakeClient(ttl=3600)
     mgr, store = _manager(tmp_path, client, expiry_buffer_s=300)
     # Token valid for 100s but inside the 300s buffer => treated as expired.
-    store.save(OAuthToken(access_token="soon", refresh_token="r0", expires_at=time.time() + 100))
-    assert mgr.get_valid_token() == "rf-1"
+    _publish(store, OAuthToken(access_token="soon", refresh_token="r0", expires_at=time.time() + 100))
+    assert _access(mgr) == "rf-1"
 
 
 def test_mtime_reread_skips_redundant_refresh(tmp_path):
@@ -99,9 +135,9 @@ def test_mtime_reread_skips_redundant_refresh(tmp_path):
     # "another worker").
     mgr._cached = OAuthToken(access_token="stale", refresh_token="r0", expires_at=time.time() - 5)
     # Another process refreshed and persisted a valid token.
-    store.save(OAuthToken(access_token="fresh-from-peer", expires_at=time.time() + 3600))
+    _publish(store, OAuthToken(access_token="fresh-from-peer", expires_at=time.time() + 3600))
 
-    token = mgr.get_valid_token()
+    token = _access(mgr)
     assert token == "fresh-from-peer"
     # No network refresh happened because the re-read under lock found it valid.
     assert client.cc_calls == 0
@@ -117,31 +153,32 @@ def test_two_managers_serialize_refresh_and_commit_one_generation(tmp_path):
     client = SlowClient()
     first, store = _manager(tmp_path, client)
     second, _ = _manager(tmp_path, client)
-    store.save(
+    _publish(
+        store,
         OAuthToken(
             access_token="expired",
             refresh_token="refresh",
             expires_at=time.time() - 1,
-        )
+        ),
     )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(lambda manager: manager.get_valid_token(), (first, second)))
+        results = list(executor.map(_access, (first, second)))
 
     assert results == ["rf-1", "rf-1"]
     assert client.refresh_calls == 1
-    record = store.load_record()
+    record = store.load_metadata()
     assert record is not None
     assert record.revision == 2
-    assert record.token_generation == 2
+    assert record.secret_generation == 2
 
 
 def test_force_refresh_bypasses_buffer(tmp_path):
     client = FakeClient()
     mgr, store = _manager(tmp_path, client)
     # A perfectly valid token exists...
-    store.save(OAuthToken(access_token="valid", expires_at=time.time() + 9999))
-    mgr._cached = store.load()
+    _publish(store, OAuthToken(access_token="valid", expires_at=time.time() + 9999))
+    mgr._cached = _borrow_token(store)
     # ...but force_refresh mints anyway.
     tok = mgr.force_refresh()
     assert tok is not None
@@ -166,7 +203,7 @@ def test_refresh_grant_without_token_errors(tmp_path):
     client = FakeClient()
     mgr, _ = _manager(tmp_path, client, grant_type=GrantType.REFRESH_TOKEN)
     try:
-        mgr.get_valid_token()
+        _access(mgr)
         assert False, "expected OAuthConfigError"
     except OAuthConfigError:
         pass
@@ -185,8 +222,8 @@ def test_login_dispatches_device_code_and_persists(tmp_path, monkeypatch):
     tok = mgr.login()
     assert tok.access_token == "logged-in"
     # persisted + cached
-    assert store.load().access_token == "logged-in"
-    assert mgr.get_valid_token() == "logged-in"
+    assert _borrow_token(store).access_token == "logged-in"
+    assert _access(mgr) == "logged-in"
 
 
 def test_login_dispatches_authorization_code(tmp_path, monkeypatch):
@@ -209,18 +246,78 @@ def test_login_rejects_headless_grant(tmp_path):
 
 def test_delete_commits_tombstone_and_clears_cache(tmp_path):
     manager, store = _manager(tmp_path, FakeClient())
-    assert manager.get_valid_token() == "cc-1"
-    before = store.load_record()
+    assert _access(manager) == "cc-1"
+    before = store.load_metadata()
     assert before is not None
 
-    manager.delete()
+    receipt = manager.execute(
+        CredentialCommand(
+            command_id="revoke-test",
+            subject=store.subject,
+            action=CredentialAction.LOGOUT,
+            authority_id="operator",
+            expected_revision=before.revision,
+            requested_at=datetime.now(timezone.utc),
+        )
+    )
+    assert receipt.resulting_state is CredentialState.REVOKED
 
-    after = store.load_record()
+    after = store.load_metadata()
     assert after is not None
-    assert after.revision == before.revision + 1
-    assert after.token_generation == before.token_generation + 1
-    assert after.token is None
-    assert manager._cached is None
+    assert after.revision == before.revision + 2  # REVOCATION_PENDING -> REVOKED
+    assert after.secret_generation == before.secret_generation
+    assert after.state.value == "revoked"
+    assert after.secret_ref is None
+    assert not hasattr(manager, "_cached")
+
+
+def test_closed_maintenance_commands_preserve_evidence_and_erase_bearer(tmp_path):
+    manager, _ = _manager(tmp_path, FakeClient())
+    assert _access(manager) == "cc-1"
+    store = manager._store
+    current = store.load_metadata()
+    assert current is not None
+
+    hold = manager.execute(
+        CredentialCommand(
+            "hold",
+            store.subject,
+            CredentialAction.APPLY_HOLD,
+            "legal-authority",
+            current.revision,
+            datetime.now(timezone.utc),
+        )
+    )
+    assert hold.disposition is CredentialCommandDisposition.APPLIED
+    held = store.load_metadata()
+    assert held is not None and held.legal_hold
+
+    rejected = manager.execute(
+        CredentialCommand(
+            "migrate",
+            store.subject,
+            CredentialAction.MIGRATE_BACKEND,
+            "operator",
+            held.revision,
+            datetime.now(timezone.utc),
+        )
+    )
+    assert rejected.disposition is CredentialCommandDisposition.REJECTED
+
+    cleared = manager.execute(
+        CredentialCommand(
+            "clear",
+            store.subject,
+            CredentialAction.SECURITY_CLEAR,
+            "security-authority",
+            held.revision,
+            datetime.now(timezone.utc),
+        )
+    )
+    assert cleared.resulting_state is CredentialState.RETIRED
+    terminal = store.load_metadata()
+    assert terminal is not None and terminal.legal_hold and terminal.secret_ref is None
+    assert not list((tmp_path / "vault").glob("*.secret"))
 
 
 def test_interactive_grant_without_token_says_login_first(tmp_path):
@@ -228,4 +325,4 @@ def test_interactive_grant_without_token_says_login_first(tmp_path):
 
     mgr, _ = _manager(tmp_path, FakeClient(), grant_type=GrantType.DEVICE_CODE)
     with pytest.raises(OAuthConfigError):
-        mgr.get_valid_token()
+        _access(mgr)

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, Generic, Mapping, Protocol, TypeVar
 
 from mote.contracts.agent import AgentBuilder, AgentConstructionRequest, ApprovedDeclaration, RunnableAgent
+from mote.contracts.model.checkpoint import ModelCheckpointPolicy
 from mote.contracts.ports.agent.composition import RoutingStrategyFactory
 from mote.contracts.ports.conversation.compaction_policy import CompactionPolicyExtensionSpec
 from mote.contracts.ports.conversation.prompt_policy import PromptPolicyExtensionSpec
@@ -40,7 +41,7 @@ from mote.runtime.agent.role_state import RoleState
 from mote.runtime.agent.wiring import AgentDependencies, AgentWiring
 from mote.runtime.config.hook import HookConfig
 from mote.runtime.config.mcp import MCPServerConfig
-from mote.runtime.tools.provider import AnyToolset
+from mote.runtime.tools.provider import ContextFreeToolset
 
 DepsT = TypeVar("DepsT")
 OutputT = TypeVar("OutputT")
@@ -75,7 +76,7 @@ class _ProductAgentComponentProjection(AgentComponentProjection):
         return self.action_inputs
 
     def cognition(self) -> CognitionComponentInputs:
-        return self.cognition_inputs
+        return replace(self.cognition_inputs, component_projection=self)
 
     def context(self) -> ContextComponentInputs:
         return self.context_inputs
@@ -160,7 +161,8 @@ class CodingAgentFactory:
     def __init__(
         self,
         *,
-        toolsets_factory: Callable[[str | CommandProtocol], tuple[AnyToolset, ...]] = builtin_toolsets,
+        model_checkpoint_policy: ModelCheckpointPolicy,
+        toolsets_factory: Callable[[str | CommandProtocol], tuple[ContextFreeToolset, ...]] = builtin_toolsets,
         background_task_pool_builder: BackgroundTaskServiceFactory = build_background_task_pool,
         deferred_result_projector_factory: DeferredResultProjectorFactory = build_deferred_result_projector,
         routing_strategy_builders_factory: Callable[[], dict[str, Callable[[], RoutingPolicy]]] = dict,
@@ -186,6 +188,7 @@ class CodingAgentFactory:
         run_completion_policy_extensions: tuple[RunCompletionPolicyExtensionSpec, ...] = (),
     ) -> None:
         self._toolsets_factory = toolsets_factory
+        self._model_checkpoint_policy = model_checkpoint_policy
         self._background_task_pool_builder = background_task_pool_builder
         self._deferred_result_projector_factory = deferred_result_projector_factory
         self._routing_strategy_builders_factory = routing_strategy_builders_factory
@@ -223,7 +226,7 @@ class CodingAgentFactory:
         *,
         deps: DepsT,
         output_contract: OutputContract[OutputT],
-        toolsets: tuple[AnyToolset, ...] | None = None,
+        toolsets: tuple[ContextFreeToolset, ...] | None = None,
         command_protocol: str | CommandProtocol = CommandProtocol.NATIVE,
     ) -> AgentDependencies[DepsT, OutputT]:
         """Build the complete immutable Product dependency definition."""
@@ -242,7 +245,10 @@ class CodingAgentFactory:
                 deferred_result_projector_factory=self._deferred_result_projector_factory,
                 mcp_servers=self._mcp.value if self._mcp is not None else (),
             ),
-            cognition_inputs=CognitionComponentInputs(routing_factory),
+            cognition_inputs=CognitionComponentInputs(
+                routing_factory,
+                model_checkpoint_policy=self._model_checkpoint_policy,
+            ),
             context_inputs=ContextComponentInputs(
                 skill_service_factory=self._skill_service_factory,
                 code_map_indexer_factory=self._code_map_indexer_factory,

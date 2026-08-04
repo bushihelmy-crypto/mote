@@ -36,6 +36,7 @@ class TelemetrySubscriptionSpec:
 
 
 EventT_contra = TypeVar("EventT_contra", contravariant=True)
+EventT = TypeVar("EventT")
 
 
 class TelemetryHandler(Protocol[EventT_contra]):
@@ -50,6 +51,22 @@ class SyncTelemetryHandler(Protocol[EventT_contra]):
     def handle_sync(self, event: EventT_contra) -> None: ...
 
 
+class TelemetrySubscription(Protocol):
+    async def aclose(self) -> None: ...
+
+
+class TelemetryRuntimePort(Protocol):
+    async def emit(self, event: object) -> None: ...
+
+    async def subscribe_typed(
+        self,
+        spec: TelemetrySubscriptionSpec,
+        event_type: type[EventT],
+        handler: TelemetryHandler[EventT],
+        sync_handler: SyncTelemetryHandler[EventT] | None = None,
+    ) -> TelemetrySubscription: ...
+
+
 __all__ = [
     "MAX_TELEMETRY_CAPACITY",
     "MAX_TELEMETRY_IDENTITY_BYTES",
@@ -58,5 +75,7 @@ __all__ = [
     "TelemetryEmitter",
     "TelemetryIdentity",
     "TelemetryOverflow",
+    "TelemetryRuntimePort",
+    "TelemetrySubscription",
     "TelemetrySubscriptionSpec",
 ]

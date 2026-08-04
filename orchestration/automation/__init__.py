@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
+from mote.contracts.artifact import ArtifactRef
+
 
 @dataclass(frozen=True)
 class AutomationTrigger:
@@ -14,12 +16,19 @@ class AutomationTrigger:
     scheduled_at_ms: int
     fired_at_ms: int
     attempt: int = 1
+    artifact_ref: ArtifactRef | None = None
 
     def __post_init__(self) -> None:
         for name in ("trigger_id", "source_id", "target", "content"):
             value = getattr(self, name)
-            if type(value) is not str or not value:
+            if (
+                type(value) is not str
+                or (not value and name == "content" and self.artifact_ref is None)
+                or (not value and name != "content")
+            ):
                 raise ValueError(f"automation trigger {name} is invalid")
+        if self.artifact_ref is not None and not isinstance(self.artifact_ref, ArtifactRef):
+            raise TypeError("automation trigger artifact reference is invalid")
         if type(self.scheduled_at_ms) is not int or type(self.fired_at_ms) is not int:
             raise ValueError("automation trigger instants must be integers")
         if self.fired_at_ms < self.scheduled_at_ms:

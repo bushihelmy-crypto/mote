@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Mapping
+from uuid import uuid4
 
 from mote.contracts.events.envelope import EventEnvelope, JsonValue, StreamId
 from mote.contracts.ports.events.subscription import (
@@ -17,6 +18,7 @@ from mote.contracts.ports.events.subscription import (
     Reliability,
     SubscriptionCheckpoint,
     SubscriptionIdentity,
+    SubscriptionOwnerLease,
     SubscriptionSpec,
     SubscriptionStateStore,
 )
@@ -74,6 +76,8 @@ class SubscriptionWorker:
         self._persisted: dict[StreamId, int] = {}
         self._since_checkpoint: dict[StreamId, int] = {}
         self._barrier = asyncio.Condition()
+        self._owner_id = f"subscription-worker:{uuid4().hex}"
+        self._owner_lease: SubscriptionOwnerLease | None = None
 
     @property
     def state(self) -> SubscriptionState:
@@ -101,6 +105,8 @@ class SubscriptionWorker:
     async def start(self) -> None:
         if self._state is not SubscriptionState.NEW:
             raise RuntimeError("subscription can only be started once")
+        if self._state_store is not None:
+            self._owner_lease = await self._state_store.claim_owner(self.spec.identity, self._owner_id)
         self._state = SubscriptionState.RUNNING
         self._task = asyncio.create_task(
             self._run(),
@@ -277,11 +283,17 @@ class SubscriptionWorker:
 
     async def _save_checkpoint(self, stream_id: StreamId, sequence: int) -> None:
         assert self._state_store is not None
+        lease = self._owner_lease
+        if lease is None:
+            raise SubscriptionFailed("subscription owner lease is unavailable")
         await self._state_store.save(
             SubscriptionCheckpoint(
                 identity=self.spec.identity,
                 stream_id=stream_id,
                 sequence=sequence,
+                owner_id=lease.owner_id,
+                generation=lease.generation,
+                fencing_token=lease.fencing_token,
             )
         )
         self._persisted[stream_id] = sequence
@@ -303,10 +315,16 @@ class SubscriptionWorker:
         first_failure_at: datetime,
     ) -> None:
         assert self._state_store is not None
+        lease = self._owner_lease
+        if lease is None:
+            raise SubscriptionFailed("subscription owner lease is unavailable")
         checkpoint = SubscriptionCheckpoint(
             identity=self.spec.identity,
             stream_id=envelope.stream_id,
             sequence=envelope.sequence,
+            owner_id=lease.owner_id,
+            generation=lease.generation,
+            fencing_token=lease.fencing_token,
         )
         await self._state_store.quarantine(
             DeadLetterEntry(

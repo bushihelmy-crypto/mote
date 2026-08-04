@@ -61,9 +61,10 @@ class ArtifactLookupIndex(Protocol):
         """Remove one logical revision and unroot its unshared CAS content."""
         ...
 
-    def release_retentions(self, retentions: tuple[ArtifactRetention, ...]) -> int:
-        """Release visible ownership rows in the requested lifecycle tiers."""
-        ...
+
+@runtime_checkable
+class ArtifactRepositoryService(ArtifactStore, ArtifactLookupIndex, Protocol):
+    """Canonical logical Artifact repository service used by Runtime owners."""
 
 
 @runtime_checkable
@@ -141,6 +142,7 @@ __all__ = [
     "ArtifactBlobStore",
     "ArtifactLookupIndex",
     "ArtifactPublicationOutbox",
+    "ArtifactRepositoryService",
     "ArtifactResolver",
     "GenerationArtifactReader",
     "ArtifactStore",

@@ -25,11 +25,14 @@ then binds them) so the port object can exist before the app that hosts it.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Any, Callable, List, Optional
 
+from mote.contracts.events.envelope import JsonValue
 from mote.contracts.interaction import AskUserQuestionAnswer, AskUserQuestionAnswers
 from mote.contracts.interaction.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus, HumanHandoffOutcome
 from mote.contracts.surface import LiveSurfaceSession, SurfacePresentationMode
+from mote.product.interaction.ports import DriverControlDisposition, DriverControlReceipt
 from mote.product.interfaces.textual.screens import ApprovalScreen, HandoffScreen, QuestionScreen
 from mote.product.presentation.events.events import ApprovalDecision
 from mote.runtime.interactive.presentation import SurfacePresenterRegistry
@@ -42,9 +45,9 @@ class TextualPort:
         self._app = app
         self._presenters = presenters
         # Driver-wired hooks (mirrors of the terminal port's contract).
-        self._on_interrupt: Optional[Callable[[], Any]] = None
+        self._on_interrupt: Optional[Callable[[], DriverControlReceipt]] = None
         self._is_turn_running: Optional[Callable[[], bool]] = None
-        self._on_steer: Optional[Callable[[str], Any]] = None
+        self._on_steer: Optional[Callable[[str], DriverControlReceipt]] = None
 
         self._read_future: Optional[asyncio.Future] = None
         self._exit = False
@@ -110,7 +113,7 @@ class TextualPort:
         if fut is not None and not fut.done():
             fut.set_result(text)
 
-    def take_turn_images(self) -> List[dict]:
+    def take_turn_images(self) -> list[Mapping[str, JsonValue]]:
         """Return and clear the image attachments staged for the last read turn."""
         images = self._pending_images
         self._pending_images = []
@@ -265,19 +268,17 @@ class TextualPort:
     # ------------------------------------------------------------------
     # InputPort.signal_interrupt + steer / exit / restore controls
     # ------------------------------------------------------------------
-    def signal_interrupt(self, ctx: Any = None) -> None:
+    def signal_interrupt(self, ctx: Any = None) -> DriverControlReceipt:
         """Programmatic interrupt (mirror of mid-turn Ctrl+C)."""
         if self._on_interrupt is not None:
-            result = self._on_interrupt()
-            if asyncio.iscoroutine(result):
-                asyncio.ensure_future(result)
+            return self._on_interrupt()
+        return DriverControlReceipt(DriverControlDisposition.IGNORED)
 
-    def submit_steer(self, ctx: Any = None, text: str = "") -> None:
+    def submit_steer(self, ctx: Any = None, text: str = "") -> DriverControlReceipt:
         """Forward steering *text* to the driver for the next turn (§5.3)."""
         if text and text.strip() and self._on_steer is not None:
-            result = self._on_steer(text)
-            if asyncio.iscoroutine(result):
-                asyncio.ensure_future(result)
+            return self._on_steer(text)
+        return DriverControlReceipt(DriverControlDisposition.IGNORED)
 
     def request_exit(self) -> None:
         """Signal the loop to exit and resolve any pending read with ``None``."""

@@ -1,4 +1,5 @@
 """Artifact-backed, optionally encrypted Runtime checkpoint payloads."""
+
 from __future__ import annotations
 
 import hashlib
@@ -12,7 +13,7 @@ from mote.contracts.artifact import (
     ArtifactSensitivity,
 )
 from mote.contracts.artifact.errors import ArtifactNotFoundError
-from mote.contracts.ports.artifact.store import ArtifactStore
+from mote.contracts.ports.artifact.store import ArtifactRepositoryService
 from mote.contracts.runtime import RuntimeCheckpoint
 from mote.runtime.interactive.checkpoint_codec import decode_inline_bytes, inline_checkpoint
 from mote.runtime.secrets.cipher import VaultCipher
@@ -26,7 +27,7 @@ _ARTIFACT_REF = re.compile(
 class ArtifactCheckpointPayloadStore:
     """Move checkpoint bytes out of rollout and encrypt secret payloads."""
 
-    def __init__(self, artifacts: ArtifactStore, cipher: VaultCipher) -> None:
+    def __init__(self, artifacts: ArtifactRepositoryService, cipher: VaultCipher) -> None:
         self._artifacts = artifacts
         self._cipher = cipher
 

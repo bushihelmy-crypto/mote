@@ -3,17 +3,18 @@ from __future__ import annotations
 import hashlib
 
 import pytest
+from pydantic import ValidationError
 
 from mote.contracts.artifact import ArtifactContentRef
 from mote.contracts.content import ContentIdentity
 from mote.contracts.interaction.handoff import HandoffOutcome, HandoffStatus
 from mote.contracts.runtime import RuntimeAccessMode, RuntimeRef, RuntimeState
-from mote.contracts.surface import CanvasDocument, CanvasElement, CanvasExportRepresentation, CanvasOperation
+from mote.contracts.surface import CanvasDocument, CanvasExportRepresentation, CanvasOperation, CanvasText
+from mote.contracts.tool.errors import ToolError
 from mote.product.toolsets.builtin.canvas import Canvas
 from mote.runtime.artifacts import DurableArtifactStore, ReliableArtifactPublisher
 from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
 from mote.runtime.interactive.host import RuntimeHost
-from mote.runtime.tools.tool_result import ToolError
 from mote.ztest.fileops_factory import FileOperations
 
 
@@ -67,7 +68,7 @@ async def test_canvas_handoff_returns_current_document_to_the_model():
             [
                 CanvasOperation(
                     op="upsert",
-                    element=CanvasElement(id="human-added", kind="text", x=20, y=30, text="Changed"),
+                    element=CanvasText(id="human-added", x=20, y=30, text="Changed"),
                 )
             ]
         )
@@ -315,3 +316,14 @@ async def test_canvas_export_failure_occurs_after_runtime_commit(tmp_path):
         assert isinstance(driver, CanvasRuntimeDriver)
         assert driver.snapshot_document().elements[0].id == "survives-export-failure"
     await tool.cleanup_session(tool.session_id)
+
+
+def test_canvas_document_rejects_unknown_element_fields() -> None:
+    with pytest.raises(ValidationError):
+        CanvasDocument.model_validate(
+            {
+                "schema_version": "1",
+                "revision": 1,
+                "elements": [{"id": "bad", "kind": "text", "text": "x", "unknown": True}],
+            }
+        )

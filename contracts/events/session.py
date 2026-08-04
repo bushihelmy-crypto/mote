@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar, Optional, cast
+
+from mote.contracts.events.envelope import JsonValue, freeze_json
 
 if TYPE_CHECKING:
     pass
@@ -62,7 +65,14 @@ class TurnEndEvent:
     turn_id: str = ""
     working_dir: str = ""
     model: Optional[str] = None
-    token_state: Optional[dict] = None
+    token_state: Optional[Mapping[str, JsonValue]] = None
+
+    def __post_init__(self) -> None:
+        if self.token_state is not None:
+            frozen = freeze_json(self.token_state, path="turn token state")
+            if not isinstance(frozen, Mapping):
+                raise TypeError("turn token state must be an object")
+            self.token_state = cast(Mapping[str, JsonValue], frozen)
 
     name: ClassVar[str] = TURN_END
 

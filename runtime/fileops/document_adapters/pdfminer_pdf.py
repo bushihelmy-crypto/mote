@@ -9,4 +9,4 @@ from mote.runtime.fileops.document_budgets import BoundedTextSink
 
 def extract(file_path: str, *, sink: BoundedTextSink) -> None:
     with open(file_path, "rb") as source:
-        extract_text_to_fp(source, sink, codec=None)
+        extract_text_to_fp(source, sink, codec="utf-8")  # type: ignore[arg-type]  # pdfminer accepts bounded text sinks

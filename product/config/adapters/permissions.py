@@ -24,17 +24,20 @@ The three lists are **unioned** across layers (order preserved, de-duplicated),
 so a closer file only ever *adds* rules — it can't silently drop a farther
 layer's ``deny`` (which would be a footgun for a bypass-immune rule).
 
-Everything is best-effort: a missing / empty / malformed file contributes no
-rules (permissions simply stay unconfigured), never an exception into wiring.
+Missing files contribute no overlay. Present malformed files fail closed before
+the Product baseline is activated.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import List, Optional, Sequence
 
-from mote.product.config.layered_json import load_json_section
-from mote.runtime.tools.permission.config import PermissionConfig
+from mote.runtime.sandbox.config import SandboxProfile, SandboxRuntimeConfig
+from mote.runtime.tools.permission.config import PermissionConfig, SandboxConfig
+
+PRODUCT_PERMISSION_BASELINE_GENERATION = "mote.product-permissions/v1"
 
 #: The canonical settings file name (a de-facto ecosystem convention). Lives under
 #: each project's ``.mote/`` dir and under ``~/.mote/``. The ``.local`` marker
@@ -55,16 +58,18 @@ def settings_paths(paths: Sequence[Path] = ()) -> List[Path]:
     return list(paths)
 
 
-def _extend_unique(dst: List[str], src) -> None:
+def _extend_unique(dst: List[str], src: object) -> None:
     """Append each string in *src* to *dst*, skipping non-strings and dups."""
-    if not isinstance(src, (list, tuple)):
-        return
+    if not isinstance(src, list):
+        raise ValueError("permission rule collection must be a JSON list")
     seen = set(dst)
     for item in src:
         if not isinstance(item, str):
-            continue
+            raise ValueError("permission rule must be a string")
         spec = item.strip()
-        if spec and spec not in seen:
+        if not spec:
+            raise ValueError("permission rule must not be blank")
+        if spec not in seen:
             dst.append(spec)
             seen.add(spec)
 
@@ -87,13 +92,44 @@ def load_permission_rules(
     buckets = {"allow": allow, "deny": deny, "ask": ask}
 
     for path in settings_paths(paths):
-        perms = load_json_section(path, "permissions", "settings")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"permission source is malformed: {path}") from exc
+        if type(data) is not dict:
+            raise ValueError(f"permission source root must be an object: {path}")
+        perms = data.get("permissions")
+        if perms is None:
+            continue
+        if type(perms) is not dict or set(perms) - set(_RULE_KEYS):
+            raise ValueError(f"permission source has an invalid permissions section: {path}")
         for key in _RULE_KEYS:
-            _extend_unique(buckets[key], perms.get(key))
+            if key in perms:
+                _extend_unique(buckets[key], perms[key])
 
     if not (allow or deny or ask):
         return None
     return PermissionConfig(allow=allow, deny=deny, ask=ask)
 
 
-__all__ = ["SETTINGS_FILE_NAME", "settings_paths", "load_permission_rules"]
+def build_product_permission_config(overlay: PermissionConfig | None) -> PermissionConfig:
+    """Compile the immutable Product baseline plus a rules-only overlay."""
+    rules = overlay or PermissionConfig()
+    profile = SandboxProfile.NETWORKED_GOVERNED
+    return PermissionConfig(
+        mode=rules.mode,
+        allow=list(rules.allow),
+        deny=list(rules.deny),
+        ask=list(rules.ask),
+        sandbox=SandboxConfig(profile=profile),
+        runtime=SandboxRuntimeConfig(profile=profile, network="proxy"),
+    )
+
+
+__all__ = [
+    "PRODUCT_PERMISSION_BASELINE_GENERATION",
+    "SETTINGS_FILE_NAME",
+    "load_permission_rules",
+    "build_product_permission_config",
+    "settings_paths",
+]

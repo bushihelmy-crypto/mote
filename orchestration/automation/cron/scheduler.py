@@ -14,8 +14,8 @@ Key behaviors carried over from upstream:
     ``last_fired_at``/``created_at`` so a restart reconstructs the same schedule,
   * **single writer** — durable tasks fire only while the optional :class:`SchedulerLock`
     is held, so two sessions in one workspace never double-fire,
-  * **hot reload** — the store's file ``mtime`` is polled each tick; an external
-    edit triggers a reload (the dependency-free equivalent of a file watcher),
+  * **revision reconcile** — each tick reads the owner-validated snapshot and
+    adopts it only when its canonical revision advances,
   * **idle gating** — firing is deferred while the target agent is mid-turn,
   * **missed compensation** — one-shot tasks whose window passed while the process
     was down are surfaced once at startup,
@@ -87,9 +87,9 @@ class CronScheduler:
         self._next_fire_at: Dict[str, float] = {}
         # Ids already surfaced as missed — avoids re-asking before removal lands.
         self._missed_asked: set[str] = set()
-        # Cached durable tasks + the mtime they were loaded at (hot-reload anchor).
+        # Cached durable tasks + their canonical store revision.
         self._durable: List[CronTask] = []
-        self._last_mtime: Optional[float] = None
+        self._last_revision = -1
         self._is_owner = False
         self._fence: SchedulerFence | None = None
         self._runner = PeriodicLoop(
@@ -134,11 +134,13 @@ class CronScheduler:
         return self._jitter_config() if self._jitter_config is not None else DEFAULT_CRON_JITTER_CONFIG
 
     def _reload_durable(self, *, force: bool = False) -> None:
-        """Reload durable tasks from disk when the file mtime changed."""
-        mtime = self._store.mtime()
-        if force or mtime != self._last_mtime:
-            self._last_mtime = mtime
-            self._durable = self._store.load()
+        """Adopt a complete owner-validated snapshot when its revision advances."""
+        snapshot = self._store.load_snapshot()
+        if snapshot.revision < self._last_revision:
+            raise RuntimeError("cron schedule revision regressed")
+        if force or snapshot.revision != self._last_revision:
+            self._last_revision = snapshot.revision
+            self._durable = list(snapshot.tasks)
 
     # ------------------------------------------------------------------
     # Core tick
@@ -244,8 +246,7 @@ class CronScheduler:
                             dst_policy=task.dst_policy,
                         )
                         self._next_fire_at[task.id] = math.inf if new_next is None else new_next
-                    self._last_mtime = self._store.mtime()
-                    self._durable = self._store.load()
+                    self._reload_durable(force=True)
                 elif state is CronOccurrenceState.DEFERRED:
                     snapshot = self._store.load_snapshot()
                     occurrence = next(

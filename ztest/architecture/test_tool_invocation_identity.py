@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity, tool_arguments_digest
+from mote.contracts.tool import (
+    ToolAttemptOrdinal,
+    ToolInvocationId,
+    ToolInvocationIdentity,
+    freeze_tool_arguments,
+    tool_arguments_digest,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,6 +41,23 @@ def test_invocation_identity_is_nominal_strict_and_argument_order_independent():
         ToolInvocationIdentity.from_payload({**identity.to_payload(), "unknown": True})
 
 
+def test_tool_argument_snapshot_is_deeply_immutable_and_detached_from_caller():
+    caller = {"nested": {"value": 1}, "items": ["a"]}
+    snapshot = freeze_tool_arguments(caller)
+    digest = tool_arguments_digest(snapshot)
+
+    caller["nested"]["value"] = 2
+    caller["items"].append("b")
+
+    nested = snapshot["nested"]
+    assert isinstance(nested, dict) or hasattr(nested, "__getitem__")
+    assert nested["value"] == 1
+    assert snapshot["items"] == ("a",)
+    assert tool_arguments_digest(snapshot) == digest
+    with pytest.raises(TypeError):
+        snapshot["new"] = True
+
+
 def test_transports_only_project_execution_owner_identity():
     acp = (ROOT / "product/interfaces/acp/wire.py").read_text(encoding="utf-8")
     agui = (ROOT / "product/interfaces/agui/wire.py").read_text(encoding="utf-8")
@@ -61,11 +84,11 @@ def test_tool_fact_and_view_contracts_cannot_omit_invocation_identity():
 
 def test_tool_effect_journal_persists_the_full_identity():
     pipeline = (ROOT / "runtime/tools/tool_pipeline.py").read_text(encoding="utf-8")
-    journal = (ROOT / "runtime/ledger/run_journal.py").read_text(encoding="utf-8")
+    effect_store = (ROOT / "runtime/tools/effect_store.py").read_text(encoding="utf-8")
 
-    assert "invocation_identity=execution.identity" in pipeline
-    assert "invocation_identity=prior.invocation_identity" in journal
-    assert "ToolInvocationIdentity.from_payload" in journal
+    assert "commit_intent(execution.identity" in pipeline
+    assert "prior.identity" in effect_store
+    assert "ToolInvocationIdentity.from_payload" in effect_store
     assert "execution.identity = durable_identity" in pipeline
 
 

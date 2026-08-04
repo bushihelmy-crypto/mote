@@ -161,33 +161,12 @@ tools:
     persist_large_tool_results: true     # 超限时是否落盘（false 则就地头部截断）
     default_max_result_size_chars: 50000 # 单条结果字符上限（工具可各自覆盖更低/更高）
     enable_output_compression: true      # 语义压缩（git/pytest/ruff）总开关
-  # 统一运行步骤台账（RunJournal，崩溃重放防护）。
+  # Tool effect canonical store（崩溃对账边界）。
   #（网络 / 子进程 / IPC / 人机 / 派生 agent）在 tool body 执行前写 started、执行后写
   # completed/failed，随会话持久化。崩溃 resume 时对账：completed 的悬空调用用台账结果
   # 直接愈合（不重跑），started 但结果未知的注入 <unknown-after-crash> 告警。
-  run_journal:
+  effect_store:
     enabled: true                        # false 则完全不记台账（每次调用照常直接跑）
-  # 持久化执行后端（replay-safe 步骤的记忆化：LLM think 轮 / LOCAL 写工具 / 持久定时器）。
-  # 与 run_journal 配合：EXTERNAL 副作用幂等是 correctness 边界，永不弱化，
-  # 这里管「已完成步骤的结果记忆化」，让 resume 跳过已完成步骤而非重付。
-  # backend 选择传输层：
-  #   jsonl（默认，零依赖）——RunJournal 记 started/completed/failed，resume 从台账重放已完成步。
-  #     不是确定性重放引擎，只承诺「跳过已完成步 + 愈合崩溃前沿」。
-  #   temporal（可选，默认关闭）——三个 seam 变 Temporal activity，结果由事件历史 memoize。
-  #     需装可选 extra `pip install mote[temporal]`；未装则自动降级回 jsonl（不崩溃）。
-  #     temporal.* 仅在 backend=temporal 时被读取，jsonl 下完全惰性。
-  durable:
-    enabled: true                        # false 则不做步骤记忆化（resume 时每步照常重跑）
-    backend: "jsonl"                     # jsonl（默认，零依赖）| temporal（可选分布式后端，默认关闭）
-    # 以下仅在 backend=temporal 时生效（连接 + 每 seam 的 activity 重试/超时策略）：
-    temporal:
-      server_address: "localhost:7233"   # Temporal 前端地址
-      namespace: "default"               # workflow 所在 namespace
-      task_queue: "mote"                 # workflow + activity 轮询的队列
-      # tool_activity / think_activity / timer_activity 各自的 ActivityConfig 略（用默认预算）：
-      #   start_to_close_timeout_seconds（单次 attempt 墙钟上限，null=用服务器默认，seam 层回退 600s）
-      #   max_retry_attempts（0=无界，交由超时约束）/ initial_retry_interval_seconds /
-      #   retry_backoff_coefficient / max_retry_interval_seconds / non_retryable_error_types
   # Tool Search 总开关（延迟工具发现）。角色的 role_schema.deferred_tools 声明哪些工具
   # 「搜索后才可见」，此开关全局决定该声明是否生效。false 时对所有角色强制清空延迟集：
   # 不隐藏任何工具、不绑定 SearchTools、不注入紧凑菜单、不走原生 tool-search——每个声明的
@@ -278,19 +257,18 @@ context:
 # 对每个 EXTERNAL 副作用工具调用（网络 / 子进程 / IPC / 人机 / 派生 agent）在 tool body
 # 执行前写一条 started、执行后写 completed/failed，随会话一起持久化。进程崩溃后 resume
 # 时对账：completed 的悬空调用用台账里记录的结果直接愈合（不重跑副作用），started 但结果
-# 未知的调用注入 <unknown-after-crash> 告警（让模型先核验再重试）。开关在 tools.run_journal
+# 未知的调用注入 <unknown-after-crash> 告警（让模型先核验再重试）。开关在 tools.effect_store
 # （见上文 tools 段），默认 enabled=True。
 # ----------------------------------------------------------------------------
-workspace:
-  cleanup:
-    enabled: true             # 总开关；false 则完全不清理
-    # 会话级 TTL：rollout 超过该天数未动 -> 整个会话目录连同产物一并删除。
-    # 0（或负数）= 永不删除会话。
-    session_ttl_days: 30
-    # 产物级 TTL：会话仍在存活窗口内、但超过该天数未动 -> 只清掉体积大的
-    # tool_results/ 与 task_outputs/，保留 rollout.jsonl + blobs/（会话仍可回放）。
-    # 0（或负数）= 永不清理产物。
-    artifact_ttl_days: 7
+# ----------------------------------------------------------------------------
+# workflows —— Workflow 外部 effect 的可选 Temporal transport。
+# ----------------------------------------------------------------------------
+workflows:
+  temporal_enabled: false
+  temporal:
+    server_address: "localhost:7233"
+    namespace: "default"
+    task_queue: "mote"
 
 # ----------------------------------------------------------------------------
 # resilience —— 熔断器阈值。按资源（LLM 的 api_type::model::key_index，将来 MCP /
@@ -404,7 +382,6 @@ ui:
 # ----------------------------------------------------------------------------
 secrets:
   # 保险库密钥/加密策略名。aes = AES-256-GCM，密钥文件 ~/.mote/vault.key。
-  cipher: "aes"
   # 覆盖加密保险库文件位置（默认 ~/.mote/secrets.json）。
   # vault_path: null
   # 覆盖人工编辑的明文命名密钥文件位置（默认 ~/.mote/secrets_config.json）。

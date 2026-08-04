@@ -14,7 +14,13 @@ from mote.contracts.model import (
     ModelCallState,
     ModelWireAuthorizedRecord,
 )
-from mote.runtime.models.failover import LocalModelCallJournal, ModelCallJournalIntegrityError
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
+from mote.runtime.models.failover import LocalModelCallJournal as _LocalModelCallJournal
+from mote.runtime.models.failover import ModelCallJournalIntegrityError
+
+
+def LocalModelCallJournal(root):
+    return _LocalModelCallJournal(root, policy=approved_model_checkpoint_policy())
 
 
 def _planned(call_id: str) -> ModelCallPlannedRecord:

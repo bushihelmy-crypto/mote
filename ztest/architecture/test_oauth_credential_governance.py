@@ -12,8 +12,9 @@ def test_credential_subject_is_fixed_and_has_no_path_semantics() -> None:
     subjects = {credential_subject(name) for name in ("../escape", "/tmp/absolute", "a/b", "a\\b", "project:mcp")}
 
     assert len(subjects) == 5
-    assert all(subject.startswith("oauth_") and len(subject) == 70 for subject in subjects)
-    assert all("/" not in subject and "\\" not in subject and ".." not in subject for subject in subjects)
+    values = {str(subject) for subject in subjects}
+    assert all(subject.startswith("oauth_") and len(subject) == 70 for subject in values)
+    assert all("/" not in subject and "\\" not in subject and ".." not in subject for subject in values)
 
 
 def test_manager_never_uses_external_provider_in_durable_path() -> None:
@@ -30,8 +31,23 @@ def test_manager_never_uses_external_provider_in_durable_path() -> None:
 
 
 def test_oauth_storage_has_no_per_operation_fallback() -> None:
-    source = (ROOT / "runtime/models/auth/oauth/storage/fallback_store.py").read_text(encoding="utf-8")
+    assert not (ROOT / "runtime/models/auth/oauth/storage/fallback_store.py").exists()
+    config = (ROOT / "contracts/config/model/oauth.py").read_text(encoding="utf-8")
+    assert 'FALLBACK = "fallback"' not in config
 
-    assert "self._selected.load_record()" in source
-    assert "self._selected.commit(" in source
-    assert "except Exception" not in source[source.index("def load_record") :]
+
+def test_oauth_consumers_only_receive_generation_bound_borrows() -> None:
+    production = tuple(path for root in (ROOT / "runtime", ROOT / "product") for path in root.rglob("*.py"))
+    offenders = [path.relative_to(ROOT) for path in production if "get_valid_token" in path.read_text(encoding="utf-8")]
+
+    assert offenders == []
+    assert "acquire_valid_borrow" in (ROOT / "runtime/tools/mcp/oauth.py").read_text(encoding="utf-8")
+    assert "CredentialBorrow" in (ROOT / "product/models/credential_sources.py").read_text(encoding="utf-8")
+
+
+def test_keyring_is_only_a_vault_not_a_second_metadata_owner() -> None:
+    source = (ROOT / "runtime/models/auth/oauth/storage/keyring_store.py").read_text(encoding="utf-8")
+
+    assert "CredentialMetadataRepository" in source
+    assert "_METADATA_SERVICE" not in source
+    assert "metadata_to_dict" not in source

@@ -546,10 +546,20 @@ async def test_interrupt_current_turn_stages_and_interrupts():
 
     drv, control, port, _proj = make_driver()
     drv._current_input = "in-flight prompt"
-    drv._interrupt_current_turn()
+    receipt = drv._interrupt_current_turn()
+    duplicate = drv._interrupt_current_turn()
+    assert receipt.disposition.value == "accepted"
+    assert duplicate.disposition.value == "already_pending"
     assert port.staged == ["in-flight prompt"]
     await asyncio.sleep(0)  # let the scheduled control.interrupt run
     assert control.interrupts == ["sess-0001"]
+
+
+def test_steer_submission_returns_typed_receipt():
+    drv, _control, _port, _proj = make_driver()
+
+    assert drv._enqueue_steer("later").disposition.value == "accepted"
+    assert drv._enqueue_steer("  ").disposition.value == "ignored"
 
 
 # --------------------------------------------------------------------------

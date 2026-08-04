@@ -46,7 +46,7 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable, Mapping, Optional
 
-from mote.contracts.events.telemetry import RecoveryEvent
+from mote.contracts.events.telemetry import RecoveryEvent, RecoveryPhase
 from mote.contracts.foundation.errors.base import MoteError
 from mote.contracts.foundation.errors.codes import RecoveryAction
 from mote.runtime.events.context import observe_event
@@ -97,25 +97,30 @@ class RecoveryRunner:
                 action = self._action_for(exc)
                 if action is RecoveryAction.ABORT:
                     # Permanent failure — surface to the caller.
-                    await self._emit_recovery("give_up", action, recoveries, exc)
+                    await self._emit_recovery(RecoveryPhase.GIVE_UP, action, recoveries, exc)
                     raise
                 if recoveries >= self.max_recoveries:
-                    await self._emit_recovery("give_up", action, recoveries, exc)
+                    await self._emit_recovery(RecoveryPhase.GIVE_UP, action, recoveries, exc)
                     raise
                 strategy = self._strategies.get(action)
                 if strategy is None:
                     # No strategy for this hint (e.g. RETRY when the caller
                     # relies on a lower tenacity loop) — re-raise.
-                    await self._emit_recovery("give_up", action, recoveries, exc)
+                    await self._emit_recovery(RecoveryPhase.GIVE_UP, action, recoveries, exc)
                     raise
                 if not await strategy(exc):
-                    await self._emit_recovery("give_up", action, recoveries, exc)
+                    await self._emit_recovery(RecoveryPhase.GIVE_UP, action, recoveries, exc)
                     raise
                 recoveries += 1
-                await self._emit_recovery("recovered", action, recoveries, exc)
+                await self._emit_recovery(RecoveryPhase.RECOVERED, action, recoveries, exc)
 
     @staticmethod
-    async def _emit_recovery(phase: str, action: RecoveryAction, attempt: int, exc: BaseException) -> None:
+    async def _emit_recovery(
+        phase: RecoveryPhase,
+        action: RecoveryAction,
+        attempt: int,
+        exc: BaseException,
+    ) -> None:
         """Mirror a recovery decision onto active Telemetry (best-effort).
 
         Observation-only: the loop's own re-raise/retry is the real outcome.

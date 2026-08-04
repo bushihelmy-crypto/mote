@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pydantic import TypeAdapter, ValidationError
 
+from mote.contracts.model.checkpoint import ModelCheckpointAdmissionDisposition, ModelCheckpointPolicy
 from mote.contracts.model.failover import AttemptState, ModelCallState
 from mote.contracts.model.model_journal import (
     ModelAttemptFinishedRecord,
@@ -29,6 +30,12 @@ MODEL_CALL_JOURNAL_DIRNAME = "model-calls"
 _RECORD_ADAPTER = TypeAdapter(ModelCallJournalRecord)
 
 
+def validate_model_call_record_stream(records: tuple[ModelCallJournalRecord, ...]) -> None:
+    """Validate one decoded stream without acquiring store or writer authority."""
+
+    LocalModelCallJournal._validate_stream(records)
+
+
 class ModelCallJournalError(RuntimeError):
     pass
 
@@ -41,12 +48,17 @@ class ModelCallJournalUnavailableError(ModelCallJournalError):
     pass
 
 
+class ModelCallCapacityError(ModelCallJournalError):
+    disposition = ModelCheckpointAdmissionDisposition.LIMIT_EXCEEDED
+
+
 @log_class(level="DEBUG", exclude={"path_for"})
 class LocalModelCallJournal:
     """One append-only fsynced JSONL stream per opaque model call ID."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, policy: ModelCheckpointPolicy) -> None:
         self._root = Path(root)
+        self._policy = policy
         self._lock = threading.Lock()
 
     def path_for(self, model_call_id: str) -> Path:
@@ -68,6 +80,8 @@ class LocalModelCallJournal:
         payload = record.model_dump_json().encode("utf-8") + b"\n"
         with self._lock:
             existing = self._read_path(path, expected_call_id=record.model_call_id)
+            if not existing and isinstance(record, ModelCallPlannedRecord):
+                self._validate_global_admission()
             self._validate_append(existing, record)
             try:
                 existed = path.exists()
@@ -117,6 +131,20 @@ class LocalModelCallJournal:
             if recovery.state is ModelCallState.IN_DOUBT:
                 recoveries.append(recovery)
         return tuple(recoveries)
+
+    def _validate_global_admission(self) -> None:
+        if not self._root.exists():
+            return
+        active = 0
+        for path in sorted(self._root.glob("*.jsonl")):
+            records = self._read_path(path, expected_call_id=None)
+            if not records:
+                continue
+            recovery = self._recover_records(records)
+            if recovery.state in {ModelCallState.PLANNED, ModelCallState.RUNNING, ModelCallState.IN_DOUBT}:
+                active += 1
+                if active >= self._policy.active_global:
+                    raise ModelCallCapacityError("ModelCall global active capacity is exhausted")
 
     @staticmethod
     def _read_path(
@@ -298,5 +326,7 @@ __all__ = [
     "ModelCallJournalError",
     "ModelCallJournalIntegrityError",
     "ModelCallJournalUnavailableError",
+    "ModelCallCapacityError",
     "model_call_journal_root",
+    "validate_model_call_record_stream",
 ]

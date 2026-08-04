@@ -1,8 +1,8 @@
 """Tests for the model-name-keyed capability profile registry.
 
 Covers: marker matching, merge precedence (override wins field-by-field / OR
-fold over the default), the new ``supports_thinking`` + ``json_schema_transformer``
-facets, and a BYTE-EQUIVALENCE parity check proving the migration from the four
+fold over the default), the ``supports_thinking`` facet, and a BYTE-EQUIVALENCE
+parity check proving the migration from the four
 old substring lists in ``common/const/llm.py`` changed no verdict for any real
 model id.
 """
@@ -160,9 +160,6 @@ class TestProfileFor:
         assert p.supports_web_search is True
         assert p.supports_thinking is False
 
-    def test_no_transformer_by_default(self):
-        assert profile_for("claude-opus-4-8").json_schema_transformer is None
-
 
 class TestMergeProfile:
     def test_none_override_returns_base(self):
@@ -178,14 +175,6 @@ class TestMergeProfile:
         assert merged.supports_pdf_input is True
         # override's non-default facet applied
         assert merged.supports_web_search is True
-
-    def test_transformer_merges_when_set(self):
-        def t(schema):
-            return schema
-
-        base = DEFAULT_PROFILE
-        merged = merge_profile(base, ModelProfile(json_schema_transformer=t))
-        assert merged.json_schema_transformer is t
 
     def test_fold_is_or_over_flags(self):
         p = merge_profile(

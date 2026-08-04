@@ -60,6 +60,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from mote.contracts.output.graph import GraphOutputContractSpec
 from mote.orchestration.workflows.types import END, START
 
 # ---------------------------------------------------------------------------
@@ -500,23 +501,6 @@ class EdgeSpec(BaseModel):
     from_: str = Field(alias="from")
     to: str
     when: Optional[Predicate] = None
-
-
-class GraphOutputContractSpec(BaseModel):
-    """Stable typed terminal contract for a model-authored graph."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    namespace: str = "mote"
-    name: str = "graph-json"
-    version: str = "1"
-    schema_: dict[str, Any] = Field(default_factory=dict, alias="schema")
-
-    @model_validator(mode="after")
-    def _identity_required(self) -> "GraphOutputContractSpec":
-        if not self.namespace.strip() or not self.name.strip() or not self.version.strip():
-            raise ValueError("output contract namespace, name and version are required")
-        return self
 
 
 class GraphSpec(BaseModel):

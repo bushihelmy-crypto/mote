@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterator, Mapping, cast
 
 from mote.contracts.events.envelope import JsonValue, freeze_json, thaw_json
+from mote.contracts.ports.agent.hosting import DurableWritePort
 from mote.contracts.ports.agent.residency import ResidentAgentFactory, ResidentAgentStatePort
 from mote.contracts.ports.runtime.lease import LeaseCoordinator, LeaseEpoch
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime
@@ -44,7 +45,7 @@ class ResidencyStore:
         *,
         sessions_base_dir: str,
         lease_coordinator: LeaseCoordinator,
-        writer: DiskWriter | None = None,
+        writer: DurableWritePort | None = None,
     ) -> None:
         if not base_dir or not sessions_base_dir:
             raise ValueError("ResidencyStore requires explicit residency and session directories")
@@ -80,10 +81,6 @@ class ResidencyStore:
         if not session_log.exists() or session_log.committed_version < 1:
             raise ResidencyStoreError("Residency requires a committed canonical Session stream")
         state = agent.export_residency_state(session_history_is_durable=True)
-        mailbox = runtime.mailbox.dump()
-        frozen_mailbox = freeze_json(mailbox, path="residency.mailbox_snapshot")
-        if not isinstance(frozen_mailbox, Mapping):
-            raise ResidencyStoreError("Agent mailbox snapshot is not a JSON object")
         try:
             message_buffer = json.loads(await runtime.msg_buffer.dump())
         except json.JSONDecodeError as exc:
@@ -104,7 +101,6 @@ class ResidencyStore:
                 record_revision=1 if previous is None else previous.record_revision + 1,
                 materialization_fence=ResidencyFence(lease.subject, lease.owner_id, lease.fencing_token),
                 state_snapshot=state,
-                mailbox_snapshot=cast(Mapping[str, JsonValue], frozen_mailbox),
                 message_buffer_snapshot=freeze_json(message_buffer, path="residency.message_buffer_snapshot"),
             )
             data = encode_residency_record(record)
@@ -148,8 +144,7 @@ class ResidencyStore:
                 raise ResidencyStoreError("Residency source Session revision is unavailable")
             agent.restore_residency_history(tuple(replayed.model_context_messages), replayed.meta)
             agent.restore_residency_message_buffer(record.message_buffer_snapshot)
-            mailbox_payload = thaw_json(cast(JsonValue, record.mailbox_snapshot))
-            mailbox = Mailbox.load(mailbox_payload, expected_owner_agent_id=session_id)
+            mailbox = Mailbox(session_id)
             install_fence = ResidencyFence(lease.subject, lease.owner_id, lease.fencing_token)
             if record.lifecycle is ResidencyLifecycle.INSTALLING:
                 if record.install_fence is None:

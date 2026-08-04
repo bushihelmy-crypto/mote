@@ -2,34 +2,37 @@
 # -*- coding: utf-8 -*-
 """Unit tests for ``mote.runtime.tools.permission.sandbox.guard.SandboxGuard``.
 
-Covers the three modes (full / read-only / workspace-write), cwd + configured
+Covers the closed governed profiles, cwd + configured
 writable-root containment, fail-closed empty paths, symlink-resolved containment,
 and interactively-granted session roots.
 """
+
 from __future__ import annotations
 
 import os
+
+import pytest
+from pydantic import ValidationError
 
 from mote.runtime.tools.permission.config import SandboxConfig
 from mote.runtime.tools.permission.sandbox.guard import SandboxGuard
 
 
-class TestFullMode:
-    def test_full_allows_any_path(self):
-        guard = SandboxGuard(SandboxConfig(mode="full"))
-        assert guard.check_write("/etc/passwd").allowed
-        assert guard.check_write("/anywhere/else.txt").allowed
+class TestClosedProfiles:
+    def test_unbounded_profile_is_rejected(self):
+        with pytest.raises(ValidationError):
+            SandboxConfig(profile="full")
 
 
 class TestReadOnlyMode:
     def test_read_only_blocks_writes(self):
-        guard = SandboxGuard(SandboxConfig(mode="read-only"))
+        guard = SandboxGuard(SandboxConfig(profile="isolated-compute"))
         verdict = guard.check_write("/tmp/x.txt")
         assert not verdict.allowed
         assert "read-only" in verdict.reason
 
     def test_read_only_empty_path_denied(self):
-        guard = SandboxGuard(SandboxConfig(mode="read-only"))
+        guard = SandboxGuard(SandboxConfig(profile="isolated-compute"))
         verdict = guard.check_write("")
         assert not verdict.allowed
         assert "no concrete permission target" in verdict.reason
@@ -38,18 +41,18 @@ class TestReadOnlyMode:
 class TestWorkspaceWrite:
     def test_inside_cwd_allowed(self, tmp_path):
         cwd = str(tmp_path)
-        guard = SandboxGuard(SandboxConfig(mode="workspace-write"), get_cwd=lambda: cwd)
+        guard = SandboxGuard(SandboxConfig(), get_cwd=lambda: cwd)
         assert guard.check_write(os.path.join(cwd, "sub", "f.txt")).allowed
 
     def test_cwd_root_itself_allowed(self, tmp_path):
         cwd = str(tmp_path)
-        guard = SandboxGuard(SandboxConfig(mode="workspace-write"), get_cwd=lambda: cwd)
+        guard = SandboxGuard(SandboxConfig(), get_cwd=lambda: cwd)
         assert guard.check_write(cwd).allowed
 
     def test_outside_cwd_blocked(self, tmp_path):
         cwd = str(tmp_path / "workspace")
         os.makedirs(cwd, exist_ok=True)
-        guard = SandboxGuard(SandboxConfig(mode="workspace-write"), get_cwd=lambda: cwd)
+        guard = SandboxGuard(SandboxConfig(), get_cwd=lambda: cwd)
         verdict = guard.check_write(str(tmp_path / "outside.txt"))
         assert not verdict.allowed
         assert "outside" in verdict.reason
@@ -58,7 +61,7 @@ class TestWorkspaceWrite:
         extra = tmp_path / "extra"
         extra.mkdir()
         guard = SandboxGuard(
-            SandboxConfig(mode="workspace-write", writable_roots=[str(extra)]),
+            SandboxConfig(writable_roots=[str(extra)]),
             get_cwd=lambda: str(tmp_path / "ws"),
         )
         assert guard.check_write(str(extra / "f.txt")).allowed
@@ -69,11 +72,11 @@ class TestWorkspaceWrite:
         ws.mkdir()
         sibling = tmp_path / "wsX"
         sibling.mkdir()
-        guard = SandboxGuard(SandboxConfig(mode="workspace-write"), get_cwd=lambda: str(ws))
+        guard = SandboxGuard(SandboxConfig(), get_cwd=lambda: str(ws))
         assert not guard.check_write(str(sibling / "f.txt")).allowed
 
     def test_empty_path_denied(self, tmp_path):
-        guard = SandboxGuard(SandboxConfig(mode="workspace-write"), get_cwd=lambda: str(tmp_path))
+        guard = SandboxGuard(SandboxConfig(), get_cwd=lambda: str(tmp_path))
         verdict = guard.check_write("")
         assert not verdict.allowed
         assert "no concrete permission target" in verdict.reason
@@ -85,7 +88,7 @@ class TestSessionRoots:
         cwd.mkdir()
         granted = tmp_path / "granted"
         granted.mkdir()
-        guard = SandboxGuard(SandboxConfig(mode="workspace-write"), get_cwd=lambda: str(cwd))
+        guard = SandboxGuard(SandboxConfig(), get_cwd=lambda: str(cwd))
         assert not guard.check_write(str(granted / "f.txt")).allowed
         guard.add_session_root(str(granted))
         assert guard.check_write(str(granted / "f.txt")).allowed
@@ -98,7 +101,7 @@ class TestSessionRoots:
         sess_root = tmp_path / "sess"
         sess_root.mkdir()
         guard = SandboxGuard(
-            SandboxConfig(mode="workspace-write", writable_roots=[str(cfg_root)]),
+            SandboxConfig(writable_roots=[str(cfg_root)]),
             get_cwd=lambda: str(cwd),
         )
         guard.add_session_root(str(sess_root))

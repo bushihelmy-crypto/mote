@@ -16,13 +16,13 @@ from mote.contracts.clock import UNIX_UTC_CLOCK, AbsoluteInstant
 from mote.orchestration.automation import TriggerDisposition, TriggerReceipt
 from mote.orchestration.automation.cron.lock import SchedulerFence, verify_scheduler_fence
 from mote.orchestration.automation.cron.task import CronTask, SessionCronTaskId
-from mote.runtime.persistence import atomic_write, mtime_seconds
+from mote.runtime.persistence import atomic_write
 from mote.runtime.telemetry.logging import log_class
 
 SCHEDULES_DIRNAME = ".agent_schedules"
 SCHEDULES_FILENAME = "scheduled_tasks.json"
 _STORE_LOCK_FILENAME = "scheduled_tasks.store.lock"
-_SCHEMA = "mote.cron-schedule/v2"
+_SCHEMA = "mote.cron-schedule/v3"
 _ENVELOPE_FIELDS = {"schema", "schedule_id", "revision", "tasks", "occurrences"}
 _OCCURRENCE_FIELDS = {
     "occurrence_id",
@@ -179,7 +179,7 @@ def _occurrence_from_dict(raw: object) -> CronOccurrence:
     )
 
 
-@log_class(level="DEBUG", exclude={"path", "mtime"})
+@log_class(level="DEBUG", exclude={"path"})
 class CronTaskStore:
     """Single locked command owner for schedule and occurrence mutations."""
 
@@ -196,9 +196,6 @@ class CronTaskStore:
     @property
     def path(self) -> Path:
         return self._path
-
-    def mtime(self) -> Optional[float]:
-        return mtime_seconds(self._path)
 
     @contextmanager
     def _command_lock(self) -> Iterator[None]:
@@ -235,6 +232,10 @@ class CronTaskStore:
 
     def load(self) -> list[CronTask]:
         return list(self.load_snapshot().tasks)
+
+    def decode_candidate(self, parsed: object) -> CronScheduleSnapshot:
+        """Decode a migration candidate through the canonical Cron owner."""
+        return self._decode(parsed)
 
     def _decode(self, parsed: object) -> CronScheduleSnapshot:
         if type(parsed) is not dict:

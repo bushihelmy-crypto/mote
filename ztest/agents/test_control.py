@@ -67,6 +67,7 @@ def make_runtime(session_id, *, status=AgentStatus.IDLE):
 
 
 def make_control(tmp_path, **kwargs):
+    kwargs.setdefault("turn_queue_capacity", 256)
     leases = InMemoryLeaseCoordinator()
     return AgentControl(
         store=ResidencyStore(

@@ -15,17 +15,17 @@ shutdown) runs *outside* the lock, mirroring codex.
 
 ``Residency`` does not own the live-runtime map. It is injected with:
   * ``runtime_lookup(session_id) -> Optional[AgentRuntime]`` (codex ``get_thread``),
-  * ``remove_runtime(session_id)`` (sync or async; codex ``remove_thread``),
+  * ``remove_runtime(session_id)`` (synchronous owner command; codex
+    ``remove_thread``),
 so the control plane keeps a single source of truth for liveness.
 """
 
 from __future__ import annotations
 
-import inspect
 import threading
 import uuid
 from collections import deque
-from typing import Awaitable, Callable, Optional
+from typing import Callable, Optional
 
 from mote.contracts.agent.capacity import (
     CapacitySettlementDisposition,
@@ -52,7 +52,7 @@ from mote.runtime.events.telemetry import TelemetryRuntime
 from mote.runtime.telemetry.logging import logger
 
 RuntimeLookup = Callable[[str], Optional[AgentRuntime]]
-RuntimeRemover = Callable[[str], Optional[Awaitable]]
+RuntimeRemover = Callable[[str], None]
 MaterializationAuthority = Callable[[AgentRuntime], tuple[ResidencyIdentity, LeaseEpoch]]
 
 
@@ -532,9 +532,7 @@ class Residency:
     async def _call_remove(self, session_id: str) -> None:
         if self._remove is None:
             return
-        result = self._remove(session_id)
-        if inspect.isawaitable(result):
-            await result
+        self._remove(session_id)
 
     # ------------------------------------------------------------------
     # Introspection (tests / diagnostics)

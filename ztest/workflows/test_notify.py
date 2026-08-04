@@ -10,6 +10,8 @@ contract and the ``_render_*`` / ``_resolve_param_source`` helpers.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from mote.contracts.workflow.identity import WorkflowDefinitionId
@@ -27,6 +29,15 @@ from mote.orchestration.workflows.notify import (
 from mote.orchestration.workflows.types import GraphRunState
 
 from .conftest import S, sync_node
+
+
+class NotifyState(S):
+    split: Any = None
+    tts: Any = None
+    render: Any = None
+    merge: Any = None
+    a: Any = None
+    go: Any = None
 
 
 class _Collector:
@@ -54,7 +65,7 @@ def collector():
 
 
 def _build_graph() -> WorkflowBuilder:
-    g = WorkflowBuilder("media", state_schema=S)
+    g = WorkflowBuilder("media", state_schema=NotifyState)
     g._definition_id = WorkflowDefinitionId("definition-media")
     g.add_node("split", sync_node(lambda s: {"parts": 3}), params={"src": {"from": "$input.x"}})
     g.add_node("tts", sync_node(lambda s: "audio"))
@@ -70,7 +81,7 @@ def _build_graph() -> WorkflowBuilder:
 
 def _ring_graph() -> WorkflowBuilder:
     """A ``work`` node that self-loops (mirrors code_review's review_batch)."""
-    g = WorkflowBuilder("ring", state_schema=S)
+    g = WorkflowBuilder("ring", state_schema=NotifyState)
     g._definition_id = WorkflowDefinitionId("definition-ring")
     g.add_node("work", sync_node(lambda s: {"x": s.x}))
     g.add_node("done", sync_node(lambda s: "ok"))
@@ -79,6 +90,7 @@ def _ring_graph() -> WorkflowBuilder:
         "work",
         lambda s: "loop" if s.x else "done",
         {"loop": "work", "done": "done"},
+        projector=lambda state: state,
     )
     g.add_edge("done", END)
     return g
@@ -178,7 +190,7 @@ class TestPushTerminal:
 
     def test_terminal_waiting_always_none(self, collector):
         # Graph is never paused on an LLM route at terminal.
-        g = WorkflowBuilder("llm", state_schema=S)
+        g = WorkflowBuilder("llm", state_schema=NotifyState)
         g._definition_id = WorkflowDefinitionId("definition-llm-terminal")
         g.add_node("a", sync_node(lambda s: "a-done"))
         g.add_node("go", sync_node(lambda s: "went"))
@@ -365,7 +377,7 @@ class TestPushNodeFailure:
 
 class TestPushLlmRoute:
     def test_llm_route_options(self, collector):
-        g = WorkflowBuilder("llm", state_schema=S)
+        g = WorkflowBuilder("llm", state_schema=NotifyState)
         g._definition_id = WorkflowDefinitionId("definition-llm-route")
         g.add_node("a", sync_node(lambda s: "a-done"))
         g.add_node("go", sync_node(lambda s: "went"))
@@ -386,15 +398,15 @@ class TestPushLlmRoute:
 
 class TestHelpers:
     def test_resolve_input_param_from_initial(self):
-        state = S(x=5)
+        state = NotifyState(x=5)
         assert _resolve_param_source("$input.x", state, {"x": 9}) == 9
 
     def test_resolve_input_param_from_state(self):
-        state = S(x=5)
+        state = NotifyState(x=5)
         assert _resolve_param_source("$input.x", state, {}) == 5
 
     def test_resolve_node_output_key(self):
-        state = S(x=0)
+        state = NotifyState(x=0)
         setattr(state, "split", {"parts": 3})
         assert _resolve_param_source("split.parts", state, {}) == 3
 
@@ -417,7 +429,7 @@ class TestHelpers:
         assert "split" not in _render_completed_nodes(g, state, rs, {"split"})
 
     def test_render_completed_excludes_waiting_for_route(self):
-        g = WorkflowBuilder("llm", state_schema=S)
+        g = WorkflowBuilder("llm", state_schema=NotifyState)
         g.add_node("a", sync_node(lambda s: "a-done"))
         g.add_node("go", sync_node(lambda s: "went"))
         g.add_edge(START, "a")

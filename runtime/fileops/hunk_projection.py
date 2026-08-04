@@ -47,7 +47,7 @@ class EditPlanHunkProjector:
                         new_range=(hunk.new_start, hunk.new_count),
                         pre_hash=fact.before_utf8.digest,
                         post_hash=fact.after_utf8.digest,
-                        expected_digest=mutation.after.digest,
+                        expected_digest=fact.after_utf8.digest,
                     )
                 )
         return tuple(records)

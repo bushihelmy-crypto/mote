@@ -26,11 +26,12 @@ from uuid import uuid4
 
 import mote.runtime.context.compaction.format as compact_prompt
 from mote.contracts.conversation import ContextManagerConfig, Message, UserMessage
+from mote.contracts.model.inference import FinalizedGenerateRequest
 from mote.kernel.telemetry.context import current_trace_id
 from mote.runtime.context.compaction.reducers.base import ReducerCost, ReductionOutcome
 from mote.runtime.context.compaction.request import ReductionRequest
 from mote.runtime.context.compaction.transcript import Transcript
-from mote.runtime.models.model_calls import generate
+from mote.runtime.models.model_calls import generate_finalized
 from mote.runtime.telemetry.logging import logger
 
 
@@ -144,14 +145,16 @@ class SummarizeReducer:
         )
 
         try:
-            output, _resolved = await generate(
+            output, _resolved = await generate_finalized(
                 self._model_route,
-                head_msgs,
+                FinalizedGenerateRequest(
+                    messages=tuple(head_msgs),
+                    task="compression",
+                    system_prompt=instruction,
+                    stream=False,
+                    trace_id=current_trace_id() or "",
+                ),
                 model_call_id=uuid4().hex,
-                task="compression",
-                system_prompt=instruction,
-                stream=False,
-                trace_id=current_trace_id() or "",
             )
             summary = output.content
         except Exception as e:  # noqa: BLE001 — any summarize failure trips the breaker

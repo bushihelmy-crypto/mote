@@ -290,6 +290,7 @@ def test_unknown_event_rejects_replay(tmp_path):
                 schema_version=1,
                 occurred_at=occurred_at,
                 payload={"value": 1},
+                session_id=log.session_id,
             ),
         ),
         expected_version=1,

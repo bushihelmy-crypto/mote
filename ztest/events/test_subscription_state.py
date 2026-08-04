@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 import pytest
 
 from mote.contracts.events.envelope import EventEnvelope, EventId, EventType, StreamId
-from mote.contracts.ports.events.subscription import DeadLetterEntry, SubscriptionCheckpoint, SubscriptionIdentity
+from mote.contracts.ports.events.subscription import (
+    DeadLetterEntry,
+    SubscriptionCheckpoint,
+    SubscriptionIdentity,
+    SubscriptionOwnerLease,
+)
 from mote.runtime.events.backends.subscription_state import (
     CheckpointRegressionError,
     SQLiteSubscriptionStateStore,
@@ -27,11 +32,14 @@ def _event(sequence: int = 1) -> EventEnvelope:
     )
 
 
-def _checkpoint(sequence: int) -> SubscriptionCheckpoint:
+def _checkpoint(sequence: int, lease: SubscriptionOwnerLease) -> SubscriptionCheckpoint:
     return SubscriptionCheckpoint(
         identity=SubscriptionIdentity("mote.test.subscription"),
         stream_id=StreamId("session/test"),
         sequence=sequence,
+        owner_id=lease.owner_id,
+        generation=lease.generation,
+        fencing_token=lease.fencing_token,
     )
 
 
@@ -67,7 +75,8 @@ async def test_checkpoint_survives_reopen_and_cannot_regress(tmp_path) -> None:
     path = tmp_path / "subscriptions.sqlite3"
     store = SQLiteSubscriptionStateStore(path)
     await store.aopen()
-    await store.save(_checkpoint(2))
+    lease = await store.claim_owner(SubscriptionIdentity("mote.test.subscription"), "owner-1")
+    await store.save(_checkpoint(2, lease))
 
     assert (
         await store.load(
@@ -77,7 +86,7 @@ async def test_checkpoint_survives_reopen_and_cannot_regress(tmp_path) -> None:
         == 2
     )
     with pytest.raises(CheckpointRegressionError):
-        await store.save(_checkpoint(1))
+        await store.save(_checkpoint(1, lease))
     await store.aclose()
 
     reopened = SQLiteSubscriptionStateStore(path)
@@ -98,10 +107,11 @@ async def test_quarantine_atomically_persists_replayable_event_and_checkpoint(
 ) -> None:
     store = SQLiteSubscriptionStateStore(tmp_path / "subscriptions.sqlite3")
     await store.aopen()
+    lease = await store.claim_owner(SubscriptionIdentity("mote.test.subscription"), "owner-1")
     entry = _dead_letter()
 
-    await store.quarantine(entry, _checkpoint(1))
-    await store.quarantine(entry, _checkpoint(1))
+    await store.quarantine(entry, _checkpoint(1, lease))
+    await store.quarantine(entry, _checkpoint(1, lease))
 
     assert (
         await store.load(
@@ -120,10 +130,11 @@ async def test_failed_checkpoint_advance_rolls_back_dead_letter_insert(
 ) -> None:
     store = SQLiteSubscriptionStateStore(tmp_path / "subscriptions.sqlite3")
     await store.aopen()
-    await store.save(_checkpoint(2))
+    lease = await store.claim_owner(SubscriptionIdentity("mote.test.subscription"), "owner-1")
+    await store.save(_checkpoint(2, lease))
 
     with pytest.raises(CheckpointRegressionError):
-        await store.quarantine(_dead_letter(1), _checkpoint(1))
+        await store.quarantine(_dead_letter(1), _checkpoint(1, lease))
 
     assert await store.list_dead_letters() == ()
     assert (

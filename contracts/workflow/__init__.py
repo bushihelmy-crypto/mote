@@ -35,6 +35,11 @@ from mote.contracts.workflow.definition_source import (
     decode_workflow_definition_source,
     encode_workflow_definition_source,
 )
+from mote.contracts.workflow.effect import (
+    WorkflowEffectAdmissionDisposition,
+    WorkflowEffectAdmissionReceipt,
+    WorkflowEffectCapacityError,
+)
 from mote.contracts.workflow.execution import WorkflowNodeDispatchResult
 from mote.contracts.workflow.governance import (
     MAX_WORKFLOW_GOVERNANCE_TARGETS,
@@ -111,6 +116,9 @@ __all__ = [
     "WorkflowTerminalResult",
     "WorkflowTimedOut",
     "WorkflowNodeDispatchResult",
+    "WorkflowEffectAdmissionDisposition",
+    "WorkflowEffectAdmissionReceipt",
+    "WorkflowEffectCapacityError",
     "WORKFLOW_TERMINAL_RESULT_SCHEMA",
     "decode_workflow_terminal_result",
     "decode_workflow_access_grant",

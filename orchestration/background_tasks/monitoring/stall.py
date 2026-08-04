@@ -14,6 +14,7 @@ import re
 from typing import TYPE_CHECKING
 
 from mote.contracts.conversation import CauseBy
+from mote.contracts.task.models import TaskId
 from mote.orchestration.background_tasks.constants import STALL_CHECK_INTERVAL, STALL_TAIL_BYTES, STALL_THRESHOLD
 from mote.orchestration.background_tasks.model import BackgroundTaskNotification
 from mote.orchestration.background_tasks.status import BackgroundTaskStatus
@@ -88,7 +89,7 @@ class StallDetector:
         self._stall_tail_bytes = stall_tail_bytes
         self._watchers: dict[str, PeriodicLoop] = {}
 
-    def start_watching(self, task_id: str) -> None:
+    def start_watching(self, task_id: TaskId) -> None:
         """Begin monitoring *task_id* for stalling."""
         existing = self._watchers.get(task_id)
         if existing is not None and existing.is_running():
@@ -102,7 +103,7 @@ class StallDetector:
         self._watchers[task_id] = loop
         loop.start()
 
-    def stop_watching(self, task_id: str) -> None:
+    def stop_watching(self, task_id: TaskId) -> None:
         """Cancel the monitoring loop for *task_id*."""
         watcher = self._watchers.pop(task_id, None)
         if watcher is not None:
@@ -114,7 +115,7 @@ class StallDetector:
             watcher.cancel()
         self._watchers.clear()
 
-    def _make_tick(self, task_id: str):
+    def _make_tick(self, task_id: TaskId):
         """Build the per-task tick closure carrying its own growth-tracking state."""
         state = {"last_size": 0, "last_growth": None, "notified": False}
 
@@ -163,7 +164,7 @@ class StallDetector:
                         f"</task-notification>"
                     ),
                     cause_by=CauseBy.RUN_COMMAND,
-                    task_id=task_id,
+                    task_id=TaskId(task_id),
                     command_name=command_name,
                     status="stall_warning",
                     result=tail_text[-200:],

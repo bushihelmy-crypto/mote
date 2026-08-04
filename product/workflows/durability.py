@@ -12,6 +12,12 @@ from uuid import uuid4
 
 from mote.contracts.agent.runtime_identity import AgentId
 from mote.contracts.clock import AbsoluteInstant
+from mote.contracts.ports.agent.delivery import (
+    AgentDeliveryCommand,
+    AgentDeliveryCommandDisposition,
+    AgentDeliveryPort,
+    AgentDeliverySourceKind,
+)
 from mote.contracts.ports.workflow.admission import WorkflowCreateAdmissionPort
 from mote.contracts.ports.workflow.authority import WorkflowCallerAuthorizationPort
 from mote.contracts.ports.workflow.execution import WorkflowNodeExecutionPort
@@ -41,7 +47,7 @@ from mote.contracts.workflow.governance import (
     WorkflowGovernanceCancelSettlementSnapshot,
     WorkflowGovernanceScopeCancelRequestId,
 )
-from mote.orchestration.workflows import WorkflowDefinition
+from mote.orchestration.workflows import WorkflowExecutable
 from mote.orchestration.workflows.creation import WorkflowCreateAdmissionReconciler, WorkflowCreateCoordinator
 from mote.orchestration.workflows.durable import (
     CreateWorkflowRun,
@@ -68,8 +74,7 @@ if TYPE_CHECKING:
     from mote.runtime.durable.temporal._activities import StepInput
 
 EffectExecutor = Callable[[WorkflowEffect], tuple[EffectSettlement, str]]
-TerminalDeliverer = Callable[[WorkflowTerminalDelivery], bool]
-TrustedBlueprintFactory = Callable[[], WorkflowDefinition]
+TrustedBlueprintFactory = Callable[[], WorkflowExecutable]
 WorkflowExecutionActivator = Callable[[WorkflowRunProjection], bool]
 
 
@@ -134,7 +139,7 @@ class ProductWorkflowDurability:
             now=SystemClock().now,
         )
         self._effect_executors: dict[str, EffectExecutor] = {}
-        self._terminal_deliverers: dict[str, TerminalDeliverer] = {}
+        self._agent_deliveries: dict[AgentId, AgentDeliveryPort] = {}
         self._scan_interval_seconds = scan_interval_seconds
         self._scan_task: asyncio.Task[None] | None = None
         self._temporal_effects: TemporalEffectPlane | None = None
@@ -227,8 +232,8 @@ class ProductWorkflowDurability:
         key = (source.blueprint_id, source.blueprint_version)
         if key in self._trusted_blueprints:
             raise RuntimeError("trusted Workflow blueprint is already registered")
-        definition = factory()
-        if not isinstance(definition, WorkflowDefinition):
+        executable = factory()
+        if not isinstance(executable, WorkflowExecutable):
             raise TypeError("trusted Workflow blueprint factory returned another type")
         self._trusted_blueprints[key] = factory
 
@@ -239,17 +244,17 @@ class ProductWorkflowDurability:
         expected_definition_id: WorkflowDefinitionId,
         expected_digest: str,
         workflow_nodes: WorkflowNodeExecutionPort,
-    ) -> WorkflowDefinition:
+    ) -> WorkflowExecutable:
         if isinstance(source, TrustedWorkflowBlueprintSource):
             factory = self._trusted_blueprints.get((source.blueprint_id, source.blueprint_version))
             if factory is None:
                 raise KeyError("trusted Workflow blueprint is not activated")
-            definition = factory()
+            executable = factory()
         elif isinstance(source, DeclarativeWorkflowDefinitionSource):
             if source.compiler_id != "mote.product.run-graph" or source.compiler_version != 1:
                 raise ValueError("declarative Workflow compiler is not activated")
             spec = GraphSpec.model_validate_json(source.payload)
-            definition = build_graph(
+            executable = build_graph(
                 spec,
                 dispatch=workflow_nodes.dispatch,
                 command_name="RunGraph",
@@ -257,9 +262,10 @@ class ProductWorkflowDurability:
             ).build()
         else:
             raise TypeError("unknown Workflow definition source")
+        definition = executable.definition
         if definition.definition_id != expected_definition_id or definition.digest != expected_digest:
             raise ValueError("activated Workflow definition identity mismatch")
-        return definition
+        return executable
 
     def query(self, reference: WorkflowRunReference) -> WorkflowRunProjection | None:
         return self._runs.get(reference)
@@ -389,13 +395,15 @@ class ProductWorkflowDurability:
             raise ValueError("Workflow effect handler identity is invalid or duplicated")
         self._effect_executors[handler_id] = executor
 
-    def register_terminal_deliverer(self, destination_id: str, deliverer: TerminalDeliverer) -> None:
-        if not destination_id or destination_id in self._terminal_deliverers:
-            raise ValueError("Workflow delivery identity is invalid or duplicated")
-        self._terminal_deliverers[destination_id] = deliverer
+    def register_agent_delivery(self, agent_id: AgentId, delivery: AgentDeliveryPort) -> None:
+        if agent_id in self._agent_deliveries:
+            raise ValueError("Workflow Agent delivery owner is already registered")
+        self._agent_deliveries[agent_id] = delivery
 
-    def unregister_terminal_deliverer(self, destination_id: str) -> None:
-        self._terminal_deliverers.pop(destination_id, None)
+    def unregister_agent_delivery(self, agent_id: AgentId, delivery: AgentDeliveryPort) -> None:
+        if self._agent_deliveries.get(agent_id) is not delivery:
+            raise ValueError("Workflow Agent delivery owner is stale or foreign")
+        del self._agent_deliveries[agent_id]
 
     async def start(self) -> None:
         if self._scan_task is not None:
@@ -460,9 +468,21 @@ class ProductWorkflowDurability:
                 )
             self.reconciler.reconcile_deliveries(
                 self._deliver_terminal,
-                eligible=lambda delivery: delivery.destination_id in self._terminal_deliverers,
+                eligible=self._delivery_is_activated,
             )
+            self._reconcile_effect_retention()
             await asyncio.sleep(self._scan_interval_seconds)
+
+    def _reconcile_effect_retention(self) -> None:
+        """Product-owned bounded retention maintenance for terminal effects."""
+        now = SystemClock().now()
+        terminal_before = AbsoluteInstant(1, now.clock, now.epoch_nanoseconds - 90 * 86_400 * 1_000_000_000)
+        tombstone_before = AbsoluteInstant(1, now.clock, now.epoch_nanoseconds - 365 * 86_400 * 1_000_000_000)
+        for effect_id in self._reconciliation_store.scan_effect_retention(before=terminal_before, limit=500):
+            self._reconciliation_store.tombstone_effect(effect_id, before=terminal_before, now=now)
+        for effect_id, tombstone in tuple(self._reconciliation_store.records()["tombstones"].items()):
+            if tombstone.tombstoned_at.epoch_nanoseconds <= tombstone_before.epoch_nanoseconds:
+                self._reconciliation_store.purge_effect_tombstone(effect_id, before=now)
 
     def _reactivate_nonterminal_runs(self) -> None:
         eligible = {
@@ -575,11 +595,41 @@ class ProductWorkflowDurability:
         return executor(effect)
 
     def _deliver_terminal(self, delivery: WorkflowTerminalDelivery) -> bool:
+        agent_id = self._delivery_agent_id(delivery)
         try:
-            deliverer = self._terminal_deliverers[delivery.destination_id]
+            port = self._agent_deliveries[agent_id]
         except KeyError as exc:
-            raise RuntimeError("Workflow terminal destination is not activated") from exc
-        return deliverer(delivery)
+            raise RuntimeError("Workflow terminal Agent delivery owner is not activated") from exc
+        receipt = port.dispatch(
+            AgentDeliveryCommand(
+                AgentDeliverySourceKind.WORKFLOW,
+                delivery.delivery_id,
+                str(agent_id),
+                f"<workflow-result run_id={delivery.run_id!r}>{delivery.outcome_payload}</workflow-result>",
+            )
+        )
+        return receipt.disposition in {
+            AgentDeliveryCommandDisposition.ACCEPTED,
+            AgentDeliveryCommandDisposition.ALREADY_SETTLED,
+        }
+
+    def _delivery_is_activated(self, delivery: WorkflowTerminalDelivery) -> bool:
+        try:
+            agent_id = self._delivery_agent_id(delivery)
+        except ValueError:
+            return False
+        return agent_id in self._agent_deliveries
+
+    @staticmethod
+    def _delivery_agent_id(delivery: WorkflowTerminalDelivery) -> AgentId:
+        prefix = "agent:"
+        marker = ":workflow:"
+        if not delivery.destination_id.startswith(prefix) or marker not in delivery.destination_id:
+            raise ValueError("Workflow terminal destination is not a canonical Agent destination")
+        agent, separator, run_id = delivery.destination_id[len(prefix) :].partition(marker)
+        if not separator or not agent or run_id != delivery.run_id:
+            raise ValueError("Workflow terminal destination identity is inconsistent")
+        return AgentId(agent)
 
 
 __all__ = [

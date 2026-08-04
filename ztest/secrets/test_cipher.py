@@ -4,8 +4,8 @@
 
 Pins the crypto floor the encrypted vault stands on: AES-256-GCM round-trips,
 authenticates (a wrong key fails loud rather than returning garbage), and the
-auto-generated key file is owner-only (0600). ``build_cipher`` is the swappable
-strategy registry the store depends on.
+auto-generated key file is owner-only (0600). The construction boundary is
+explicitly AES-GCM and does not expose a single-item strategy registry.
 """
 
 from __future__ import annotations
@@ -15,8 +15,7 @@ import stat
 
 import pytest
 
-from mote.product.config.secrets import SecretsConfig
-from mote.runtime.secrets.cipher import AesGcmCipher, KeyFileProvider, build_cipher
+from mote.runtime.secrets.cipher import AesGcmCipher, KeyFileProvider, build_aes_cipher
 
 
 class TestAesGcmCipher:
@@ -67,15 +66,6 @@ class TestKeyFileProvider:
 
 class TestBuildCipher:
     def test_aes_strategy(self, tmp_path):
-        # build_cipher reads ``key_path`` via getattr — a SimpleNamespace stands
-        # in so the test's key lands in tmp, not the real ~/.mote/vault.key.
-        from types import SimpleNamespace
-
-        cfg = SimpleNamespace(cipher="aes", key_path=str(tmp_path / "vault.key"))
-        cipher = build_cipher(cfg)
+        cipher = build_aes_cipher(tmp_path / "vault.key")
         assert not (tmp_path / "vault.key").exists()
         assert cipher.decrypt(cipher.encrypt(b"x")) == b"x"
-
-    def test_unknown_strategy_fails_loud(self):
-        with pytest.raises(ValueError, match="unknown vault cipher"):
-            build_cipher(SecretsConfig(cipher="rot13"))

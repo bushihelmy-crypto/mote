@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -74,7 +75,7 @@ class HunkOps:
             [MutationSet, MutationArtifactOwnership],
             MutationResult,
         ],
-        resource_lease: Callable[[tuple[FileSnapshot, ...]], object],
+        resource_lease: Callable[[tuple[FileSnapshot, ...]], AbstractContextManager[None]],
     ) -> None:
         self._review = review
         self._blobs = blobs
@@ -95,12 +96,14 @@ class HunkOps:
         error = self._pending_error(record)
         if error:
             return HunkOpResult(hunk_id, False, error=error)
+        assert record is not None
         snapshot, _, _, _ = self._current(record.path)
         with self._resource_lease((snapshot,)):
             record = self._review.status(hunk_id)
             error = self._pending_error(record, conflict=True)
             if error:
                 return HunkOpResult(hunk_id, False, error=error)
+            assert record is not None
             snapshot, _, current, _ = self._current(record.path)
             if not self._matches_expected(record, snapshot, current):
                 return HunkOpResult(hunk_id, False, error="drifted")
@@ -116,6 +119,7 @@ class HunkOps:
         error = self._pending_error(record)
         if error:
             return HunkOpResult(hunk_id, False, error=error)
+        assert record is not None
         batch = self._reject_batch([record])
         if not batch.results:
             return HunkOpResult(hunk_id, False, error="review conflict")
@@ -171,6 +175,7 @@ class HunkOps:
                 error = self._pending_error(current_record, conflict=True)
                 if error:
                     return self._batch_error(ordered, error)
+                assert current_record is not None
                 latest.append(current_record)
             try:
                 plans = self._plan_rejections(latest)

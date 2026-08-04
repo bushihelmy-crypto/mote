@@ -10,7 +10,12 @@ import pytest
 
 from mote.product.inference.daemon.bootstrap import read_inherited_bootstrap
 from mote.product.inference.daemon.security import current_incarnation
-from mote.product.inference.daemon.supervisor import DaemonDiscovery, SharedDaemonSupervisor, SupervisorOwnershipError
+from mote.product.inference.daemon.supervisor import (
+    DaemonDiscovery,
+    DaemonState,
+    SharedDaemonSupervisor,
+    SupervisorOwnershipError,
+)
 
 
 def test_supervisor_publishes_only_live_owner_only_socket(tmp_path):
@@ -50,14 +55,14 @@ def test_stale_socket_moves_aside_only_under_lock_after_both_checks_fail(tmp_pat
     os.chmod(socket_path, 0o600)
     incarnation = current_incarnation(os.getpid())
     dead = DaemonDiscovery(
-        schema_version=1,
+        schema_version=2,
         socket_generation=generation,
         socket_path=str(socket_path),
         pid=999_999_999,
         process_start_ticks=incarnation.process_start_ticks,
         boot_id=incarnation.boot_id,
         protocol_version=3,
-        state="ready",
+        state=DaemonState.READY,
     )
     supervisor._atomic_write(directory / "gateway.json", asdict(dead))
     next_generation, next_socket = supervisor.prepare_generation()

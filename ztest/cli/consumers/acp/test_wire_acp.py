@@ -12,9 +12,12 @@ diff round-trip, and the permission option vocabulary.
 
 from __future__ import annotations
 
+import pytest
+
 from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity
 from mote.product.interfaces.acp import wire as acp
 from mote.product.presentation.events import events as ev
+from mote.product.presentation.events.catalog import UnsupportedViewEventError
 
 
 def _identity(value: str) -> ToolInvocationIdentity:
@@ -159,14 +162,15 @@ def test_tool_call_update_for_permission_carries_kind_and_title():
     assert upd["title"] == "rm -rf /"
 
 
-# ── unknown / display-only kinds → [] ────────────────────────────────────────
-def test_unknown_kind_maps_to_empty():
+# ── unknown kinds fail closed ────────────────────────────────────────────────
+def test_unknown_kind_fails_closed():
     st = _state()
 
     class Bogus:
         kind = "not_real"
 
-    assert acp.to_acp_updates(Bogus(), st) == []
+    with pytest.raises(UnsupportedViewEventError):
+        acp.to_acp_updates(Bogus(), st)
 
 
 def test_notice_and_error_ride_agent_text():

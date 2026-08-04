@@ -8,6 +8,7 @@ from mote.contracts.agent import AgentConstructionRequest, BaseAgent, SpawnableA
 from mote.product.agents.catalog import AgentCatalog, compile_agent_catalog
 from mote.product.agents.discovery import builtin_agent_catalog
 from mote.product.agents.factory import CodingAgentFactory
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.product.extensions.sources import ExtensionSourcePolicy
 from mote.runtime.agent.base import BaseRole
 
@@ -92,7 +93,9 @@ class _Beta(BaseAgent, BaseRole):
 
 
 def test_full_and_incremental_type_projection_use_the_same_compiler():
-    factory = CodingAgentFactory()
+    factory = CodingAgentFactory(
+        model_checkpoint_policy=approved_model_checkpoint_policy(),
+    )
     full = AgentCatalog.from_types((_Beta, _Alpha), factory)
     incremental = AgentCatalog.from_types((_Alpha,), factory).with_types((_Beta,), factory)
 
@@ -101,7 +104,9 @@ def test_full_and_incremental_type_projection_use_the_same_compiler():
 
 
 def test_builtin_discovery_is_a_thin_projection_to_the_same_compiler(monkeypatch, tmp_path):
-    factory = CodingAgentFactory()
+    factory = CodingAgentFactory(
+        model_checkpoint_policy=approved_model_checkpoint_policy(),
+    )
     monkeypatch.setattr(
         "mote.product.agents.discovery.discover_md_agents",
         lambda cwd, *, source_policy: {"beta": _Beta, "alpha": _Alpha},

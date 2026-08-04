@@ -68,7 +68,7 @@ def _node_retry_args(node: ActivityNodeState) -> str:
     if not args:
         return ""
     try:
-        text = json.dumps(args, ensure_ascii=False, default=str)
+        text = json.dumps(args, ensure_ascii=False)
     except (TypeError, ValueError):
         text = repr(args)
     return text[:200] + "…" if len(text) > 200 else text

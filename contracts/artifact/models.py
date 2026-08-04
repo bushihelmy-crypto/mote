@@ -1,4 +1,5 @@
 """Stable models for immutable, revisioned artifacts."""
+
 from __future__ import annotations
 
 import hashlib
@@ -145,6 +146,52 @@ class ArtifactRef:
     @property
     def readable(self) -> str:
         return f"artifact:{self.artifact_id}@{self.revision}:{self.representation}"
+
+    def to_dict(self) -> dict[str, object]:
+        """Strict wire projection for durable payload references."""
+        return {
+            "artifact_id": self.artifact_id,
+            "revision": self.revision,
+            "representation": self.representation,
+            "kind": self.kind,
+            "mime_type": self.mime_type,
+            "content_ref": self.content_ref,
+            "digest": self.digest,
+            "size": self.size,
+            "retention": self.retention.value,
+            "sensitivity": self.sensitivity.value,
+            "suggested_name": self.suggested_name,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "ArtifactRef":
+        if type(value) is not dict or set(value) != {
+            "artifact_id",
+            "revision",
+            "representation",
+            "kind",
+            "mime_type",
+            "content_ref",
+            "digest",
+            "size",
+            "retention",
+            "sensitivity",
+            "suggested_name",
+        }:
+            raise ValueError("ArtifactRef wire shape is invalid")
+        return cls(
+            artifact_id=value["artifact_id"],
+            revision=value["revision"],
+            representation=value["representation"],
+            kind=value["kind"],
+            mime_type=value["mime_type"],
+            content_ref=value["content_ref"],
+            digest=value["digest"],
+            size=value["size"],
+            retention=ArtifactRetention(value["retention"]),
+            sensitivity=ArtifactSensitivity(value["sensitivity"]),
+            suggested_name=value["suggested_name"],
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,16 +7,16 @@ settlement cannot be reordered by registration order.
 
 from __future__ import annotations
 
-import inspect
 import itertools
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from mote.contracts.authorization import PermissionFacts
 from mote.contracts.foundation.errors.report import ErrorReport, render_error_block
 from mote.contracts.ports.tool.deferred import DeferredResultProjector
 from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolPermissionFactsProvider
+from mote.contracts.tool.arguments import ToolArguments, freeze_tool_arguments
 from mote.contracts.tool.effects import ToolEffect
 from mote.contracts.tool.errors import ToolNotFoundError, ToolPermissionDeniedError, ToolValidationError
 from mote.contracts.tool.execution import ToolExecutionKind
@@ -24,16 +24,14 @@ from mote.contracts.tool.identity import ToolInvocationIdentity
 from mote.contracts.tool.policy import ToolCallIntent
 from mote.kernel.telemetry.events import span
 from mote.runtime.events.scope import current_scope
-from mote.runtime.ledger import COMPLETED, FAILED, KIND_TOOL, RunJournal
-from mote.runtime.presentation import plural
 from mote.runtime.resilience.recovery import RecoveryRunner
+from mote.runtime.tools.effect_store import ToolEffectState, ToolEffectStore
 from mote.runtime.tools.execution_context import AuthorizedToolInvocation, bind_authorized_invocation, bind_tool_call_id
 from mote.runtime.tools.tool_binding import ExecutableToolBinding
 from mote.runtime.tools.tool_result import ToolResult
 from mote.runtime.tools.tool_result_receipt import decode_tool_result_receipt
 from mote.runtime.tools.tool_settlement import ToolSettlement
 
-_NON_ARG_PARAMS = frozenset({"self", "cls"})
 _UNKNOWN_AFTER_CRASH = (
     "<unknown-after-crash>\n"
     "Tool '{name}' (call {call_id}) was started before a restart but its outcome "
@@ -41,33 +39,6 @@ _UNKNOWN_AFTER_CRASH = (
     "It was NOT re-run. Verify whether the effect already took hold; reissue the "
     "call only if it is safe to retry.\n</unknown-after-crash>"
 )
-
-
-def validate_call_args(call_fn: Callable, tool_name: str, args: dict[str, Any]) -> None:
-    try:
-        signature = inspect.signature(call_fn)
-    except (TypeError, ValueError):
-        return
-    known: set[str] = set()
-    required: set[str] = set()
-    for name, parameter in signature.parameters.items():
-        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
-            return
-        if parameter.kind is inspect.Parameter.VAR_POSITIONAL or name in _NON_ARG_PARAMS:
-            continue
-        known.add(name)
-        if parameter.default is inspect.Parameter.empty:
-            required.add(name)
-    missing = sorted(required - args.keys())
-    unexpected = sorted(set(args) - known)
-    if not missing and not unexpected:
-        return
-    parts = []
-    if missing:
-        parts.append(f"missing required {plural('argument', len(missing))}: {', '.join(missing)}")
-    if unexpected:
-        parts.append(f"unexpected {plural('argument', len(unexpected))}: {', '.join(unexpected)}")
-    raise ToolValidationError(f"{tool_name}: {'; '.join(parts)}")
 
 
 def failed_result(exc: Exception, *, terminate: bool = False) -> ToolResult:
@@ -83,9 +54,9 @@ def failed_result(exc: Exception, *, terminate: bool = False) -> ToolResult:
 @dataclass
 class ToolExecution:
     name: str
-    args: dict[str, Any]
+    args: ToolArguments
     identity: ToolInvocationIdentity
-    tool: Any = None
+    tool: ExecutableToolBinding | None = None
     ledgered: bool = False
     authorization_generation: int | None = None
 
@@ -96,7 +67,11 @@ class LedgerReplay:
 
 
 class ResolveStage:
-    def __init__(self, get_tool: Callable[[str], Any], available_names: Callable[[], list[str]]) -> None:
+    def __init__(
+        self,
+        get_tool: Callable[[str], ExecutableToolBinding | None],
+        available_names: Callable[[], list[str]],
+    ) -> None:
         self._get_tool = get_tool
         self._available_names = available_names
 
@@ -117,15 +92,18 @@ class AuthorizeStage:
 
     async def run(self, execution: ToolExecution) -> ToolResult | None:
         tool = execution.tool
+        if tool is None:
+            raise RuntimeError("authorization reached without a compiled Tool binding")
 
-        def resolve_facts(args: dict) -> PermissionFacts:
+        def resolve_facts(args: ToolArguments) -> PermissionFacts:
             if isinstance(tool, ToolPermissionFactsProvider):
                 return tool.permission_facts(args, execution.identity)
+            mutable_args = dict(args)
             return PermissionFacts(
-                targets=tool.permission_targets(args),
-                mutates_fs=tool.mutates_filesystem_for(args),
-                tool_check=tool.check_permissions(args),
-                segments=tool.permission_segments(args),
+                targets=tool.permission_targets(mutable_args),
+                mutates_fs=tool.mutates_filesystem_for(mutable_args),
+                tool_check=tool.check_permissions(mutable_args),
+                segments=tool.permission_segments(mutable_args),
             )
 
         decision = await self._policy.authorize(
@@ -137,7 +115,7 @@ class AuthorizeStage:
             ),
             resolve_facts,
         )
-        execution.args = dict(decision.arguments)
+        execution.args = freeze_tool_arguments(decision.arguments)
         execution.identity = decision.identity
         if not decision.allowed and isinstance(tool, ToolPermissionFactsProvider):
             tool.release_permission_facts(execution.identity)
@@ -160,20 +138,25 @@ class AuthorizeStage:
 
 
 class LedgerStage:
-    def __init__(self, journal: RunJournal | None) -> None:
-        self._journal = journal
+    def __init__(self, store: ToolEffectStore | None) -> None:
+        self._store = store
 
     def run(self, execution: ToolExecution) -> LedgerReplay | ToolResult | None:
-        effect = execution.tool.resolve_effect_for(execution.args)
-        execution.ledgered = self._journal is not None and effect is not ToolEffect.PURE
+        tool = execution.tool
+        if tool is None:
+            return failed_result(RuntimeError("ledger reached without a compiled Tool binding"))
+        effect = tool.resolve_effect_for(dict(execution.args))
+        execution.ledgered = self._store is not None and effect is not ToolEffect.PURE
         if not execution.ledgered:
             return None
-        journal = cast(RunJournal, self._journal)
+        store = self._store
+        if store is None:
+            raise RuntimeError("Tool effect store disappeared after admission")
         call_id = str(execution.identity.invocation_id)
-        prior = journal.replay(call_id)
+        prior = store.lookup(call_id)
         if prior is not None:
-            durable_identity = prior.invocation_identity
-            if durable_identity is None or self._binding(durable_identity) != self._binding(execution.identity):
+            durable_identity = prior.identity
+            if self._binding(durable_identity) != self._binding(execution.identity):
                 return failed_result(
                     ToolPermissionDeniedError(
                         f"tool invocation '{call_id}' does not match its durable definition, "
@@ -184,26 +167,19 @@ class LedgerStage:
             # not a newly executed attempt. Downstream facts project that exact
             # durable attempt identity.
             execution.identity = durable_identity
-            if prior.status in {COMPLETED, FAILED}:
+            if prior.state in {ToolEffectState.SUCCEEDED, ToolEffectState.FAILED}:
                 return LedgerReplay(
                     decode_tool_result_receipt(
-                        prior.payload,
-                        success=prior.success,
+                        prior.receipt,
+                        success=prior.state is ToolEffectState.SUCCEEDED,
                     )
                 )
-            if prior.effect == ToolEffect.EXTERNAL.value and not execution.tool.can_resume_started_call(call_id):
+            if prior.capability is ToolEffect.EXTERNAL and not tool.can_resume_started_call(call_id):
                 return failed_result(
                     ToolPermissionDeniedError(_UNKNOWN_AFTER_CRASH.format(name=execution.name, call_id=call_id))
                 )
         if prior is None:
-            journal.record_started(
-                call_id,
-                KIND_TOOL,
-                effect.value,
-                name=execution.name,
-                tool_call_id=call_id,
-                invocation_identity=execution.identity,
-            )
+            store.commit_intent(execution.identity, execution.name, effect)
         return None
 
     @staticmethod
@@ -227,31 +203,28 @@ class InvokeStage:
         self._deferred_projector = deferred_projector
 
     async def run(self, execution: ToolExecution) -> ToolResult:
+        tool = execution.tool
+        if tool is None:
+            return failed_result(RuntimeError("invocation reached without a compiled Tool binding"))
+
         async def call():
-            validation_callable = getattr(execution.tool, "validation_callable", execution.tool.call)
-            validate_call_args(validation_callable, execution.name, execution.args)
             if execution.authorization_generation is None:
                 raise RuntimeError("tool invocation reached execution without authorization")
             invocation = AuthorizedToolInvocation(
                 identity=execution.identity,
                 tool_name=execution.name,
-                arguments=dict(execution.args),
+                arguments=execution.args,
                 generation=execution.authorization_generation,
             )
             with bind_tool_call_id(str(execution.identity.invocation_id)), bind_authorized_invocation(invocation):
-                return await execution.tool.call(**execution.args)
+                return await tool.call(**dict(execution.args))
 
         try:
             raw = await self._recovery_runner.run(call)
         except Exception as exc:  # normalized at the executor boundary
             return failed_result(exc)
         projector = self._deferred_projector
-        definition = getattr(execution.tool, "definition", None)
-        execution_kind = getattr(
-            definition,
-            "execution_kind",
-            ToolExecutionKind.ATOMIC,
-        )
+        execution_kind = tool.definition.execution_kind
         if projector is None:
             if execution_kind is ToolExecutionKind.WORKFLOW_DEFERRED:
                 return failed_result(
@@ -278,37 +251,37 @@ class ToolExecutionPipeline:
     def __init__(
         self,
         *,
-        get_tool: Callable[[str], Any],
+        get_tool: Callable[[str], ExecutableToolBinding | None],
         available_names: Callable[[], list[str]],
         policy: ToolCallPolicy,
-        journal: RunJournal | None,
+        effect_store: ToolEffectStore | None,
         recovery_runner: RecoveryRunner,
         deferred_projector: DeferredResultProjector | None,
         settlement: ToolSettlement,
     ) -> None:
         self._resolve = ResolveStage(get_tool, available_names)
         self._authorize = AuthorizeStage(policy)
-        self._ledger = LedgerStage(journal)
+        self._ledger = LedgerStage(effect_store)
         self._invoke = InvokeStage(recovery_runner, deferred_projector)
         self._settlement = settlement
 
     async def run(
         self,
         name: str,
-        args: dict[str, Any],
+        args: ToolArguments,
         identity: ToolInvocationIdentity,
         *,
         binding: ExecutableToolBinding | None = None,
     ) -> ToolResult:
-        execution = ToolExecution(name=name, args=args, identity=identity, tool=binding)
+        execution = ToolExecution(name=name, args=freeze_tool_arguments(args), identity=identity, tool=binding)
         if binding is None:
             rejected = self._resolve.run(execution)
             if rejected is not None:
-                return await self._settlement.reject(name, args, rejected, identity)
-        async with span(f"tool:{execution.name}", attributes=execution.args):
+                return await self._settlement.reject(name, dict(args), rejected, identity)
+        async with span(f"tool:{execution.name}", attributes=dict(execution.args)):
             rejected = await self._authorize.run(execution)
             if rejected is not None:
-                return await self._settlement.reject(execution.name, execution.args, rejected, execution.identity)
+                return await self._settlement.reject(execution.name, dict(execution.args), rejected, execution.identity)
             provider = execution.tool if isinstance(execution.tool, ToolPermissionFactsProvider) else None
             try:
                 short_circuit = self._ledger.run(execution)
@@ -317,19 +290,19 @@ class ToolExecutionPipeline:
                 if short_circuit is not None:
                     return await self._settlement.reject(
                         execution.name,
-                        execution.args,
+                        dict(execution.args),
                         short_circuit,
                         execution.identity,
                     )
                 await self._settlement.start(
                     execution.name,
-                    execution.args,
+                    dict(execution.args),
                     execution.identity,
                 )
                 result = await self._invoke.run(execution)
                 return await self._settlement.finish(
                     execution.name,
-                    execution.args,
+                    dict(execution.args),
                     result,
                     execution.identity,
                     execution.ledgered,

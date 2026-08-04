@@ -1,5 +1,6 @@
 """Stable tool-call and tool-effect contracts."""
 
+from mote.contracts.tool.arguments import ToolArguments, freeze_tool_arguments
 from mote.contracts.tool.calls import serialize_tool_call_args
 from mote.contracts.tool.effects import ToolEffect
 from mote.contracts.tool.execution import ToolExecutionKind
@@ -16,6 +17,7 @@ from mote.contracts.tool.protocol import CommandProtocol, NativeToolSchema, Tool
 
 __all__ = [
     "CommandProtocol",
+    "ToolArguments",
     "NativeToolSchema",
     "ToolEffect",
     "ToolExecutionKind",
@@ -29,6 +31,7 @@ __all__ = [
     "XmlToolSchema",
     "serialize_tool_call_args",
     "tool_arguments_digest",
+    "freeze_tool_arguments",
 ]
 from mote.contracts.tool.catalog import (
     MaterializedToolCatalog,

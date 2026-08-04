@@ -14,7 +14,7 @@ from mote.contracts.task.graph_errors import (
     GraphRouterError,
 )
 from mote.orchestration.workflows.base_node import BaseNode, From
-from mote.orchestration.workflows.channels import NoOutput, Output
+from mote.orchestration.workflows.channels import NoOutput, Output, Reducer
 from mote.orchestration.workflows.control import PauseReason
 from mote.orchestration.workflows.definition import (
     Cancelled,
@@ -25,6 +25,7 @@ from mote.orchestration.workflows.definition import (
     TimedOut,
     WorkflowDefinition,
     WorkflowDefinitionCompiler,
+    WorkflowExecutable,
     WorkflowOutcome,
     WorkflowRun,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "WorkflowBuilder",
     "WorkflowDefinition",
     "WorkflowDefinitionCompiler",
+    "WorkflowExecutable",
     "WorkflowRun",
     "WorkflowOutcome",
     "Succeeded",
@@ -55,6 +57,7 @@ __all__ = [
     "Cancelled",
     "TimedOut",
     "Output",
+    "Reducer",
     "NoOutput",
     "GraphState",
     "GraphRunState",

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar
 
 from pydantic import BaseModel
@@ -46,9 +47,9 @@ from mote.kernel.output import text_output_contract
 from mote.runtime.agent.control import spawn_and_run
 from mote.runtime.agent.role_state import RoleState
 from mote.runtime.agent.wiring import AgentWiring
-from mote.runtime.durable import begin_timer, complete_timer, resume_timer
 from mote.runtime.interactive.handoff import HandoffCoordinator
 from mote.runtime.persistence.async_io import run_disk_io
+from mote.runtime.session.timers import SessionTimerState, SessionTimerStore
 from mote.runtime.tools.execution_context import current_authorized_invocation
 
 if TYPE_CHECKING:
@@ -60,6 +61,7 @@ if TYPE_CHECKING:
         MutationResult,
         PdfView,
         ReadRequest,
+        SearchOutputMode,
         SearchResult,
     )
     from mote.contracts.interaction import ApprovalChoice, ApprovalRequest
@@ -112,6 +114,7 @@ class RoleCapabilities:
 
     def __init__(self, role: "Role"):
         self._role = role
+        self._timer_store: SessionTimerStore | None = None
 
     # ------------------------------------------------------------------
     # Background tasks / skills
@@ -140,7 +143,7 @@ class RoleCapabilities:
         *,
         instructions: str,
         arguments: str = "",
-        allowed_tools: Optional[list] = None,
+        allowed_tools: Optional[list[str]] = None,
         model: str = "",
         effort: str = "",
     ) -> str:
@@ -157,6 +160,11 @@ class RoleCapabilities:
         """
         role = self._role
         parent_schema = role.role_schema
+        requested_tools = tuple(allowed_tools or ())
+        parent_tools = frozenset((*parent_schema.tools, *parent_schema.deferred_tools))
+        unauthorized = set(requested_tools) - parent_tools
+        if unauthorized:
+            raise ValueError(f"skill fork cannot expand parent tools: {sorted(unauthorized)}")
         route_id = parent_schema.model_route
         if model:
             route_id = decode_route_id(model)
@@ -170,7 +178,7 @@ class RoleCapabilities:
             deep=True,
             update={
                 "system_prompt": f"{parent_schema.system_prompt}\n\n{instructions}",
-                "tools": list(allowed_tools or []),
+                "tools": list(requested_tools),
                 "mcps": [],
                 "agents": [],
                 "skills": [],
@@ -178,7 +186,7 @@ class RoleCapabilities:
             },
         )
         child_config = role._config
-        child_wiring = AgentWiring(dependencies=role.wiring.dependencies.with_output_contract(text_output_contract()))
+        child_wiring = AgentWiring(dependencies=role._wiring.dependencies.with_output_contract(text_output_contract()))
 
         child_state = RoleState(
             parent_session_id=role.state.session_id,
@@ -219,32 +227,76 @@ class RoleCapabilities:
     # Session-log-backed capture (before-image snapshots + persistent state)
     # ------------------------------------------------------------------
 
-    def capture_file_snapshot(self, full_path: str, **kwargs):
-        return self._role.file_operations.capture(full_path, **kwargs)
+    def capture_file_snapshot(
+        self,
+        full_path: str,
+        *,
+        encoding: str | None = None,
+        fallback_encoding: str | None = None,
+    ):
+        return self._role._file_operations.capture(
+            full_path,
+            encoding=encoding,
+            fallback_encoding=fallback_encoding,
+        )
 
     def observe_file_snapshot(self, snapshot: "FileSnapshot") -> None:
-        self._role.file_operations.observe(snapshot)
+        self._role._file_operations.observe(snapshot)
 
     def read_file_view(
         self,
         full_path: str,
         request: "ReadRequest",
     ) -> "FileByteView | FileTextView | PdfView":
-        return self._role.file_operations.read_view(full_path, request)
+        return self._role._file_operations.read_view(full_path, request)
 
-    def search_files(self, **kwargs) -> "SearchResult":
-        return self._role.file_operations.search(**kwargs)
+    def search_files(
+        self,
+        *,
+        root: str,
+        content: str = "",
+        files: str = "",
+        type_name: str = "",
+        output_mode: "SearchOutputMode",
+        case_insensitive: bool = False,
+        before_context: int = 0,
+        after_context: int = 0,
+        multiline: bool = False,
+        encoding: str | None = None,
+        fallback_encoding: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        cursor: str | None = None,
+        timeout: float = 20.0,
+    ) -> "SearchResult":
+        return self._role._file_operations.search(
+            root=root,
+            content=content,
+            files=files,
+            type_name=type_name,
+            output_mode=output_mode,
+            case_insensitive=case_insensitive,
+            before_context=before_context,
+            after_context=after_context,
+            multiline=multiline,
+            encoding=encoding,
+            fallback_encoding=fallback_encoding,
+            limit=limit,
+            offset=offset,
+            cursor=cursor,
+            timeout=timeout,
+        )
 
     async def plan_file_edit(self, request: "EditPlanRequest") -> "EditPlan":
         return await run_disk_io(
-            self._role.file_operations.plan_file_edit,
+            self._role._file_operations.plan_file_edit,
             request,
         )
 
     async def commit_edit_plan(self, plan_id: str) -> "EditCommitOutcome":
         review_turn_index = self._role.current_turn_index() if self._role.role_schema.record_hunks else None
         return await run_disk_io(
-            self._role.file_operations.commit_edit_plan,
+            self._role._file_operations.commit_edit_plan,
             plan_id,
             review_turn_index=review_turn_index,
         )
@@ -257,14 +309,14 @@ class RoleCapabilities:
         transaction_id: str | None = None,
     ) -> "MutationResult":
         return await run_disk_io(
-            self._role.file_operations.commit_generated_files,
+            self._role._file_operations.commit_generated_files,
             files,
             source=source,
             transaction_id=transaction_id,
         )
 
     def try_reserve_generated_targets(self, targets: tuple[str, ...]):
-        return self._role.file_operations.try_reserve_generated_targets(targets)
+        return self._role._file_operations.try_reserve_generated_targets(targets)
 
     def register_resource(self, *, id: str, kind: str, content: str) -> None:
         """Register a loaded capability body for post-compaction re-projection.
@@ -274,7 +326,7 @@ class RoleCapabilities:
         autocompaction discards the head. Best-effort — the registry's ``load``
         is a plain dict write and does not raise.
         """
-        self._role.resource_registry.load(id=id, kind=kind, content=content)
+        self._role._components.resource_registry.load(id=id, kind=kind, content=content)
 
     def register_task_result(self, task_id: TaskId, content: str) -> None:
         """Register a background task's push-once result for re-projection.
@@ -285,20 +337,11 @@ class RoleCapabilities:
         pointer right after the summary until the model consumes (and unloads)
         it or the round cap recycles it. Best-effort dict write; does not raise.
         """
-        self._role.resource_registry.load(id=task_id, kind="task_result", content=content, sticky=True)
+        self._role._components.resource_registry.load(id=task_id, kind="task_result", content=content, sticky=True)
 
     def unload(self, task_id: TaskId) -> TaskResultRecord | None:
-        content = self._role.resource_registry.unload_content(task_id)
+        content = self._role._components.resource_registry.unload_content(task_id)
         return TaskResultRecord(task_id, content) if content is not None else None
-
-    def retire_task_result(self, task_id: str) -> None:
-        """Stop re-projecting a task result once the model has consumed it.
-
-        Called when a consume tool (GetNodeState / resume / cancel) reports the
-        result was acted on: unload from the registry so future projections skip
-        it. Idempotent — unloading an absent id is a no-op.
-        """
-        self._role.resource_registry.unload(task_id)
 
     # ------------------------------------------------------------------
     # Human I/O (available only while an explicit interaction Port is bound)
@@ -340,7 +383,7 @@ class RoleCapabilities:
     async def handoff_runtime(self, runtime: str, *, message: str = "") -> HandoffOutcome:
         """Transfer one managed Runtime's exclusive writer ownership to the human."""
         role = self._role
-        host = role.runtime_host
+        host = role._components.runtime_host
         descriptor = host.descriptor(runtime)
         env = role.human_interaction
         if env is None:
@@ -451,31 +494,32 @@ class RoleCapabilities:
         best-effort — if the journal is unavailable the wait still runs bounded,
         just without crash-resumability.
         """
-        journal = self._run_journal()
-        if journal is not None:
-            resumed = resume_timer(journal)
-            if resumed is not None:
-                step_id, deadline = resumed
-                return max(0.0, deadline - time.time()), step_id
+        store = self._session_timer_store()
+        pending = store.pending()
+        if pending:
+            timer = min(pending, key=lambda item: item.deadline.epoch_nanoseconds)
+            deadline = timer.deadline.to_datetime(expected_clock=timer.deadline.clock)
+            remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+            if remaining <= 0:
+                store.settle(timer.timer_id, SessionTimerState.MISFIRED)
+                return 0.0, None
+            return remaining, timer.timer_id
         if duration is None or duration <= 0:
             return None, None
-        if journal is None:
-            return duration, None
-        step_id, _deadline = begin_timer(journal, duration)
-        return duration, step_id
+        timer = store.schedule(duration)
+        return duration, timer.timer_id
 
     def _durable_timer_complete(self, step_id: str) -> None:
         """Record the durable timer's terminal (best-effort)."""
-        journal = self._run_journal()
-        if journal is not None:
-            complete_timer(journal, step_id)
+        self._session_timer_store().settle(step_id, SessionTimerState.COMPLETED)
 
-    def _run_journal(self):
-        """The executor's shared run journal, or ``None`` when durability is off."""
-        try:
-            return self._role.executor.journal
-        except Exception:
-            return None
+    def _session_timer_store(self) -> SessionTimerStore:
+        if self._timer_store is None:
+            self._timer_store = SessionTimerStore(
+                self._role.session_id,
+                self._role._components.workspace_store,
+            )
+        return self._timer_store
 
     async def end_session(self) -> str:
         """End the current session.

@@ -27,19 +27,28 @@ from collections import deque
 from typing import Any, Optional
 from uuid import uuid4
 
-from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
+from mote.contracts.ports.events.telemetry import (
+    TelemetryIdentity,
+    TelemetryOverflow,
+    TelemetrySubscription,
+    TelemetrySubscriptionSpec,
+)
 from mote.product.i18n import keys as K
 from mote.product.i18n import t
 from mote.product.interaction.commands.catalog import CommandRegistry, default_registry
 from mote.product.interaction.human_channel import PortHumanChannel
-from mote.product.interaction.ports import DriverControlBinding, InteractivePort
+from mote.product.interaction.ports import (
+    DriverControlBinding,
+    DriverControlDisposition,
+    DriverControlReceipt,
+    InteractivePort,
+)
 from mote.product.interaction.turn import TurnRunner, format_turn_error
 from mote.product.presentation.events import Notice, SessionListItem, SessionListShown, TranscriptCleared
 from mote.product.presentation.input_events import PRESENTATION_INPUT_TYPES
 from mote.product.presentation.projection.base import BaseProjector
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleStack
 from mote.runtime.engine import EngineAgentRequest
-from mote.runtime.events.telemetry import TelemetryHandle
 from mote.runtime.session.listing import SessionInfo
 from mote.runtime.telemetry.logging import logger
 
@@ -92,13 +101,14 @@ class SessionDriver:
         self._turn_lock = asyncio.Lock()
         self._running_turn = False
         self._current_input: Optional[str] = None
-        self._telemetry_handles: dict[object, list[TelemetryHandle]] = {}
+        self._telemetry_handles: dict[object, list[TelemetrySubscription]] = {}
         self._telemetry_identity = TelemetryIdentity(f"mote.product.cli.session_driver.{uuid4().hex}")
         self._last_sessions: list[SessionInfo] = []  # cached for index-based /resume
         # Steering queue (§5.3): text captured while a turn is in flight is
         # drained at the *next* turn boundary — turn-level steering, NOT a
         # step-level mid-turn interrupt (that lives in the framework loop).
         self._steer_queue: deque[str] = deque()
+        self._interrupt_task: asyncio.Task[Any] | None = None
 
         self._port.bind_driver_control(
             DriverControlBinding(
@@ -194,16 +204,40 @@ class SessionDriver:
                 self._running_turn = False
                 self._current_input = None
 
-    def _interrupt_current_turn(self) -> None:
+    def _interrupt_current_turn(self) -> DriverControlReceipt:
         """Mid-turn Ctrl+C: stage the prompt for restore, then interrupt the turn."""
+        task = self._interrupt_task
+        if task is not None and not task.done():
+            return DriverControlReceipt(DriverControlDisposition.ALREADY_PENDING)
         if self._current_input:
             self._port.stage_restore(self._current_input)
-        asyncio.ensure_future(self._control.interrupt(self._agent_id))
+        task = asyncio.create_task(
+            self._control.interrupt(self._agent_id),
+            name=f"session-driver-interrupt:{self._agent_id}",
+        )
+        self._interrupt_task = task
+        task.add_done_callback(self._settle_interrupt)
+        return DriverControlReceipt(DriverControlDisposition.ACCEPTED)
+
+    def _settle_interrupt(self, task: asyncio.Task[Any]) -> None:
+        if self._interrupt_task is task:
+            self._interrupt_task = None
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.debug(f"SessionDriver: interrupt for {self._agent_id} was cancelled")
+        except Exception as exc:  # noqa: BLE001 - observed control settlement
+            logger.warning(f"SessionDriver: interrupt for {self._agent_id} failed: {exc}")
+
+    async def _drain_interrupt(self) -> None:
+        task = self._interrupt_task
+        if task is not None:
+            await asyncio.shield(task)
 
     # ------------------------------------------------------------------
     # Steering (§5.3): turn-boundary input queue
     # ------------------------------------------------------------------
-    def _enqueue_steer(self, text: str) -> None:
+    def _enqueue_steer(self, text: str) -> DriverControlReceipt:
         """Producer side: stash steering text (from the port) for the next turn.
 
         The port calls this through its explicit driver-control binding. Enqueueing never
@@ -212,6 +246,8 @@ class SessionDriver:
         """
         if text and text.strip():
             self._steer_queue.append(text.strip())
+            return DriverControlReceipt(DriverControlDisposition.ACCEPTED)
+        return DriverControlReceipt(DriverControlDisposition.IGNORED)
 
     def _merge_steer(self, text: str) -> str:
         """Drain any queued steering ahead of *text*, oldest first, one per line.
@@ -236,7 +272,7 @@ class SessionDriver:
         if telemetry is None or telemetry in self._telemetry_handles:
             return
         try:
-            handles: list[TelemetryHandle] = []
+            handles: list[TelemetrySubscription] = []
             for ordinal, event_type in enumerate(PRESENTATION_INPUT_TYPES):
                 handle = await telemetry.subscribe_typed(
                     TelemetrySubscriptionSpec(
@@ -311,6 +347,11 @@ class SessionDriver:
         lifecycle.register_close(
             "event-subscriptions",
             self._unsubscribe_projector,
+            phase=LifecyclePhase.STOP_PRODUCERS,
+        )
+        lifecycle.register_close(
+            "interrupt-settlement",
+            self._drain_interrupt,
             phase=LifecyclePhase.STOP_PRODUCERS,
         )
 

@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from mote.runtime.process import ProcessDisposition, ProcessResult, run_fixed_argv
+from mote.runtime.process import ProcessDisposition, ProcessResult, resolve_fixed_executable, run_verified_fixed_argv
 
 # --- Recognised video containers (used by Read/curl/browser to recognise) ---
 VIDEO_EXTENSIONS = frozenset({"mp4", "mkv", "webm", "mov", "m4v", "avi", "flv", "wmv", "mpeg", "mpg", "ts"})
@@ -153,7 +153,7 @@ def _stamp(seconds: float) -> str:
 async def _run(argv: list[str], *, timeout: float) -> ProcessResult:
     """Run one media command through Runtime's canonical fixed-argv owner."""
 
-    result = await run_fixed_argv(argv, timeout=timeout)
+    result = await run_verified_fixed_argv(resolve_fixed_executable(argv[0]), argv[1:], timeout=timeout)
     if result.disposition is ProcessDisposition.TIMED_OUT:
         raise VideoError(f"{argv[0]} timed out after {int(timeout)}s")
     if result.disposition is not ProcessDisposition.EXITED:

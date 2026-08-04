@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-from mote.kernel.commands.xml.stream import LexerState, PythonObjectParser
+from mote.kernel.commands.xml.stream import Command, LexerState, PythonObjectParser
 
 
-async def parse_commands(command_rsp: str, valid_names: Optional[set[str]]) -> Tuple[list[dict], str]:
+async def parse_commands(command_rsp: str, valid_names: Optional[set[str]]) -> Tuple[list[Command], str]:
     if not command_rsp:
         return [], "Empty command response"
     try:
@@ -17,7 +17,7 @@ async def parse_commands(command_rsp: str, valid_names: Optional[set[str]]) -> T
         return [], f"Error parsing commands: {exc}"
 
 
-async def loads_xml(data: str, valid_names: Optional[set[str]]) -> Tuple[list[dict], str]:
+async def loads_xml(data: str, valid_names: Optional[set[str]]) -> Tuple[list[Command], str]:
     lexer = PythonObjectParser(ignore_text=True, valid_names=valid_names)
     try:
         await lexer.loads_xml(xml=data)
@@ -40,7 +40,7 @@ def _missing_closers(lexer: PythonObjectParser) -> str:
 
 async def _repair_unclosed_xml(
     data: str, failed_lexer: PythonObjectParser, valid_names: Optional[set[str]]
-) -> Optional[list[dict]]:
+) -> Optional[list[Command]]:
     closers = _missing_closers(failed_lexer)
     if not closers:
         return None

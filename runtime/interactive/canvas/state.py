@@ -1,4 +1,5 @@
 """Pure canonical Canvas transaction semantics shared by all backends."""
+
 from __future__ import annotations
 
 from mote.contracts.surface import CanvasDocument, CanvasOperation
@@ -44,7 +45,9 @@ def apply_canvas_operations(
             changed = True
         affected.append(element.id)
 
-    candidate = document.model_copy(update={"elements": elements})
+    candidate = document.model_copy(
+        update={"elements": elements, "revision": document.revision + (1 if changed else 0)}
+    )
     validated = CanvasDocument.model_validate(candidate.model_dump(mode="json"))
     return validated, changed, tuple(dict.fromkeys(affected))
 

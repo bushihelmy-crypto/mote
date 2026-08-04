@@ -5,15 +5,16 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from mote.contracts.artifact import ArtifactRef
 from mote.contracts.conversation import Message
-from mote.contracts.conversation.fields import CACHE_INTENT, IMAGES, PDFS
+from mote.contracts.conversation.fields import IMAGES, PDFS
+from mote.contracts.events.envelope import JsonValue
 from mote.contracts.model.inference import FinalizedGenerateRequest
 from mote.contracts.model.invocation import (
     CanonicalMessage,
-    CanonicalToolCall,
     CanonicalToolDefinition,
     GenerateInput,
     GenerateOutput,
@@ -30,26 +31,25 @@ from mote.contracts.model.invocation import (
 from mote.contracts.model.operations import ModelOperation
 from mote.contracts.ports.model.gateway import ModelRoute
 from mote.kernel.telemetry.events import current_span_id
+from mote.runtime.models.message_wire import canonical_message_from_model_wire, message_to_model_wire
 
 
-async def generate(
+async def _execute_generate(
     route: ModelRoute,
-    messages: Any,
+    messages: tuple[Message, ...],
     *,
     model_call_id: str,
     task: str,
     system_prompt: str = "",
-    tools: list[dict] | tuple[CanonicalToolDefinition, ...] | None = None,
-    output_schema: dict | None = None,
+    tools: tuple[CanonicalToolDefinition, ...] = (),
+    output_schema: Mapping[str, JsonValue] | None = None,
     response_mode: ResponseMode = ResponseMode.TEXT,
     stream: bool = True,
     resume: bool = False,
     trace_id: str = "",
 ) -> tuple[GenerateOutput, ResolvedModelResponse]:
-    canonical_messages, needs_vision, needs_pdf = canonical_messages_from(messages)
-    canonical_tools = tuple(
-        tool if isinstance(tool, CanonicalToolDefinition) else canonical_tool(tool) for tool in tools or ()
-    )
+    canonical_messages, needs_vision, needs_pdf = _canonical_messages_from(messages)
+    canonical_tools = tools
     invocation = ModelInvocation(
         model_call_id=model_call_id,
         routing_decision_id=route.routing_decision_id,
@@ -94,7 +94,7 @@ async def generate_finalized(
 ) -> tuple[GenerateOutput, ResolvedModelResponse]:
     """Execute the one typed Kernel→Runtime generate operation."""
 
-    return await generate(
+    return await _execute_generate(
         route,
         request.messages,
         model_call_id=model_call_id,
@@ -174,27 +174,24 @@ async def describe_image(
     return response.output.text
 
 
-def canonical_messages_from(
-    value: Any,
+def _canonical_messages_from(
+    items: tuple[Message, ...],
 ) -> tuple[tuple[CanonicalMessage, ...], bool, bool]:
-    items = value if isinstance(value, (list, tuple)) else [value]
     messages: list[CanonicalMessage] = []
     needs_vision = False
     needs_pdf = False
     for item in items:
-        metadata = item.metadata if isinstance(item, Message) else {}
-        wire = item.to_dict() if isinstance(item, Message) else item
-        if isinstance(wire, str):
-            wire = {"role": "user", "content": wire}
-        elif not isinstance(wire, dict):
-            wire = {"role": "user", "content": str(wire)}
+        if not isinstance(item, Message):
+            raise TypeError("finalized model messages must be canonical Message values")
+        metadata = item.metadata
+        wire = message_to_model_wire(item)
         images = metadata.get(IMAGES)
         pdfs = metadata.get(PDFS)
         if images or pdfs:
             wire = _with_media(wire, images, pdfs)
             needs_vision = needs_vision or bool(images)
             needs_pdf = needs_pdf or bool(pdfs)
-        messages.append(_canonical_message(wire))
+        messages.append(canonical_message_from_model_wire(wire))
     return tuple(messages), needs_vision, needs_pdf
 
 
@@ -213,31 +210,6 @@ def canonical_tool(tool: dict) -> CanonicalToolDefinition:
         description=description,
         input_schema=schema,
         defer_loading=bool(tool.get("defer_loading")),
-    )
-
-
-def _canonical_message(wire: dict[str, Any]) -> CanonicalMessage:
-    calls: list[CanonicalToolCall] = []
-    for call in wire.get("tool_calls") or []:
-        function = call.get("function") or {}
-        arguments = function.get("arguments")
-        if isinstance(arguments, str):
-            arguments = json.loads(arguments)
-        calls.append(
-            CanonicalToolCall(
-                id=call.get("id", ""),
-                name=function.get("name", ""),
-                arguments=arguments or {},
-            )
-        )
-    return CanonicalMessage(
-        role=wire.get("role", "user"),
-        content=wire.get("content"),
-        name=wire.get("name"),
-        tool_call_id=wire.get("tool_call_id"),
-        tool_calls=tuple(calls),
-        tool_references=tuple(wire.get("_tool_references") or ()),
-        cache_intent=wire.get("_cache_intent") or wire.get(CACHE_INTENT),
     )
 
 
@@ -287,10 +259,8 @@ def _image_data_url(payload: str) -> str | None:
 
 
 __all__ = [
-    "canonical_messages_from",
     "canonical_tool",
     "describe_image",
-    "generate",
     "generate_finalized",
     "web_search",
 ]

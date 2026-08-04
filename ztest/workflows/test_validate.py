@@ -8,11 +8,41 @@ exactly one edge from ``START``, at least one edge to ``END``, and well-formed
 waiting / conditional / llm edges.  ``_validate_params`` checks ``params['from']``
 references against the state schema / known nodes.
 """
+
 from __future__ import annotations
 
 import pytest
 
-from mote.orchestration.workflows import END, START, GraphState, WorkflowBuilder
+from mote.orchestration.workflows import END, START, GraphState, NoOutput
+from mote.orchestration.workflows import WorkflowBuilder as _WorkflowBuilder
+
+
+class _ValidationWorkflowBuilder(_WorkflowBuilder):
+    """Bind validation-only callables to an explicit test catalog identity."""
+
+    def add_node(self, name, node, *, implementation_id=None, **kwargs):
+        return super().add_node(
+            name,
+            node,
+            implementation_id=implementation_id or f"test.validation.node.{name}/v1",
+            **kwargs,
+        )
+
+    def add_conditional_edges(self, from_node, router, mapping, *, projector=None, implementation_id=None):
+        return super().add_conditional_edges(
+            from_node,
+            router,
+            mapping,
+            projector=projector or (lambda state: state),
+            implementation_id=implementation_id or f"test.validation.router.{from_node}/v1",
+        )
+
+
+def WorkflowBuilder(*args, **kwargs):
+    """Legacy validation fixtures explicitly opt into the no-output contract."""
+    kwargs.setdefault("output", NoOutput)
+    return _ValidationWorkflowBuilder(*args, **kwargs)
+
 
 from .conftest import S, sync_node
 
@@ -23,7 +53,7 @@ def _node(g, name, fn=lambda s: None):
 
 class TestEdgeReferences:
     def test_unknown_edge_target(self):
-        g = WorkflowBuilder("g", state_schema=S)
+        g = WorkflowBuilder("g", state_schema=S, output=NoOutput)
         _node(g, "a")
         g.add_edge(START, "a")
         g.add_edge("a", "ghost")  # ghost not a node
@@ -31,7 +61,7 @@ class TestEdgeReferences:
             g.compile()
 
     def test_unknown_waiting_source(self):
-        g = WorkflowBuilder("g", state_schema=S)
+        g = WorkflowBuilder("g", state_schema=S, output=NoOutput)
         _node(g, "a")
         _node(g, "m")
         g.add_edge(START, "a")
@@ -139,11 +169,11 @@ class TestWaitingEdgeNormalization:
         g.add_edge("a", "merge")  # folded into the join
         g.add_edge(["b", "c"], "merge")
         g.add_edge("merge", END)
-        g.compile()  # no raise
-        join = self._join_for(g, "merge")
+        compiled = g.build()
+        join = self._join_for(compiled._graph, "merge")
         assert set(join.sources) == {"a", "b", "c"}
         # The absorbed single edge a→merge is gone.
-        assert not any(e.from_node == "a" and e.to_node == "merge" for e in g._edges)
+        assert not any(e.from_node == "a" and e.to_node == "merge" for e in compiled._graph._edges)
 
     def test_two_waiting_edges_merged(self):
         g = WorkflowBuilder("g", state_schema=S)
@@ -157,8 +187,8 @@ class TestWaitingEdgeNormalization:
         g.add_edge(["a", "b"], "merge")
         g.add_edge(["b", "c"], "merge")  # union → [a, b, c]
         g.add_edge("merge", END)
-        g.compile()  # no raise
-        join = self._join_for(g, "merge")
+        compiled = g.build()
+        join = self._join_for(compiled._graph, "merge")
         assert set(join.sources) == {"a", "b", "c"}
 
     def test_conditional_route_into_join_still_rejected(self):
@@ -240,15 +270,13 @@ class TestParamValidation:
         g.add_edge("a", END)
         g.compile()  # no raise
 
-    def test_undeclared_field_ref_allowed(self):
-        # With the field/channel model a param's non-$input ``from`` references a
-        # state field, not a node. ``extra="allow"`` lets undeclared fields land
-        # at runtime, so an undeclared reference is no longer a compile error.
+    def test_undeclared_field_ref_rejected(self):
         g = WorkflowBuilder("g", state_schema=S)
         g.add_node("a", sync_node(lambda s: 1), params={"p": {"from": "ghost.out"}})
         g.add_edge(START, "a")
         g.add_edge("a", END)
-        g.compile()  # no raise
+        with pytest.raises(ValueError, match="unknown state field"):
+            g.compile()
 
 
 class TestParamTypeValidation:
@@ -336,8 +364,7 @@ class TestParamTypeValidation:
         g.add_edge("a", END)
         g.compile()  # no raise — bool is subclass of int
 
-    def test_node_ref_type_skipped(self):
-        """Params referencing another node's output skip type check at compile time."""
+    def test_node_ref_must_name_a_declared_state_field(self):
         g = WorkflowBuilder("g", state_schema=S)
         g.add_node(
             "a",
@@ -351,4 +378,5 @@ class TestParamTypeValidation:
         g.add_edge(START, "a")
         g.add_edge("a", "b")
         g.add_edge("b", END)
-        g.compile()  # no raise — node refs are runtime-only
+        with pytest.raises(ValueError, match="unknown state field"):
+            g.compile()

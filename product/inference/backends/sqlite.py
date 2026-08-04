@@ -628,21 +628,47 @@ class SQLiteAttemptReceiptStore:
 
     @staticmethod
     def _metadata_from_json(payload: object) -> RestoreCopyMetadata:
-        if not isinstance(payload, dict) or payload.get("schema") != ("inference-gateway-restore-copy-v1"):
+        expected_fields = {
+            "schema",
+            "logical_store",
+            "cutover_unit_id",
+            "source_generation",
+            "storage_format_version",
+            "created_at",
+            "authority_digest",
+            "sequence_checkpoint_domain",
+            "high_water_mark",
+            "retention_policy",
+            "legal_hold_policy",
+            "destruction_policy",
+            "restore_conversion_contract",
+        }
+        if type(payload) is not dict or set(payload) != expected_fields:
+            raise ValueError("restore metadata fields are not canonical")
+        if payload["schema"] != "inference-gateway-restore-copy-v1":
             raise ValueError("unsupported restore metadata schema")
+        string_fields = expected_fields - {"source_generation", "storage_format_version"}
+        if any(type(payload[name]) is not str for name in string_fields):
+            raise TypeError("restore metadata string field has an invalid primitive")
+        if type(payload["source_generation"]) is not int or type(payload["storage_format_version"]) is not int:
+            raise TypeError("restore metadata generation fields must be integers")
+        try:
+            created_at = datetime.fromisoformat(payload["created_at"])
+        except ValueError as exc:
+            raise ValueError("restore metadata created_at is invalid") from exc
         return RestoreCopyMetadata(
-            logical_store=str(payload["logical_store"]),
-            cutover_unit_id=str(payload["cutover_unit_id"]),
-            source_generation=int(payload["source_generation"]),
-            storage_format_version=int(payload["storage_format_version"]),
-            created_at=datetime.fromisoformat(str(payload["created_at"])),
-            authority_digest=str(payload["authority_digest"]),
-            sequence_checkpoint_domain=str(payload["sequence_checkpoint_domain"]),
-            high_water_mark=str(payload["high_water_mark"]),
-            retention_policy=str(payload["retention_policy"]),
-            legal_hold_policy=str(payload["legal_hold_policy"]),
-            destruction_policy=str(payload["destruction_policy"]),
-            restore_conversion_contract=str(payload["restore_conversion_contract"]),
+            logical_store=payload["logical_store"],
+            cutover_unit_id=payload["cutover_unit_id"],
+            source_generation=payload["source_generation"],
+            storage_format_version=payload["storage_format_version"],
+            created_at=created_at,
+            authority_digest=payload["authority_digest"],
+            sequence_checkpoint_domain=payload["sequence_checkpoint_domain"],
+            high_water_mark=payload["high_water_mark"],
+            retention_policy=payload["retention_policy"],
+            legal_hold_policy=payload["legal_hold_policy"],
+            destruction_policy=payload["destruction_policy"],
+            restore_conversion_contract=payload["restore_conversion_contract"],
         )
 
     def _preserve_corrupt_copy(self) -> Path:

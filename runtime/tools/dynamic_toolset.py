@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Any, Generic, TypeAlias, TypeVar
+from typing import Generic, TypeAlias, TypeVar, cast
 
 from mote.contracts.tool import ToolsetProtocolError
 from mote.kernel.execution.run_context import RunContext
@@ -12,14 +12,40 @@ from mote.runtime.tools.provider import NativeToolset, XmlToolset
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 
 AgentDepsT = TypeVar("AgentDepsT")
-XmlToolsetFactory: TypeAlias = Callable[
+SyncXmlToolsetFactory: TypeAlias = Callable[
     [RunContext[AgentDepsT]],
-    XmlToolset[AgentDepsT] | None | Awaitable[XmlToolset[AgentDepsT] | None],
+    XmlToolset[AgentDepsT] | None,
 ]
-NativeToolsetFactory: TypeAlias = Callable[
+AsyncXmlToolsetFactory: TypeAlias = Callable[[RunContext[AgentDepsT]], Awaitable[XmlToolset[AgentDepsT] | None]]
+XmlToolsetFactory: TypeAlias = SyncXmlToolsetFactory[AgentDepsT] | AsyncXmlToolsetFactory[AgentDepsT]
+SyncNativeToolsetFactory: TypeAlias = Callable[
     [RunContext[AgentDepsT]],
-    NativeToolset[AgentDepsT] | None | Awaitable[NativeToolset[AgentDepsT] | None],
+    NativeToolset[AgentDepsT] | None,
 ]
+AsyncNativeToolsetFactory: TypeAlias = Callable[[RunContext[AgentDepsT]], Awaitable[NativeToolset[AgentDepsT] | None]]
+NativeToolsetFactory: TypeAlias = SyncNativeToolsetFactory[AgentDepsT] | AsyncNativeToolsetFactory[AgentDepsT]
+
+
+def _bind_xml_factory(factory: XmlToolsetFactory[AgentDepsT]) -> AsyncXmlToolsetFactory[AgentDepsT]:
+    if inspect.iscoroutinefunction(factory):
+        return cast(AsyncXmlToolsetFactory[AgentDepsT], factory)
+    sync_factory = cast(SyncXmlToolsetFactory[AgentDepsT], factory)
+
+    async def invoke(ctx: RunContext[AgentDepsT]) -> XmlToolset[AgentDepsT] | None:
+        return sync_factory(ctx)
+
+    return invoke
+
+
+def _bind_native_factory(factory: NativeToolsetFactory[AgentDepsT]) -> AsyncNativeToolsetFactory[AgentDepsT]:
+    if inspect.iscoroutinefunction(factory):
+        return cast(AsyncNativeToolsetFactory[AgentDepsT], factory)
+    sync_factory = cast(SyncNativeToolsetFactory[AgentDepsT], factory)
+
+    async def invoke(ctx: RunContext[AgentDepsT]) -> NativeToolset[AgentDepsT] | None:
+        return sync_factory(ctx)
+
+    return invoke
 
 
 class XmlDynamicToolset(XmlToolset[AgentDepsT], Generic[AgentDepsT]):
@@ -33,7 +59,7 @@ class XmlDynamicToolset(XmlToolset[AgentDepsT], Generic[AgentDepsT]):
         version: str = "1",
         per_run_step: bool = False,
     ) -> None:
-        self._factory = factory
+        self._factory = _bind_xml_factory(factory)
         self._per_run_step = per_run_step
         self._inner: XmlToolset[AgentDepsT] | None = None
         self._entered = False
@@ -44,7 +70,7 @@ class XmlDynamicToolset(XmlToolset[AgentDepsT], Generic[AgentDepsT]):
             requires_permission_gate=True,
         )
 
-    def _active_definitions(self) -> Iterable[XmlToolDefinition[Any]]:
+    def _active_definitions(self) -> Iterable[XmlToolDefinition]:
         return () if self._inner is None else self._inner.definitions()
 
     @property
@@ -60,9 +86,7 @@ class XmlDynamicToolset(XmlToolset[AgentDepsT], Generic[AgentDepsT]):
         return () if self._inner is None else self._inner.instruction_blocks
 
     async def _evaluate(self, ctx: RunContext[AgentDepsT]) -> XmlToolset[AgentDepsT] | None:
-        result = self._factory(ctx)
-        if inspect.isawaitable(result):
-            result = await result
+        result = await self._factory(ctx)
         if result is None:
             return None
         if not isinstance(result, XmlToolset):
@@ -128,7 +152,7 @@ class NativeDynamicToolset(NativeToolset[AgentDepsT], Generic[AgentDepsT]):
         version: str = "1",
         per_run_step: bool = False,
     ) -> None:
-        self._factory = factory
+        self._factory = _bind_native_factory(factory)
         self._per_run_step = per_run_step
         self._inner: NativeToolset[AgentDepsT] | None = None
         self._entered = False
@@ -139,7 +163,7 @@ class NativeDynamicToolset(NativeToolset[AgentDepsT], Generic[AgentDepsT]):
             requires_permission_gate=True,
         )
 
-    def _active_definitions(self) -> Iterable[NativeToolDefinition[Any]]:
+    def _active_definitions(self) -> Iterable[NativeToolDefinition]:
         return () if self._inner is None else self._inner.definitions()
 
     @property
@@ -155,9 +179,7 @@ class NativeDynamicToolset(NativeToolset[AgentDepsT], Generic[AgentDepsT]):
         return () if self._inner is None else self._inner.instruction_blocks
 
     async def _evaluate(self, ctx: RunContext[AgentDepsT]) -> NativeToolset[AgentDepsT] | None:
-        result = self._factory(ctx)
-        if inspect.isawaitable(result):
-            result = await result
+        result = await self._factory(ctx)
         if result is None:
             return None
         if not isinstance(result, NativeToolset):

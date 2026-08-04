@@ -10,6 +10,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Generic, Mapping, NewType, Optional, Sequence, TypeAlias, TypeVar, cast
 
+from pydantic import JsonValue as _PydanticJsonValue
+
 from mote.contracts.content import ContentDigest
 
 EventId = NewType("EventId", str)
@@ -18,7 +20,9 @@ StreamId = NewType("StreamId", str)
 CorrelationId = NewType("CorrelationId", str)
 
 JsonScalar: TypeAlias = None | bool | int | float | str
-JsonValue: TypeAlias = JsonScalar | tuple["JsonValue", ...] | Mapping[str, "JsonValue"]
+# Pydantic's named recursive alias is used as the runtime/schema spelling, but
+# this module remains the sole public owner of the JSON boundary type.
+JsonValue: TypeAlias = _PydanticJsonValue
 
 PayloadT = TypeVar("PayloadT", covariant=True)
 
@@ -47,8 +51,11 @@ def freeze_json(value: object, *, path: str = "value") -> JsonValue:
             raise ValueError(f"{path} contains a non-finite number")
         return value
     if type(value) in {list, tuple}:
-        return tuple(
-            freeze_json(item, path=f"{path}[{index}]") for index, item in enumerate(cast(Sequence[object], value))
+        return cast(
+            JsonValue,
+            tuple(
+                freeze_json(item, path=f"{path}[{index}]") for index, item in enumerate(cast(Sequence[object], value))
+            ),
         )
     if isinstance(value, Mapping):
         frozen: dict[str, JsonValue] = {}
@@ -56,11 +63,11 @@ def freeze_json(value: object, *, path: str = "value") -> JsonValue:
             if type(key) is not str:
                 raise TypeError(f"{path} contains a non-string object key")
             frozen[key] = freeze_json(item, path=f"{path}.{key}")
-        return MappingProxyType(frozen)
+        return cast(JsonValue, MappingProxyType(frozen))
     raise TypeError(f"{path} is not JSON-safe: {type(value).__name__}")
 
 
-def thaw_json(value: JsonValue) -> object:
+def thaw_json(value: JsonValue) -> JsonValue:
     """Return the ordinary JSON representation of a frozen value."""
 
     if isinstance(value, Mapping):

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 try:
     from json_repair import repair_json
@@ -23,13 +23,13 @@ from mote.contracts.model.profile import profile_for
 from mote.contracts.model.provider_errors import LLMEmptyResponseError
 from mote.kernel.inference.tokenization import count_message_tokens, count_string_tokens
 from mote.product.models.compiler import context_tokens_for_model
-from mote.product.models.providers.error_handling import handle_exception
 from mote.runtime.events.stream import log_llm_stream
 from mote.runtime.models.clients.base import BaseLLM
 from mote.runtime.models.clients.credentials import CredentialBindingMixin
 from mote.runtime.models.clients.schema_output import openai_strict_schema
 from mote.runtime.models.cost import CostTracker
 from mote.runtime.models.media import decode_image
+from mote.runtime.models.message_wire import canonical_messages_from_model_wire
 from mote.runtime.models.ratelimit.capture import install_rate_limit_hook
 from mote.runtime.resilience.error_classification import classify_llm_error
 from mote.runtime.telemetry.logging import logger
@@ -119,23 +119,11 @@ class OpenAILLM(CredentialBindingMixin, BaseLLM):
         return client
 
     def _make_client_kwargs(self) -> dict:
-        kwargs: dict[str, Any]
-        if self._oauth is not None:
-            # OAuth path: inject the (proactively refreshed) bearer token as the
-            # OpenAI SDK api_key and merge any provider-specific extra headers.
-            kwargs = {
-                "api_key": self._oauth.get_valid_token(),
-                "base_url": self.config.base_url,
-                "max_retries": 0,
-            }
-            if self.config.oauth and self.config.oauth.headers_extra:
-                kwargs["default_headers"] = dict(self.config.oauth.headers_extra)
-        else:
-            kwargs = {
-                "api_key": self._current_api_key(),
-                "base_url": self.config.base_url,
-                "max_retries": 0,
-            }
+        kwargs: dict[str, Any] = {
+            "api_key": self._current_api_key(),
+            "base_url": self.config.base_url,
+            "max_retries": 0,
+        }
 
         # to use proxy, openai v1 needs http_client
         if proxy_params := self._get_proxy_params():
@@ -442,7 +430,7 @@ class OpenAILLM(CredentialBindingMixin, BaseLLM):
             return usage
 
         try:
-            usage.prompt_tokens = count_message_tokens(messages, self.pricing_plan)
+            usage.prompt_tokens = count_message_tokens(canonical_messages_from_model_wire(messages), self.pricing_plan)
             usage.completion_tokens = count_string_tokens(rsp, self.pricing_plan)
         except Exception as e:
             logger.warning(f"usage calculation failed: {e}")
@@ -457,13 +445,8 @@ class OpenAILLM(CredentialBindingMixin, BaseLLM):
         context_tokens = context_tokens_for_model(self.model)
         if context_tokens is None:
             return min(self.max_completion_token, 4096)
-        available = context_tokens - count_message_tokens(messages, self.model) - 1
+        available = context_tokens - count_message_tokens(canonical_messages_from_model_wire(messages), self.model) - 1
         return min(max(1, available), self.max_completion_token, 4096)
-
-    @handle_exception
-    async def amoderation(self, content: Union[str, list[str]]):
-        """Moderate content."""
-        return await self.aclient.moderations.create(input=content)
 
     async def atext_to_speech(self, **kwargs):
         """text to speech"""
@@ -500,6 +483,6 @@ class OpenAILLM(CredentialBindingMixin, BaseLLM):
 
     def count_tokens(self, messages: list[dict]) -> int:
         try:
-            return count_message_tokens(messages, self.model)
+            return count_message_tokens(canonical_messages_from_model_wire(messages), self.model)
         except Exception:
             return super().count_tokens(messages)

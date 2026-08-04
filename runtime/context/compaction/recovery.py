@@ -39,6 +39,7 @@ from mote.contracts.conversation.fields import CACHE_INTENT, TOOL_CALL_ID, TOOL_
 from mote.runtime.context.compaction.pipeline import ReductionPipeline
 from mote.runtime.context.compaction.request import ReductionReason, ReductionRequest, Urgency
 from mote.runtime.context.compaction.transcript import Transcript
+from mote.runtime.models.message_wire import message_to_model_wire
 
 # Private metadata key stashing the original wire dict on a reconstructed
 # message, so a kept (undropped, unfolded) message is emitted byte-for-byte.
@@ -117,7 +118,7 @@ def _message_to_wire(m: Message) -> dict:
     original = m.metadata.get(_WIRE_ORIGINAL)
     if original is not None:
         return original
-    return m.to_dict()
+    return message_to_model_wire(m)
 
 
 class RecoveryContextReducer:

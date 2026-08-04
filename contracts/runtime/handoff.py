@@ -1,9 +1,20 @@
 """Stable contracts for managed Runtime ownership handoff."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from mote.contracts.runtime import RuntimeCheckpoint
+
+
+class RuntimeHandoffResolutionStatus(StrEnum):
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+    FAILED = "failed"
+    UNAVAILABLE = "unavailable"
+    RECOVERED = "recovered"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +77,7 @@ class RuntimeHandoffResolution:
     """Durable terminal ownership state for one handoff epoch."""
 
     handoff_id: str
-    status: str
+    status: RuntimeHandoffResolutionStatus
     runtime_id: str
     kind: str
     alias: str
@@ -111,4 +122,5 @@ __all__ = [
     "RuntimeHandoffIntent",
     "RuntimeHandoffRecovery",
     "RuntimeHandoffResolution",
+    "RuntimeHandoffResolutionStatus",
 ]

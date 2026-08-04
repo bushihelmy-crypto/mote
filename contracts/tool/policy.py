@@ -9,8 +9,10 @@ engines, tools, or the runtime event transport.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping, Optional
+from typing import Literal, Mapping, Optional
 
+from mote.contracts.events.envelope import JsonValue
+from mote.contracts.tool.arguments import ToolArguments, freeze_tool_arguments
 from mote.contracts.tool.identity import ToolInvocationIdentity
 
 ToolPolicyDisposition = Literal[
@@ -62,7 +64,7 @@ class ToolCallIntent:
 
     identity: ToolInvocationIdentity
     tool_name: str
-    arguments: Mapping[str, Any] = field(default_factory=dict)
+    arguments: ToolArguments = field(default_factory=dict)
     scope: tuple = ()
 
 
@@ -72,7 +74,7 @@ class ToolCallDecision:
 
     identity: ToolInvocationIdentity
     allowed: bool
-    arguments: Mapping[str, Any] = field(default_factory=dict)
+    arguments: ToolArguments = field(default_factory=dict)
     reason: str = ""
     terminate: bool = False
     trace: tuple[ToolPolicyTraceEntry, ...] = ()
@@ -81,17 +83,17 @@ class ToolCallDecision:
     def allow(
         cls,
         identity: ToolInvocationIdentity,
-        arguments: Mapping[str, Any],
+        arguments: ToolArguments,
         *,
         trace: tuple[ToolPolicyTraceEntry, ...] = (),
     ) -> "ToolCallDecision":
-        return cls(identity=identity, allowed=True, arguments=dict(arguments), trace=trace)
+        return cls(identity=identity, allowed=True, arguments=freeze_tool_arguments(arguments), trace=trace)
 
     @classmethod
     def deny(
         cls,
         identity: ToolInvocationIdentity,
-        arguments: Mapping[str, Any],
+        arguments: ToolArguments,
         reason: str,
         *,
         terminate: bool = False,
@@ -100,7 +102,7 @@ class ToolCallDecision:
         return cls(
             identity=identity,
             allowed=False,
-            arguments=dict(arguments),
+            arguments=freeze_tool_arguments(arguments),
             reason=reason,
             terminate=terminate,
             trace=trace,
@@ -113,11 +115,11 @@ class ToolResultIntent:
 
     identity: ToolInvocationIdentity
     tool_name: str
-    arguments: Mapping[str, Any] = field(default_factory=dict)
+    arguments: ToolArguments = field(default_factory=dict)
     output: str = ""
     execution_success: bool = True
     executed: bool = True
-    error: Optional[Mapping[str, Any]] = None
+    error: Optional[Mapping[str, JsonValue]] = None
     is_readonly: bool = False
     scope: tuple = ()
 

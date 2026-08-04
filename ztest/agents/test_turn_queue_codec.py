@@ -44,6 +44,7 @@ def _item(
         attempt=1 if state is TurnQueueState.CLAIMED else 0,
         maximum_attempts=3,
         next_eligible_at=None,
+        payload_digest="digest-1",
         claim=claim,
     )
 
@@ -79,7 +80,7 @@ def test_turn_queue_codec_rejects_missing_and_extra_envelope_fields(field: str) 
 
 def test_turn_queue_codec_rejects_unknown_schema_and_queue() -> None:
     raw = _encoded()
-    raw["schema"] = "mote.agent-turn-queue/v2"
+    raw["schema"] = "mote.agent-turn-queue/v9"
     with pytest.raises(ValueError, match="unsupported"):
         decode_turn_queue(raw, expected_queue_id="queue-1")
     with pytest.raises(ValueError, match="identity mismatch"):

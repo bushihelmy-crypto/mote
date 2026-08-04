@@ -15,6 +15,7 @@ from mote.contracts.ports.events.subscription import (
     RetryPolicy,
     SubscriptionCheckpoint,
     SubscriptionIdentity,
+    SubscriptionOwnerLease,
     SubscriptionSpec,
 )
 from mote.runtime.events.subscription import SubscriptionFailed, SubscriptionState, SubscriptionWorker
@@ -69,6 +70,9 @@ class _CheckpointStore:
 
     async def load(self, identity, stream_id) -> int:
         return self.values.get((identity, stream_id), 0)
+
+    async def claim_owner(self, identity, owner_id):
+        return SubscriptionOwnerLease(identity, owner_id, 1, 1)
 
     async def save(self, checkpoint: SubscriptionCheckpoint) -> None:
         self.values[(checkpoint.identity, checkpoint.stream_id)] = checkpoint.sequence

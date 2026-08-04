@@ -28,14 +28,24 @@ async def _decrement(state: _State) -> Stage:
     return Stage(submit=submit())
 
 
-def _builder(fn=_increment, *, recursion_limit: int = 100) -> WorkflowBuilder:
+def _builder(
+    fn=_increment,
+    *,
+    recursion_limit: int = 100,
+    implementation_id: str = "test.catalog.increment/v1",
+) -> WorkflowBuilder:
     graph = WorkflowBuilder(
         "identity",
         state_schema=_State,
         output=NoOutput,
         recursion_limit=recursion_limit,
     )
-    graph.add_node("step", fn, params={"value": {"from": "$input.value"}})
+    graph.add_node(
+        "step",
+        fn,
+        params={"value": {"from": "$input.value"}},
+        implementation_id=implementation_id,
+    )
     graph.add_edge(START, "step")
     graph.add_edge("step", END)
     return graph
@@ -44,24 +54,28 @@ def _builder(fn=_increment, *, recursion_limit: int = 100) -> WorkflowBuilder:
 def test_compiler_is_deterministic_and_content_addressed() -> None:
     first = _builder().build()
     second = _builder().build()
-    assert first.definition_id == second.definition_id
-    assert first.digest == second.digest
-    assert first.canonical_payload == second.canonical_payload
-    assert first.definition_id == f"mote.workflow.v1.sha256-{first.digest}"
+    assert first.definition.definition_id == second.definition.definition_id
+    assert first.definition.digest == second.definition.digest
+    assert first.definition.canonical_payload == second.definition.canonical_payload
+    assert first.definition.definition_id == f"mote.workflow.v1.sha256-{first.definition.digest}"
 
 
 def test_semantic_definition_changes_advance_identity() -> None:
-    baseline = _builder().build().definition_id
-    assert _builder(_decrement).build().definition_id != baseline
-    assert _builder(recursion_limit=101).build().definition_id != baseline
+    baseline = _builder().build().definition.definition_id
+    assert _builder(_decrement).build().definition.definition_id == baseline
+    assert (
+        _builder(_decrement, implementation_id="test.catalog.decrement/v1").build().definition.definition_id != baseline
+    )
+    assert _builder(recursion_limit=101).build().definition.definition_id != baseline
 
     changed = _builder()
     changed.add_node(
         "step",
         _increment,
         params={"value": {"from": "$input.value", "description": "changed"}},
+        implementation_id="test.catalog.increment/v1",
     )
-    assert changed.build().definition_id != baseline
+    assert changed.build().definition.definition_id != baseline
 
 
 def test_explicit_implementation_identity_is_part_of_digest() -> None:
@@ -69,10 +83,10 @@ def test_explicit_implementation_identity_is_part_of_digest() -> None:
     first.add_node("step", _increment, params={}, implementation_id="catalog:step/v1")
     second = _builder()
     second.add_node("step", _increment, params={}, implementation_id="catalog:step/v2")
-    assert first.build().definition_id != second.build().definition_id
+    assert first.build().definition.definition_id != second.build().definition.definition_id
 
 
-def test_unencoded_closure_fails_closed_until_product_supplies_catalog_identity() -> None:
+def test_callable_requires_product_catalog_identity() -> None:
     opaque = object()
 
     async def node(state: _State) -> Stage:
@@ -80,16 +94,19 @@ def test_unencoded_closure_fails_closed_until_product_supplies_catalog_identity(
             raise AssertionError
         return await _increment(state)
 
-    graph = _builder(node)
-    with pytest.raises(ValueError, match="unencoded builtins.object"):
+    graph = WorkflowBuilder("opaque", state_schema=_State, output=NoOutput)
+    graph.add_node("step", node)
+    graph.add_edge(START, "step")
+    graph.add_edge("step", END)
+    with pytest.raises(ValueError, match="explicit versioned implementation identity"):
         graph.build()
 
     graph.add_node("step", node, params={}, implementation_id="product.catalog/node/v1")
-    assert graph.build().definition_id.startswith("mote.workflow.v1.sha256-")
+    assert graph.build().definition.definition_id.startswith("mote.workflow.v1.sha256-")
 
 
 def test_definition_envelope_rejects_unknown_version_and_digest_mismatch() -> None:
-    definition = _builder().build()
+    definition = _builder().build().definition
     with pytest.raises(ValueError, match="unknown.*schema version"):
         WorkflowDefinition(
             "mote.workflow-definition/v2",
@@ -97,12 +114,11 @@ def test_definition_envelope_rejects_unknown_version_and_digest_mismatch() -> No
             definition.definition_version,
             definition.digest,
             definition.canonical_payload,
-            definition._graph,
         )
 
 
 def test_definition_rejects_digest_substitution() -> None:
-    definition = _builder().build()
+    definition = _builder().build().definition
     with pytest.raises(ValueError, match="digest mismatch"):
         WorkflowDefinition(
             definition.schema_version,
@@ -110,7 +126,6 @@ def test_definition_rejects_digest_substitution() -> None:
             definition.definition_version,
             "0" * 64,
             definition.canonical_payload,
-            definition._graph,
         )
 
 
@@ -120,7 +135,9 @@ def test_all_production_entrypoints_delegate_to_canonical_definition() -> None:
     assert "return WorkflowDefinitionCompiler.compile(self)" in graph_source
     assert "return self.build().compile()" in graph_source
     assert "return await self.build().arun(" in graph_source
-    assert "definition = graph.build()" in product_source
+    assert "resolve_definition_source(" in product_source
+    assert "expected_definition_id=live_definition.definition_id" in product_source
+    assert "Workflow resume cannot accept a live graph continuation" in product_source
     assert "WorkflowDefinition(" not in product_source
 
 
@@ -157,5 +174,5 @@ def test_product_run_graph_compiles_through_stable_node_catalog_identity() -> No
         }
     )
     graph = build_graph(spec, dispatch=dispatch, command_name="run_graph")
-    definition = graph.build()
-    assert "mote.product.run-graph-node.v1.compute.sha256-" in definition.canonical_payload
+    executable = graph.build()
+    assert "mote.product.run-graph-node.v1.compute.sha256-" in executable.definition.canonical_payload

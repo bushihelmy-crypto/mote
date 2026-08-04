@@ -34,6 +34,7 @@ def test_accepted_item_binds_mailbox_delivery_and_durable_order() -> None:
         attempt=0,
         maximum_attempts=3,
         next_eligible_at=None,
+        payload_digest="digest-1",
     )
     assert item.eligible
     assert item.identity.delivery_ids == ("delivery-1",)
@@ -55,6 +56,7 @@ def test_claim_requires_fence_process_permit_and_current_revision() -> None:
         attempt=1,
         maximum_attempts=3,
         next_eligible_at=None,
+        payload_digest="digest-1",
         claim=claim,
     )
     assert item.claim is claim
@@ -71,6 +73,7 @@ def test_claim_requires_fence_process_permit_and_current_revision() -> None:
             attempt=1,
             maximum_attempts=3,
             next_eligible_at=None,
+            payload_digest="digest-1",
             claim=claim,
         )
 
@@ -89,6 +92,7 @@ def test_terminal_and_retry_invariants_fail_closed() -> None:
             attempt=0,
             maximum_attempts=2,
             next_eligible_at=None,
+            payload_digest="digest-1",
         )
     with pytest.raises(ValueError, match="bounded range"):
         TurnQueueItem(
@@ -103,6 +107,7 @@ def test_terminal_and_retry_invariants_fail_closed() -> None:
             attempt=3,
             maximum_attempts=2,
             next_eligible_at=None,
+            payload_digest="digest-1",
         )
 
 
@@ -120,4 +125,5 @@ def test_unknown_string_state_and_priority_are_rejected() -> None:
             attempt=0,
             maximum_attempts=2,
             next_eligible_at=None,
+            payload_digest="digest-1",
         )

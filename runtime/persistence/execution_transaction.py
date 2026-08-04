@@ -91,7 +91,7 @@ class RuntimeExecutionTransaction(Generic[OutputT]):
         if self._staged is not None and self._staged != output:
             return self._store_conflict(context, "a different accepted output is already staged")
         await self._memory.add_batch(list(history.messages))
-        self._checkpoint.record_result()
+        await self._checkpoint.record_result()
         self._staged = output
         result = await self._apply(context, reference_id=output.candidate_id)
         return result
@@ -142,7 +142,7 @@ class RuntimeExecutionTransaction(Generic[OutputT]):
             return invalid
         await self._memory.add_batch(list(projection.messages))
         if consume_inference:
-            self._checkpoint.record_result()
+            await self._checkpoint.record_result()
         return await self._apply(context, reference_id=projection.fingerprint)
 
     async def _apply(self, context: ExecutionOperationContext, *, reference_id: str) -> MutationResult:

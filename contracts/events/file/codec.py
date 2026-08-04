@@ -67,9 +67,11 @@ def event_from_line(line: str) -> Optional[FileOperationsEvent]:
     if type(record) is not dict:
         raise ValueError("file operations journal record is not an object")
     event_type = record.get("type")
+    if type(event_type) is not str:
+        raise ValueError("file operations event type is invalid")
     event_class = _EVENT_TYPES.get(event_type)
     if event_class is None:
-        return None
+        raise ValueError(f"unsupported file operations event type: {event_type}")
     if set(record) != {"type", "ts", "payload"}:
         raise ValueError("file operations event envelope is not canonical")
     payload = record["payload"]

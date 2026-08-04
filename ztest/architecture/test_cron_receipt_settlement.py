@@ -42,7 +42,7 @@ class Clock:
 
 def _task(*, recurring: bool = True) -> CronTask:
     return CronTask(
-        id="00000000",
+        id="00000000000000000000000000000000",
         cron="* * * * *",
         prompt="ping",
         created_at=_ms(10, 0, 30),

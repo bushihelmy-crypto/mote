@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import functools
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional, ParamSpec, TypeVar
 
 from mote.orchestration.background_tasks.pool import BackgroundTaskPool
 from mote.runtime.presentation import count_noun
 from mote.runtime.telemetry.reporting import ThoughtReporter
 
+P = ParamSpec("P")
+R = TypeVar("R")
+
 
 def require_bg_complete(
     pool_getter: Callable[[], Optional[BackgroundTaskPool]],
-) -> Callable:
+) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
     """Decorator: wait for all background tasks to finish before calling *fn*.
 
     Args:
@@ -29,9 +32,9 @@ def require_bg_complete(
         wrapped = require_bg_complete(lambda: self._bg_pool)(check_ui_instance.run)
     """
 
-    def decorator(fn: Callable) -> Callable:
+    def decorator(fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         @functools.wraps(fn)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             pool = pool_getter()
             if pool and pool.has_pending():
                 pending = pool.pending_count
@@ -60,31 +63,3 @@ def require_bg_complete(
         return wrapper
 
     return decorator
-
-
-def bg_tool(fn: Callable) -> Callable:
-    """Decorator: mark a tool function for automatic background dispatch.
-
-    Every invocation of a ``@bg_tool``-decorated function is routed
-    directly to ``BackgroundTaskPool`` by the framework.  The LLM
-    receives an immediate acknowledgment (task_id) instead of waiting
-    for the result.
-
-    The decorator sets a ``_bg_tool`` marker attribute on the wrapped
-    function.  ``Role._run_command`` checks for this marker and
-    calls ``_run_command_in_background`` automatically — the tool
-    itself runs exactly as before, unaware of background scheduling.
-
-    Usage::
-
-        @bg_tool
-        async def generate_videos(self, prompt: str) -> str:
-            ...
-    """
-    fn._bg_tool = True
-    return fn
-
-
-def is_bg_tool(fn: object) -> bool:
-    """Return *True* if *fn* was decorated with :func:`bg_tool`."""
-    return getattr(fn, "_bg_tool", False) is True

@@ -121,8 +121,6 @@ class ArtifactReachabilityProjector:
         self._external_sources: list[ExternalArtifactRootSource] = []
 
     def register_root_source(self, source: ExternalArtifactRootSource) -> None:
-        if not callable(getattr(source, "scan_blob_roots", None)):
-            raise TypeError("external artifact root source must be scannable")
         if source not in self._external_sources:
             self._external_sources.append(source)
 

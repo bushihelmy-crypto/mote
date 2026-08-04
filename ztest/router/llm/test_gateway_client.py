@@ -7,6 +7,7 @@ import pytest
 from mote.contracts.artifact import ArtifactRef
 from mote.contracts.conversation import AIMessage, ToolMessage, UserMessage
 from mote.contracts.model import EndpointDescriptor
+from mote.contracts.model.inference import FinalizedGenerateRequest
 from mote.contracts.model.invocation import (
     CanonicalToolCall,
     GenerateOutput,
@@ -18,7 +19,7 @@ from mote.contracts.model.invocation import (
 )
 from mote.contracts.model.topology import DefaultRoute
 from mote.contracts.ports.model.gateway import ModelRoute
-from mote.runtime.models.model_calls import describe_image, generate, web_search
+from mote.runtime.models.model_calls import canonical_tool, describe_image, generate_finalized, web_search
 
 
 class _Gateway:
@@ -42,6 +43,7 @@ class _Gateway:
             model_or_deployment="model",
             tenant_fingerprint="tenant-fingerprint",
             credential_slot_id="slot",
+            model_call_id=invocation.model_call_id,
         )
 
     async def resume(self, invocation, **kwargs):
@@ -81,12 +83,14 @@ async def test_text_call_projects_message_history_and_system_prompt() -> None:
         ),
     ]
 
-    result, _resolved = await generate(
+    result, _resolved = await generate_finalized(
         _route(gateway, routing_decision_id="decision-1"),
-        messages,
+        FinalizedGenerateRequest(
+            messages=tuple(messages),
+            task="interactive",
+            system_prompt="system",
+        ),
         model_call_id="call",
-        task="interactive",
-        system_prompt="system",
     )
 
     assert result.content == "answer"
@@ -104,12 +108,14 @@ async def test_text_call_projects_message_history_and_system_prompt() -> None:
 @pytest.mark.asyncio
 async def test_text_call_can_explicitly_disable_streaming() -> None:
     gateway = _Gateway(GenerateOutput(content="answer"))
-    await generate(
+    await generate_finalized(
         _route(gateway),
-        "question",
+        FinalizedGenerateRequest(
+            messages=(UserMessage(content="question"),),
+            task="interactive",
+            stream=False,
+        ),
         model_call_id="call",
-        task="interactive",
-        stream=False,
     )
 
     assert gateway.streams == [False]
@@ -148,14 +154,16 @@ async def test_native_call_canonicalizes_every_existing_tool_envelope(tool) -> N
             tool_calls=(CanonicalToolCall(id="call-1", name="Read", arguments={"path": "a"}),),
         )
     )
-    result, _resolved = await generate(
+    result, _resolved = await generate_finalized(
         _route(gateway),
-        [UserMessage(content="read")],
+        FinalizedGenerateRequest(
+            messages=(UserMessage(content="read"),),
+            task="interactive",
+            system_prompt="system",
+            tools=(canonical_tool(tool),),
+            response_mode=ResponseMode.NATIVE_TOOLS,
+        ),
         model_call_id="call",
-        task="interactive",
-        system_prompt="system",
-        tools=[tool],
-        response_mode=ResponseMode.NATIVE_TOOLS,
     )
 
     assert result.tool_calls[0].name == "Read"
@@ -170,14 +178,15 @@ async def test_native_call_canonicalizes_every_existing_tool_envelope(tool) -> N
 @pytest.mark.asyncio
 async def test_schema_call_sets_hard_planner_requirement() -> None:
     gateway = _Gateway(GenerateOutput(content='{"answer":"yes"}', structured={"answer": "yes"}))
-    await generate(
+    await generate_finalized(
         _route(gateway),
-        [UserMessage(content="answer")],
+        FinalizedGenerateRequest(
+            messages=(UserMessage(content="answer"),),
+            task="interactive",
+            output_schema={"type": "object"},
+            response_mode=ResponseMode.NATIVE_SCHEMA,
+        ),
         model_call_id="call",
-        task="interactive",
-        tools=[],
-        output_schema={"type": "object"},
-        response_mode=ResponseMode.NATIVE_SCHEMA,
     )
 
     invocation = gateway.invocations[0]

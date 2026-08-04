@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
 
-from mote.contracts.artifact import ArtifactContentRef
+from mote.contracts.artifact import ArtifactContentRef, ContentLocator
 from mote.contracts.content.identity import ContentIdentity
 from mote.contracts.events.file.facts import FileOperationsEvent
 from mote.contracts.file.errors import FileLockTimeoutError
@@ -173,7 +173,7 @@ class FileOperations:
             hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
         )
         reader = SealedSnapshotReader(artifacts)
-        locks = HierarchicalLockManager(lock_root)
+        locks = HierarchicalLockManager(lock_root or journal_path.parent / ".locks")
         control = ProjectOperationControl(locks)
         journal = DurableFileOperationsJournal(
             journal_path,
@@ -294,7 +294,7 @@ class FileOperations:
         roots = {
             ref.digest: ArtifactContentRef(
                 identity=ref,
-                locator=f"sha256:{ref.digest}",
+                locator=ContentLocator(f"sha256:{ref.digest}"),
             )
             for ref in referenced
         }
@@ -304,7 +304,10 @@ class FileOperations:
     def freeze_artifact_pins(self):
         """Project the durable cursor lease snapshot into the Artifact pin Port."""
         with self.cursor_registry.freeze_pins() as snapshot:
-            yield tuple(ArtifactContentRef(identity=ref, locator=f"sha256:{ref.digest}") for ref in snapshot.artifacts)
+            yield tuple(
+                ArtifactContentRef(identity=ref, locator=ContentLocator(f"sha256:{ref.digest}"))
+                for ref in snapshot.artifacts
+            )
 
     def prune_artifact_metadata(self, _reachable: Sequence[ArtifactContentRef]) -> None:
         """Reconcile FileOps lifecycle metadata with shared-CAS reachability."""
@@ -447,32 +450,50 @@ class FileOperations:
     ) -> SearchResult:
         with self.locks.acquire_many((self._timeline_spec,)):
             epoch = self.cursor_registry.synchronize(self.journal.timeline_epoch()).epoch
-            arguments = dict(
-                root=root,
-                content=content,
-                files=files,
-                type_name=type_name,
-                output_mode=output_mode,
-                case_insensitive=case_insensitive,
-                before_context=before_context,
-                after_context=after_context,
-                multiline=multiline,
-                encoding=encoding,
-                fallback_encoding=fallback_encoding,
-                limit=limit,
-                offset=offset,
-                cursor=cursor,
-                timeout=timeout,
-                expected_epoch=epoch,
-            )
             if cursor:
-                return self.search_engine.search(**arguments, scope=None)
+                return self.search_engine.search(
+                    root=root,
+                    content=content,
+                    files=files,
+                    type_name=type_name,
+                    output_mode=output_mode,
+                    case_insensitive=case_insensitive,
+                    before_context=before_context,
+                    after_context=after_context,
+                    multiline=multiline,
+                    encoding=encoding,
+                    fallback_encoding=fallback_encoding,
+                    limit=limit,
+                    offset=offset,
+                    cursor=cursor,
+                    timeout=timeout,
+                    expected_epoch=epoch,
+                    scope=None,
+                )
             with self.artifacts.write_scope(
                 owner=self._artifact_owner("search", root),
                 maximum_bytes=(MAX_SEARCH_RESULT_BYTES + MAX_SEARCH_MANIFEST_BYTES),
                 ttl_seconds=ARTIFACT_WRITE_TTL_SECONDS,
             ) as scope:
-                return self.search_engine.search(**arguments, scope=scope)
+                return self.search_engine.search(
+                    root=root,
+                    content=content,
+                    files=files,
+                    type_name=type_name,
+                    output_mode=output_mode,
+                    case_insensitive=case_insensitive,
+                    before_context=before_context,
+                    after_context=after_context,
+                    multiline=multiline,
+                    encoding=encoding,
+                    fallback_encoding=fallback_encoding,
+                    limit=limit,
+                    offset=offset,
+                    cursor=cursor,
+                    timeout=timeout,
+                    expected_epoch=epoch,
+                    scope=scope,
+                )
 
     def capture(
         self,
@@ -532,7 +553,7 @@ class FileOperations:
                 path=fact.path,
                 old=self.artifacts.read_bytes(fact.before_utf8).decode("utf-8", errors="strict"),
                 new=self.artifacts.read_bytes(fact.after_utf8).decode("utf-8", errors="strict"),
-                post_digest=version.digest,
+                post_digest=(version.digest if isinstance(version, PresentVersion) else ""),
             )
             for fact, version in zip(
                 plan.review_facts,
@@ -604,6 +625,8 @@ class FileOperations:
             parent = os.path.dirname(target.native) or "."
             resolved_parent = os.path.realpath(parent)
             try:
+                if not isinstance(resolved_root, str) or not isinstance(resolved_parent, str):
+                    raise ValueError("file operation path must be text")
                 inside = os.path.commonpath((resolved_root, resolved_parent)) == resolved_root
             except ValueError:
                 inside = False

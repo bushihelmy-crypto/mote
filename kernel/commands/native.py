@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncGenerator, Callable, Optional, TypeAlias
+from typing import Any, Callable, Optional, TypeAlias, cast
 
 from mote.contracts.conversation import AIMessage, ToolMessage
-from mote.contracts.events.envelope import thaw_json
+from mote.contracts.events.envelope import JsonValue, thaw_json
 from mote.contracts.model.failover import EndpointDescriptor
 from mote.contracts.model.inference import InferenceResult
 from mote.contracts.model.turn import FinalCandidateAction, ModelTurn, TextAction, ToolCallAction
@@ -148,19 +148,6 @@ class NativeToolChannel(CommandChannel):
         }
         return specs + list(final_schema.values())
 
-    async def iter_commands(self, result: InferenceResult, valid_names: set[str]) -> AsyncGenerator[dict, None]:
-        for cmd in result.tool_calls or []:
-            name = cmd.name
-            if valid_names and name not in valid_names:
-                continue
-            yield {
-                "id": cmd.id or None,
-                "command_name": name,
-                "args": cmd.arguments,
-                "status": "running",
-                "error_msg": "",
-            }
-
     async def project_call(self, command_rsp: str, executed: list[ExecutedCommand]):
         # Compress each call's RECORDED args through the injected limiter (persist
         # a giant arg to disk + leave a <persisted-output> pointer) as the message
@@ -260,7 +247,10 @@ class NativeToolChannel(CommandChannel):
         )
 
     def turn_signature(self, result: InferenceResult) -> str:
-        calls = [{"name": call.name, "args": thaw_json(call.arguments)} for call in (result.tool_calls or [])]
+        calls = [
+            {"name": call.name, "args": thaw_json(cast(JsonValue, call.arguments))}
+            for call in (result.tool_calls or [])
+        ]
         return json.dumps(calls, sort_keys=True, ensure_ascii=False)
 
     async def model_turn(self, result: InferenceResult) -> ModelTurn:
@@ -281,7 +271,7 @@ class NativeToolChannel(CommandChannel):
                     ToolCallAction(
                         action_id=call.id,
                         name=call.name,
-                        arguments=arguments,
+                        arguments=dict(arguments),
                     )
                 )
         content = result.content or ""

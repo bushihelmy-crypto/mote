@@ -73,14 +73,10 @@ def main() -> int:
     prompt_log = log.split("PromptRejectedEvent:", 1)[-1].split("ToolInvocationStartedEvent:", 1)[0]
     if "e.reason" in prompt_log or "redacted_excerpt" in prompt_log:
         violations.append("prompt rejection log duplicates restricted payload")
-    cleanup = (ROOT / "runtime/session/workspace/cleanup.py").read_text(encoding="utf-8")
-    maintenance = (ROOT / "runtime/agent/runtime_maintenance.py").read_text(encoding="utf-8")
-    if cleanup.count("session_id not in legal_hold_session_ids") != 1 or (
-        "session_id in legal_hold_session_ids" not in cleanup
-    ):
-        violations.append("session retention does not enforce legal hold in both cleanup paths")
-    if "legal_hold_session_ids=config.legal_hold_session_ids" not in maintenance:
-        violations.append("runtime maintenance does not inject legal hold policy")
+    if (ROOT / "runtime/session/workspace/cleanup.py").exists():
+        violations.append("legacy workspace TTL cleanup remains production-capable")
+    if (ROOT / "runtime/agent/runtime_maintenance.py").exists():
+        violations.append("generic RuntimeMaintenance remains production-capable")
 
     if violations:
         print("\n".join(violations), file=sys.stderr)

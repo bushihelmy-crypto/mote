@@ -21,16 +21,18 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generic, Mapping, TypeVar
 
-from mote.contracts.config.tool import DurableConfig, LoopGuardConfig, RunJournalConfig, ToolResultLimitConfig
+from mote.contracts.config.tool import LoopGuardConfig, ToolEffectStoreConfig, ToolResultLimitConfig
 from mote.contracts.foundation.errors.codes import RecoveryAction
 from mote.contracts.ports.tool.deferred import DeferredResultProjector
 from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolResultPolicy
 from mote.contracts.tool import (
     CommandProtocol,
+    ToolArguments,
     ToolAttemptOrdinal,
     ToolEffect,
     ToolInvocationId,
     ToolInvocationIdentity,
+    freeze_tool_arguments,
     serialize_tool_call_args,
     tool_arguments_digest,
 )
@@ -38,7 +40,6 @@ from mote.contracts.tool.errors import ToolNotFoundError
 from mote.kernel.execution.run_context import RunContext
 from mote.runtime.config.mcp import MCPServerConfig
 from mote.runtime.events.telemetry import TelemetryManifest, TelemetryRuntime
-from mote.runtime.ledger import RunJournal
 from mote.runtime.resilience.recovery import RecoveryRunner, RecoveryStrategy
 from mote.runtime.resources import spill as tool_result_limit
 from mote.runtime.run_context import current_run_context
@@ -46,6 +47,7 @@ from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.telemetry.logging import log_class
 from mote.runtime.tools.base_executor import BaseToolExecutor
 from mote.runtime.tools.base_tool import BaseTool, ToolCapabilityProvider
+from mote.runtime.tools.effect_store import ToolEffectStore
 from mote.runtime.tools.mcp.lifecycle import McpLifecycle
 from mote.runtime.tools.policy import build_tool_call_policy, build_tool_result_policy
 from mote.runtime.tools.provider import NativeToolset, XmlToolset, validate_toolset_protocols
@@ -117,8 +119,7 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
         tools: list[str] | None = None,
         role: ToolCapabilityProvider | None = None,
         limit_config: ToolResultLimitConfig | None = None,
-        journal_config: RunJournalConfig | None = None,
-        durable_config: DurableConfig | None = None,
+        effect_store_config: ToolEffectStoreConfig | None = None,
         tool_call_policy: ToolCallPolicy | None = None,
         tool_result_policy: ToolResultPolicy | None = None,
         loop_guard_config: LoopGuardConfig | None = None,
@@ -175,21 +176,16 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
         # Built once per session, co-located under the session directory via the
         # shared workspace store; ``None`` when disabled → run_command skips all
         # ledger work (identical to the prior no-ledger behavior).
-        self._journal_config = journal_config or RunJournalConfig()
-        self._durable_config = durable_config or DurableConfig()
-        self._journal: RunJournal | None = (
-            RunJournal(session_id, store=self._workspace_store)
-            if (self._journal_config.enabled or self._durable_config.enabled)
-            else None
+        self._effect_store_config = effect_store_config or ToolEffectStoreConfig()
+        self._effect_store: ToolEffectStore | None = (
+            ToolEffectStore(session_id, self._workspace_store) if self._effect_store_config.enabled else None
         )
 
         # A standalone executor is its own composition root.  The Role path
         # injects a policy assembled by RoleComponents; standalone approval-
         # required Toolsets still force the core gate on so composition cannot
         # bypass their declared boundary.
-        toolset_requires_gate = any(
-            bool(getattr(toolset, "requires_permission_gate", False)) for toolset in self._toolsets
-        )
+        toolset_requires_gate = any(toolset.requires_permission_gate for toolset in self._toolsets)
         self._tool_call_policy = tool_call_policy or build_tool_call_policy(
             None,
             role=role,
@@ -203,7 +199,7 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
             session_id=self._session_id,
             telemetry=self._telemetry,
             get_tool=self._get_tool,
-            journal=self._journal if self._journal_config.enabled else None,
+            effect_store=self._effect_store,
             limit_config=self._limit_config,
             workspace_store=self._workspace_store,
             policy=self._tool_result_policy,
@@ -223,7 +219,7 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
             get_tool=self._get_tool,
             available_names=self._catalog.names,
             policy=self._tool_call_policy,
-            journal=self._journal if self._journal_config.enabled else None,
+            effect_store=self._effect_store,
             recovery_runner=self._recovery_runner,
             deferred_projector=deferred_result_projector,
             settlement=self._settlement,
@@ -257,29 +253,25 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
         return self._limit_config
 
     @property
-    def journal_config(self) -> RunJournalConfig:
-        return self._journal_config
+    def effect_store_config(self) -> ToolEffectStoreConfig:
+        return self._effect_store_config
 
     @property
-    def durable_config(self) -> DurableConfig:
-        return self._durable_config
-
-    @property
-    def journal(self) -> RunJournal | None:
-        return self._journal
+    def effect_store(self) -> ToolEffectStore | None:
+        return self._effect_store
 
     @property
     def command_protocol(self) -> CommandProtocol:
         return self._command_protocol
 
-    def register_native_tool(self, definition: NativeToolDefinition[Any], capability: BaseTool) -> None:
+    def register_native_tool(self, definition: NativeToolDefinition, capability: BaseTool) -> None:
         """Register one runtime-discovered Native definition and capability."""
 
         if self._command_protocol is not CommandProtocol.NATIVE:
             raise TypeError("runtime-discovered Native tool cannot be registered on an XML executor")
         self._lifecycle.register_native(definition, capability)
 
-    def register_xml_tool(self, definition: XmlToolDefinition[Any], capability: BaseTool) -> None:
+    def register_xml_tool(self, definition: XmlToolDefinition, capability: BaseTool) -> None:
         """Register one runtime-discovered XML definition and capability."""
 
         if self._command_protocol is not CommandProtocol.XML:
@@ -299,12 +291,6 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
     async def deregister_tool(self, name: str) -> bool:
         return await self._lifecycle.deregister(name)
 
-    @property
-    def _tools(self) -> dict[str, Any]:
-        """Package-internal live map used by executor lifecycle mechanics."""
-        self.prepare()
-        return self._catalog._live_tools()
-
     def _get_tool(self, name: str):
         """Resolve a tool by name. Returns the BaseTool instance, or None."""
         self.prepare()
@@ -321,15 +307,22 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
     async def run_command(
         self,
         name: str,
-        kwargs: dict[str, Any] | None = None,
+        kwargs: Mapping[str, object] | None = None,
         *,
         result_id: str | None = None,
     ) -> ToolResult:
         self.prepare()
+        arguments = freeze_tool_arguments(kwargs or {})
         invocation_id = ToolInvocationId(result_id or f"tool-{uuid.uuid4().hex}")
         attempt = self._attempt_ordinals.get(invocation_id, 0) + 1
         self._attempt_ordinals[invocation_id] = attempt
         bound = self._catalog.get(name)
+        if (
+            isinstance(bound, ExecutableToolBinding)
+            and bound.definition.category == "mcp"
+            and not self._mcp_lifecycle.active
+        ):
+            return failed_result(RuntimeError("MCP generation is not accepting new work"))
         definition_identity = (
             bound.semantic_identity
             if isinstance(bound, ExecutableToolBinding)
@@ -341,7 +334,7 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
             attempt_ordinal=ToolAttemptOrdinal(attempt),
             definition_identity=definition_identity,
             catalog_generation=self._catalog.generation,
-            arguments_digest=tool_arguments_digest(kwargs or {}),
+            arguments_digest=tool_arguments_digest(arguments),
             owner_id=self._session_id,
             run_id=run_context.run_id if run_context is not None else "",
         )
@@ -352,19 +345,22 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
                     f"SearchTools(query='{name}') first, then retry it on the next turn."
                 )
             )
-        return await self._pipeline.run(name, kwargs or {}, identity)
+        return await self._pipeline.run(name, arguments, identity)
 
     async def run_pinned_command(
         self,
         binding: ExecutableToolBinding,
         name: str,
-        kwargs: dict[str, Any],
+        kwargs: Mapping[str, object],
         *,
         catalog_generation: int,
         result_id: str | None = None,
     ) -> ToolResult:
         """Execute the exact immutable binding retained by a snapshot revision."""
 
+        if binding.definition.category == "mcp" and not self._mcp_lifecycle.active:
+            return failed_result(RuntimeError("MCP generation is not accepting new work"))
+        arguments = freeze_tool_arguments(kwargs)
         invocation_id = ToolInvocationId(result_id or f"tool-{uuid.uuid4().hex}")
         attempt = self._attempt_ordinals.get(invocation_id, 0) + 1
         self._attempt_ordinals[invocation_id] = attempt
@@ -374,18 +370,18 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
             attempt_ordinal=ToolAttemptOrdinal(attempt),
             definition_identity=binding.semantic_identity,
             catalog_generation=catalog_generation,
-            arguments_digest=tool_arguments_digest(kwargs),
+            arguments_digest=tool_arguments_digest(arguments),
             owner_id=self._session_id,
             run_id=run_context.run_id if run_context is not None else "",
         )
-        return await self._pipeline.run(name, kwargs, identity, binding=binding)
+        return await self._pipeline.run(name, arguments, identity, binding=binding)
 
     def will_ledger(self, name: str, args: dict[str, Any], result_id: str | None) -> bool:
         tool = self._get_tool(name)
         return (
             tool is not None
-            and self._journal is not None
-            and self._journal_config.enabled
+            and self._effect_store is not None
+            and self._effect_store_config.enabled
             and result_id is not None
             and tool.resolve_effect_for(args) is ToolEffect.EXTERNAL
         )

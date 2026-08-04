@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import ClassVar, cast
 
 from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.events.envelope import JsonValue
 from mote.contracts.file.codec import (
     blob_from_dict,
     blob_to_dict,
@@ -32,40 +33,62 @@ REWIND_ABORTED = "rewind_aborted"
 REWIND_IN_DOUBT = "rewind_in_doubt"
 
 
-def _require_keys(payload: dict[str, Any], keys: set[str]) -> None:
+def _require_keys(payload: dict[str, JsonValue], keys: set[str]) -> None:
     if type(payload) is not dict or set(payload) != keys:
         raise ValueError("file operations event fields are not canonical")
 
 
-def _text(payload: dict[str, Any], key: str, *, nonempty: bool = False) -> str:
+def _text(payload: dict[str, JsonValue], key: str, *, nonempty: bool = False) -> str:
     value = payload[key]
     if type(value) is not str or (nonempty and not value):
         raise ValueError(f"file operations event {key} is invalid")
     return value
 
 
-def _integer(payload: dict[str, Any], key: str, *, minimum: int = 0) -> int:
+def _integer(payload: dict[str, JsonValue], key: str, *, minimum: int = 0) -> int:
     value = payload[key]
     if type(value) is not int or value < minimum:
         raise ValueError(f"file operations event {key} is invalid")
     return value
 
 
-def _string_list(payload: dict[str, Any], key: str) -> tuple[str, ...]:
+def _string_list(payload: dict[str, JsonValue], key: str) -> tuple[str, ...]:
     value = payload[key]
-    if type(value) is not list or any(type(item) is not str for item in value):
+    if type(value) is not list or any(type(item) is not str or not item for item in value):
         raise ValueError(f"file operations event {key} is invalid")
-    return tuple(value)
+    return tuple(cast(list[str], value))
 
 
-def _range(payload: dict[str, Any], key: str) -> tuple[int, int]:
+def _range(payload: dict[str, JsonValue], key: str) -> tuple[int, int]:
     value = payload[key]
     if type(value) is not list or len(value) != 2 or any(type(item) is not int or item < 0 for item in value):
         raise ValueError(f"file operations event {key} is invalid")
-    return value[0], value[1]
+    values = cast(list[int], value)
+    return values[0], values[1]
 
 
-def _hunk_payload(record: HunkRecord) -> dict[str, Any]:
+def _object(payload: dict[str, JsonValue], key: str) -> dict[str, JsonValue]:
+    value = payload[key]
+    if type(value) is not dict or any(type(name) is not str for name in value):
+        raise ValueError(f"file operations event {key} must be an object")
+    return value
+
+
+def _optional_object(payload: dict[str, JsonValue], key: str) -> dict[str, JsonValue] | None:
+    value = payload[key]
+    if value is None:
+        return None
+    return _object(payload, key)
+
+
+def _objects(payload: dict[str, JsonValue], key: str) -> tuple[dict[str, JsonValue], ...]:
+    value = payload[key]
+    if type(value) is not list or any(type(item) is not dict for item in value):
+        raise ValueError(f"file operations event {key} must contain objects")
+    return tuple(cast(list[dict[str, JsonValue]], value))
+
+
+def _hunk_payload(record: HunkRecord) -> dict[str, JsonValue]:
     return {
         "hunk_id": record.hunk_id,
         "path": record.path,
@@ -84,7 +107,7 @@ def _hunk_payload(record: HunkRecord) -> dict[str, Any]:
     }
 
 
-def _hunk_from_payload(payload: dict[str, Any]) -> HunkRecord:
+def _hunk_from_payload(payload: dict[str, JsonValue]) -> HunkRecord:
     _require_keys(
         payload,
         {
@@ -129,14 +152,14 @@ class FileTransactionPreparedEvent:
 
     type: ClassVar[str] = FILE_TRANSACTION_PREPARED
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {
             "mutation_set": mutation_set_to_dict(self.mutation_set),
             "hunks": [_hunk_payload(record) for record in self.hunks],
         }
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "FileTransactionPreparedEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "FileTransactionPreparedEvent":
         _require_keys(
             payload,
             {"mutation_set", "hunks"},
@@ -144,8 +167,8 @@ class FileTransactionPreparedEvent:
         if type(payload["hunks"]) is not list:
             raise ValueError("prepared transaction hunks are invalid")
         return cls(
-            mutation_set=mutation_set_from_dict(payload["mutation_set"]),
-            hunks=tuple(_hunk_from_payload(item) for item in payload["hunks"]),
+            mutation_set=mutation_set_from_dict(_object(payload, "mutation_set")),
+            hunks=tuple(_hunk_from_payload(item) for item in _objects(payload, "hunks")),
         )
 
 
@@ -157,7 +180,7 @@ class FileTransactionCommittedEvent:
 
     type: ClassVar[str] = FILE_TRANSACTION_COMMITTED
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {
             "transaction_id": self.transaction_id,
             "paths": list(self.paths),
@@ -165,7 +188,7 @@ class FileTransactionCommittedEvent:
         }
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "FileTransactionCommittedEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "FileTransactionCommittedEvent":
         _require_keys(payload, {"transaction_id", "paths", "versions"})
         if type(payload["versions"]) is not list or not payload["versions"]:
             raise ValueError("committed transaction versions are invalid")
@@ -175,7 +198,7 @@ class FileTransactionCommittedEvent:
         return cls(
             transaction_id=_text(payload, "transaction_id", nonempty=True),
             paths=paths,
-            versions=tuple(version_from_dict(item) for item in payload["versions"]),
+            versions=tuple(version_from_dict(item) for item in _objects(payload, "versions")),
         )
 
 
@@ -186,11 +209,11 @@ class FileTransactionAbortedEvent:
 
     type: ClassVar[str] = FILE_TRANSACTION_ABORTED
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {"transaction_id": self.transaction_id, "detail": self.detail}
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "FileTransactionAbortedEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "FileTransactionAbortedEvent":
         _require_keys(payload, {"transaction_id", "detail"})
         return cls(
             transaction_id=_text(payload, "transaction_id", nonempty=True),
@@ -205,11 +228,11 @@ class FileTransactionInDoubtEvent:
 
     type: ClassVar[str] = FILE_TRANSACTION_IN_DOUBT
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {"transaction_id": self.transaction_id, "detail": self.detail}
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "FileTransactionInDoubtEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "FileTransactionInDoubtEvent":
         _require_keys(payload, {"transaction_id", "detail"})
         return cls(
             transaction_id=_text(payload, "transaction_id", nonempty=True),
@@ -268,7 +291,7 @@ class FileHistoryImportedEvent:
         if type(self.source_schema_version) is not int or self.source_schema_version < 1:
             raise ValueError("imported file history source schema is invalid")
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {
             "import_id": self.import_id,
             "source_ordinal": self.source_ordinal,
@@ -282,7 +305,7 @@ class FileHistoryImportedEvent:
         }
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "FileHistoryImportedEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "FileHistoryImportedEvent":
         _require_keys(
             payload,
             {
@@ -298,7 +321,7 @@ class FileHistoryImportedEvent:
             },
         )
         operation = _text(payload, "operation", nonempty=True)
-        before = blob_from_dict(payload["before"])
+        before = blob_from_dict(_optional_object(payload, "before"))
         import_id = _text(payload, "import_id", nonempty=True)
         return cls(
             import_id=import_id,
@@ -324,13 +347,13 @@ class FileEditPlanStoredEvent:
 
     type: ClassVar[str] = FILE_EDIT_PLAN_STORED
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {"plan_id": self.plan_id, "manifest": blob_to_dict(self.manifest)}
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "FileEditPlanStoredEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "FileEditPlanStoredEvent":
         _require_keys(payload, {"plan_id", "manifest"})
-        manifest = blob_from_dict(payload["manifest"])
+        manifest = blob_from_dict(_optional_object(payload, "manifest"))
         if manifest is None:
             raise ValueError("edit plan manifest is missing")
         return cls(
@@ -345,13 +368,13 @@ class HunkDetectedEvent:
 
     type: ClassVar[str] = HUNK_DETECTED
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {"record": _hunk_payload(self.record)}
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "HunkDetectedEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "HunkDetectedEvent":
         _require_keys(payload, {"record"})
-        return cls(record=_hunk_from_payload(payload["record"]))
+        return cls(record=_hunk_from_payload(_object(payload, "record")))
 
 
 @dataclass(frozen=True)
@@ -367,7 +390,7 @@ class HunkReviewTransitionedEvent:
 
     type: ClassVar[str] = HUNK_REVIEW_TRANSITIONED
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {
             "hunk_id": self.hunk_id,
             "expected_version": self.expected_version,
@@ -380,7 +403,7 @@ class HunkReviewTransitionedEvent:
         }
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "HunkReviewTransitionedEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "HunkReviewTransitionedEvent":
         _require_keys(
             payload,
             {
@@ -423,7 +446,7 @@ class RewindPreparedEvent:
 
     type: ClassVar[str] = REWIND_PREPARED
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {
             "transaction_id": self.transaction_id,
             "session_id": self.session_id,
@@ -440,7 +463,7 @@ class RewindPreparedEvent:
         }
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "RewindPreparedEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "RewindPreparedEvent":
         _require_keys(
             payload,
             {
@@ -490,7 +513,7 @@ class RewindCommittedEvent:
 
     type: ClassVar[str] = REWIND_COMMITTED
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {
             "transaction_id": self.transaction_id,
             "source_epoch": self.source_epoch,
@@ -498,7 +521,7 @@ class RewindCommittedEvent:
         }
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "RewindCommittedEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "RewindCommittedEvent":
         _require_keys(payload, {"transaction_id", "source_epoch", "target_epoch"})
         return cls(
             transaction_id=_text(payload, "transaction_id", nonempty=True),
@@ -514,11 +537,11 @@ class RewindAbortedEvent:
 
     type: ClassVar[str] = REWIND_ABORTED
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {"transaction_id": self.transaction_id, "detail": self.detail}
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "RewindAbortedEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "RewindAbortedEvent":
         _require_keys(payload, {"transaction_id", "detail"})
         return cls(
             transaction_id=_text(payload, "transaction_id", nonempty=True),
@@ -533,11 +556,11 @@ class RewindInDoubtEvent:
 
     type: ClassVar[str] = REWIND_IN_DOUBT
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self) -> dict[str, JsonValue]:
         return {"transaction_id": self.transaction_id, "detail": self.detail}
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "RewindInDoubtEvent":
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "RewindInDoubtEvent":
         _require_keys(payload, {"transaction_id", "detail"})
         return cls(
             transaction_id=_text(payload, "transaction_id", nonempty=True),

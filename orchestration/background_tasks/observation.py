@@ -54,7 +54,7 @@ class AgentOwnedLocalAsyncWorkAdapter:
             return AsyncWorkQueryResult(AsyncWorkQueryDisposition.OWNER_LOST, None)
         if local.owner != self._pool.owner:
             return AsyncWorkQueryResult(AsyncWorkQueryDisposition.INCARNATION_LOST, None)
-        meta = self._pool.get_task_info(str(local.task_id))
+        meta = self._pool.get_task_info(local.task_id)
         if meta is None or meta.attempt_id != local.attempt_id:
             return AsyncWorkQueryResult(AsyncWorkQueryDisposition.NOT_FOUND, None)
         pointer = None
@@ -97,14 +97,14 @@ class AgentOwnedLocalAsyncWorkAdapter:
         elif local.owner != self._pool.owner:
             disposition = LocalCancelDisposition.INCARNATION_LOST
         else:
-            meta = self._pool.get_task_info(str(local.task_id))
+            meta = self._pool.get_task_info(local.task_id)
             if meta is None:
                 disposition = LocalCancelDisposition.NOT_FOUND
             elif meta.attempt_id != local.attempt_id:
                 disposition = LocalCancelDisposition.STALE_ATTEMPT
             elif meta.status in TERMINAL_STATUSES:
                 disposition = LocalCancelDisposition.ALREADY_TERMINAL
-            elif self._pool.cancel(str(local.task_id)):
+            elif self._pool.cancel(local.task_id):
                 disposition = LocalCancelDisposition.CANCEL_REQUESTED
             else:
                 disposition = LocalCancelDisposition.NOT_FOUND

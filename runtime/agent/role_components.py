@@ -35,10 +35,10 @@ import asyncio
 import re
 from contextlib import asynccontextmanager
 from contextvars import Token
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, TypeVar, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Generic, Optional, TypeVar, cast
 from uuid import uuid4
 
-from mote.contracts.artifact import ArtifactRetention
 from mote.contracts.ports.artifact.store import ArtifactPublicationOutbox
 from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
 from mote.contracts.runtime.application import ApplicationLeasePort, RuntimeCompositionLeasePort
@@ -89,16 +89,23 @@ from mote.runtime.agent.components import (
 )
 from mote.runtime.agent.components.action import ActionComponentInputs
 from mote.runtime.agent.role_state import RoleStateController
-from mote.runtime.agent.runtime_maintenance import RuntimeMaintenance
 from mote.runtime.agent.session_manager import RoleSessionManager
+from mote.runtime.code_map.lifecycle import CodeMapLifecycle
+from mote.runtime.code_map.scan_gate import CodeMapScanGate
 from mote.runtime.events.log_subscriber import LogSubscriber
 from mote.runtime.events.telemetry import TelemetryManifest, TelemetryRuntime
+from mote.runtime.hook.manager import AsyncHookCallback
 from mote.runtime.interactive.host import RuntimeHost
-from mote.runtime.models.composition_context import bind_runtime_composition, reset_runtime_composition
+from mote.runtime.models.composition_context import (
+    RuntimeCompositionLeaseView,
+    bind_runtime_composition,
+    reset_runtime_composition,
+)
 from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.session.log import SessionLog
 from mote.runtime.session.replay import replay
 from mote.runtime.session.run_lease import RunLeaseHandle, RunLeaseStore
+from mote.runtime.telemetry.logging import logger
 from mote.runtime.telemetry.reporting import MOTE_REPORTER_DEFAULT_URL, ReporterSubscriber
 
 if TYPE_CHECKING:
@@ -138,7 +145,7 @@ class ComponentsState:
 
     def __init__(self) -> None:
         self.pending_task_completion_wake: "Optional[Callable]" = None
-        self.hook_callbacks: list[tuple[str, Any, Optional[str]]] = []
+        self.hook_callbacks: list[tuple[str, AsyncHookCallback, Optional[str]]] = []
         self.resource_guard: Optional[ResourceGuard] = None
         self.output_lease: RunLeaseHandle | None = None
         self.graph_leases: dict[str, RunLeaseHandle] = {}
@@ -147,9 +154,12 @@ class ComponentsState:
         self.runtime_projections_reconciled = False
         self.artifact_reconciliation_lock = asyncio.Lock()
         self.runtime_projection_reconciliation_lock = asyncio.Lock()
+        self.artifact_reconciliation_task: asyncio.Task[None] | None = None
+        self.runtime_projection_reconciliation_task: asyncio.Task[None] | None = None
+        self.artifact_gc_task: asyncio.Task[int] | None = None
         self.application_lease: ApplicationLeasePort | None = None
         self.runtime_composition_lease: RuntimeCompositionLeasePort | None = None
-        self.runtime_composition_token: Token[object | None] | None = None
+        self.runtime_composition_token: Token[RuntimeCompositionLeaseView | None] | None = None
 
 
 OutputT = TypeVar("OutputT")
@@ -164,15 +174,14 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
             "execution_engine_factory"
         )
         self._state = ComponentsState()
-        self._maintenance = RuntimeMaintenance(
-            role,
-            get_repo_index=lambda: self._graph.get(REPO_INDEX),
-            get_workspace_store=lambda: self._graph.get(WORKSPACE_STORE),
-            get_artifact_repository_bundle=lambda: self._graph.get(ARTIFACT_REPOSITORY_BUNDLE),
-            peek_skill_manager=lambda: self._graph.peek(SKILL_MANAGER),
-            peek_executor=lambda: self._graph.peek(EXECUTOR),
-        )
         self._graph = ComponentGraph(role, self._state, self._component_specs())
+        services = role._wiring.services
+        self._code_map_lifecycle = CodeMapLifecycle(
+            indexer=lambda: self._graph.get(REPO_INDEX),
+            repository_root=lambda: Path(role.state.project_root or role.get_cwd()),
+            session_identity=role.state.session_id,
+            gate=(services.code_map_scan_gate if services is not None else None) or CodeMapScanGate(),
+        )
         # Telemetry is wired exactly once, as an explicit lifecycle step
         # (``_wire_telemetry`` from ``Role._ensure_ready``), never as a side-effect of
         # constructing the leaf ``telemetry``. Set True *before* the wiring body
@@ -196,7 +205,7 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
         self._event_fabric_started = True
 
     async def begin_application_lease(self) -> None:
-        services = self._role.wiring.services
+        services = self._role._wiring.services
         composition = services.application_composition if services is not None else None
         if composition is None:
             return
@@ -232,6 +241,12 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
             raise RuntimeError("no Runtime composition lease is active")
         return lease
 
+    def current_application_generation_id(self) -> str:
+        lease = self._state.application_lease
+        if lease is None:
+            raise RuntimeError("no application lease is active")
+        return lease.application_generation_id.value
+
     async def acquire_runtime_composition(self):
         lease = self._state.application_lease
         if lease is None:
@@ -266,17 +281,17 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
             SessionLog(
                 self._role.session_id,
                 base_dir=str(self.workspace_store.sessions_root),
-                writer=self._role.context.disk_writer,
+                writer=self._role._context.disk_writer,
             ).path.parent
             / "run_leases.json"
         )
-        services = self._role.wiring.services
+        services = self._role._wiring.services
         coordinator = (services.run_lease_coordinator if services is not None else None) or RunLeaseStore(path)
         handle = RunLeaseHandle(
             coordinator,
             run_id=run_id,
             owner_id=self._state.worker_id,
-            policy=self._role.wiring.dependencies.run_lease_policy,
+            policy=self._role._wiring.dependencies.run_lease_policy,
         )
         await handle.start()
         self._state.output_lease = handle
@@ -300,17 +315,17 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
             SessionLog(
                 self._role.session_id,
                 base_dir=str(self.workspace_store.sessions_root),
-                writer=self._role.context.disk_writer,
+                writer=self._role._context.disk_writer,
             ).path.parent
             / "run_leases.json"
         )
-        services = self._role.wiring.services
+        services = self._role._wiring.services
         coordinator = (services.run_lease_coordinator if services is not None else None) or RunLeaseStore(path)
         handle = RunLeaseHandle(
             coordinator,
             run_id=run_id,
             owner_id=self._state.worker_id,
-            policy=self._role.wiring.dependencies.run_lease_policy,
+            policy=self._role._wiring.dependencies.run_lease_policy,
         )
         await handle.start()
         self._state.graph_leases[run_id] = handle
@@ -332,10 +347,20 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
             return
         complete = await self._reconcile_artifact_publications()
         if not complete:
-            self._maintenance.schedule_reconciliation(
-                "artifact-publication",
-                self._reconcile_artifact_publications,
-            )
+            task = self._state.artifact_reconciliation_task
+            if task is None or task.done():
+                self._state.artifact_reconciliation_task = asyncio.create_task(
+                    self._run_artifact_publication_reconciliation(),
+                    name="mote-artifact-publication-reconciliation",
+                )
+
+    async def _run_artifact_publication_reconciliation(self) -> None:
+        delay = 0.05
+        while True:
+            await asyncio.sleep(delay)
+            if await self._reconcile_artifact_publications():
+                return
+            delay = min(delay * 2, 5.0)
 
     async def _reconcile_artifact_publications(self) -> bool:
         async with self._state.artifact_reconciliation_lock:
@@ -355,10 +380,20 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
             return
         complete = await self._reconcile_runtime_projections()
         if not complete:
-            self._maintenance.schedule_reconciliation(
-                "runtime-projection",
-                self._reconcile_runtime_projections,
-            )
+            task = self._state.runtime_projection_reconciliation_task
+            if task is None or task.done():
+                self._state.runtime_projection_reconciliation_task = asyncio.create_task(
+                    self._run_runtime_projection_reconciliation(),
+                    name="mote-runtime-projection-reconciliation",
+                )
+
+    async def _run_runtime_projection_reconciliation(self) -> None:
+        delay = 0.05
+        while True:
+            await asyncio.sleep(delay)
+            if await self._reconcile_runtime_projections():
+                return
+            delay = min(delay * 2, 5.0)
 
     async def _reconcile_runtime_projections(self) -> bool:
         async with self._state.runtime_projection_reconciliation_lock:
@@ -377,17 +412,6 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
             self._state.runtime_projections_reconciled = complete
             return complete
 
-    async def release_ephemeral_artifacts(self) -> None:
-        """Close the turn-scoped Artifact lifetime and reclaim its CAS."""
-        store = self.artifact_store
-        released = await run_disk_io(
-            store.release_retentions,
-            (ArtifactRetention.EPHEMERAL,),
-        )
-        if not released:
-            return
-        await run_disk_io(self._graph.get(ARTIFACT_REPOSITORY_BUNDLE).collector.collect)
-
     # =========================================================================
     # Declarative component registry
     # =========================================================================
@@ -401,7 +425,7 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
         graph as data; the resolver (:class:`ComponentGraph`) turns it into lazy,
         cycle-checked access.
         """
-        projection = self._role.wiring.dependencies.component_projection
+        projection = self._role._wiring.dependencies.component_projection
         if projection is None:
             raise RuntimeError("Agent composition requires a Product component projection")
         return [
@@ -449,11 +473,11 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
             *watching_component_specs(
                 WatchingCallbacks(
                     register_hook=self.register_hook,
-                    reload_skills=self._maintenance.reload_skills_on_change,
-                    reload_config=self._maintenance.reload_config_on_change,
-                    reload_mcp=self._maintenance.reload_mcp_on_change,
-                    reindex_code_map=self._maintenance.reindex_code_map_on_change,
-                    config_source_roots=self._maintenance.config_source_roots,
+                    reload_skills=self._reload_skills_on_change,
+                    reload_config=self._reload_config_on_change,
+                    reload_mcp=self._reload_mcp_on_change,
+                    reindex_code_map=self._reindex_code_map_on_change,
+                    config_source_roots=self._config_source_roots,
                 ),
                 projection.watching(),
             ),
@@ -540,7 +564,7 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
                 lambda: self._graph.get(TITLE_SUBSCRIBER),
             ),
             LogSubscriber(),
-            self._role.context.langfuse.subscriber(),
+            self._role._context.langfuse.subscriber(),
             ReporterSubscriber(MOTE_REPORTER_DEFAULT_URL) if MOTE_REPORTER_DEFAULT_URL else None,
         ]
         subs += [source for source in self.turn_context_sources if getattr(source, "telemetry_observer", False)]
@@ -578,7 +602,12 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
     # Hook registration
     # =========================================================================
 
-    def register_hook(self, event: str, fn, matcher: Optional[str] = None) -> None:
+    def register_hook(
+        self,
+        event: str,
+        fn: AsyncHookCallback,
+        matcher: Optional[str] = None,
+    ) -> None:
         """Register an in-process Python hook callback (the SDK-style path).
 
         Engages the hook layer even with no ``HookConfig`` declared. Register
@@ -586,21 +615,76 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
         """
         manager = self._graph.peek(HOOK_MANAGER)
         if manager is not None:
-            manager.register(event, fn, matcher)
+            manager.register_async(event, fn, matcher)
         else:
             self._state.hook_callbacks.append((event, fn, matcher))
 
-    async def kickoff_repo_scan(self) -> None:
-        await self._maintenance.kickoff_repo_scan()
+    async def _reindex_code_map_on_change(self, hook_input: object) -> None:
+        payload = getattr(hook_input, "payload", None)
+        path = getattr(payload, "path", None)
+        if type(path) is str and path:
+            await self._code_map_lifecycle.refresh_changed_path(path)
 
-    async def kickoff_workspace_cleanup(self) -> None:
-        await self._maintenance.kickoff_workspace_cleanup()
+    def _config_source_roots(self) -> list[str]:
+        projection = self._role._wiring.dependencies.component_projection
+        if projection is None:
+            raise RuntimeError("Agent composition requires a Product component projection")
+        return projection.watched_config_paths()
+
+    async def _reload_skills_on_change(self, hook_input: object) -> None:
+        del hook_input
+        manager = self._graph.peek(SKILL_MANAGER)
+        if manager is not None and manager.reload():
+            logger.debug("skills activation source changed")
+
+    async def _reload_config_on_change(self, hook_input: object) -> None:
+        del hook_input
+        services = self._role._wiring.services
+        reloader = services.application_reloader if services is not None else None
+        if reloader is not None:
+            await reloader.reload()
+
+    async def _reload_mcp_on_change(self, hook_input: object) -> None:
+        del hook_input
+        executor = self._graph.peek(EXECUTOR)
+        if executor is None:
+            return
+        enabled = self._role.config.mcp.enabled
+        await executor.reload_mcp(self._role.role_schema.mcps, enabled=enabled)
+
+    async def kickoff_repo_scan(self) -> None:
+        self._code_map_lifecycle.start_scan()
 
     def kickoff_artifact_gc(self) -> None:
-        self._maintenance.kickoff_artifact_gc()
+        task = self._state.artifact_gc_task
+        if task is None or task.done():
+            collector = self._graph.get(ARTIFACT_REPOSITORY_BUNDLE).collector
+            self._state.artifact_gc_task = asyncio.create_task(
+                run_disk_io(collector.collect),
+                name="mote-artifact-gc",
+            )
 
-    async def close_maintenance(self) -> None:
-        await self._maintenance.close()
+    async def close_owner_tasks(self) -> None:
+        await self._code_map_lifecycle.close()
+        tasks = tuple(
+            task
+            for task in (
+                self._state.artifact_reconciliation_task,
+                self._state.runtime_projection_reconciliation_task,
+                self._state.artifact_gc_task,
+            )
+            if task is not None and not task.done()
+        )
+        self._state.artifact_reconciliation_task = None
+        self._state.runtime_projection_reconciliation_task = None
+        self._state.artifact_gc_task = None
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(
+                *(cast(Awaitable[object], task) for task in tasks),
+                return_exceptions=True,
+            )
 
     def peek_inference_port(self):
         return self._graph.peek(INFERENCE_PORT)

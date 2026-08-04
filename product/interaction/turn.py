@@ -7,7 +7,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from mote.contracts.conversation import Message
 from mote.orchestration.agents.control import AgentControl
-from mote.product.presentation.events import ErrorRaised, MediaBlock, MessageBlockCompleted
+from mote.product.presentation.events import ErrorRaised, MediaBlock, MessageBlockCompleted, UserMediaIdentity
 from mote.product.presentation.projection.base import BaseProjector
 
 
@@ -49,9 +49,10 @@ class TurnRunner:
                 message_id=message.id,
             )
         )
-        for item in media or []:
+        for ordinal, item in enumerate(media or [], start=1):
             await self._projector.deliver(
                 MediaBlock(
+                    identity=UserMediaIdentity(message.id, ordinal),
                     media_kind="image",
                     ref=item.get("path", "") or "",
                     mime=item.get("mime"),

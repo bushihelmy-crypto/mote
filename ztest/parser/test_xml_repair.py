@@ -9,6 +9,7 @@ before the closing ``</content></Command>`` tags. The streaming lexer then raise
 missing close tags from the lexer's open state and re-parses, recovering the
 command (mirroring the native channel's ``json_repair`` fallback).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -29,8 +30,8 @@ class TestLoadsXmlRepair:
         cmds, err = await loads_xml(data, {"Write"})
         assert err == ""
         assert len(cmds) == 1
-        assert cmds[0]["command_name"] == "Write"
-        assert cmds[0]["args"]["content"] == BODY
+        assert cmds[0].command_name == "Write"
+        assert cmds[0].args["content"] == BODY
 
     @pytest.mark.asyncio
     async def test_missing_function_close_only(self):
@@ -38,7 +39,7 @@ class TestLoadsXmlRepair:
         data = "<Write>\n<content>\n" + BODY + "\n</content>\n"
         cmds, err = await loads_xml(data, {"Write"})
         assert err == ""
-        assert cmds[0]["args"]["content"] == BODY
+        assert cmds[0].args["content"] == BODY
 
     @pytest.mark.asyncio
     async def test_patch_with_angle_brackets_recovered(self):
@@ -48,22 +49,22 @@ class TestLoadsXmlRepair:
         data = "<Write>\n<content>\n" + body
         cmds, err = await loads_xml(data, {"Write"})
         assert err == ""
-        assert cmds[0]["args"]["content"] == body
+        assert cmds[0].args["content"] == body
 
     @pytest.mark.asyncio
     async def test_well_formed_unchanged(self):
         data = "<Write>\n<content>\n" + BODY + "\n</content>\n</Write>"
         cmds, err = await loads_xml(data, {"Write"})
         assert err == ""
-        assert cmds[0]["args"]["content"] == BODY
+        assert cmds[0].args["content"] == BODY
 
     @pytest.mark.asyncio
     async def test_earlier_command_kept_last_truncated_recovered(self):
         data = "<Read>\n<path>\na.py\n</path>\n</Read>\n" "<Write>\n<content>\n" + BODY + "\n"
         cmds, err = await loads_xml(data, {"Read", "Write"})
         assert err == ""
-        assert [c["command_name"] for c in cmds] == ["Read", "Write"]
-        assert cmds[1]["args"]["content"] == BODY
+        assert [command.command_name for command in cmds] == ["Read", "Write"]
+        assert cmds[1].args["content"] == BODY
 
     @pytest.mark.asyncio
     async def test_unrecoverable_keeps_error(self):
@@ -80,4 +81,4 @@ class TestParseCommands2Repair:
         cmds, err = await parse_commands2(data, {"Write"})
         assert err == ""
         assert len(cmds) == 1
-        assert cmds[0]["args"]["content"] == BODY
+        assert cmds[0].args["content"] == BODY

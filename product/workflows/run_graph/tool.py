@@ -248,6 +248,9 @@ class RunGraph(BaseTool):
                 except GraphError as exc:
                     self._emit_completed(scope, run_state, ActivityOutcome.FAILED, str(exc))
                     return ToolResult(output=str(exc) + self._failure_note(failures), success=False)
+                except ValueError as exc:
+                    self._emit_completed(scope, run_state, ActivityOutcome.FAILED, str(exc))
+                    return ToolResult(output=str(exc), success=False)
                 finally:
                     reset_progress_sink(token)
 
@@ -366,6 +369,8 @@ class RunGraph(BaseTool):
                     edges.append(ActivityEdge(dep, node.id, False))
         # Explicit edges (branch / loop routing); guarded when predicated.
         for e in spec.edges:
+            if e.from_ not in node_ids or e.to not in node_ids:
+                continue
             pair = (e.from_, e.to)
             if e.when is None and pair in seen:
                 continue  # already covered by an inferred data-flow edge
@@ -408,7 +413,7 @@ class RunGraph(BaseTool):
     @staticmethod
     def _format(result: Any) -> str:
         try:
-            return "Graph completed. Output:\n" + json.dumps(result, ensure_ascii=False, indent=2, default=str)
+            return "Graph completed. Output:\n" + json.dumps(result, ensure_ascii=False, indent=2)
         except (TypeError, ValueError):
             return f"Graph completed. Output:\n{result!r}"
 
@@ -432,7 +437,7 @@ class RunGraph(BaseTool):
             lines.append(f"  {node}: {len(recs)} {verb}")
             for r in recs:
                 try:
-                    args_txt = json.dumps(r.args, ensure_ascii=False, default=str)
+                    args_txt = json.dumps(r.args, ensure_ascii=False)
                 except (TypeError, ValueError):
                     args_txt = repr(r.args)
                 lines.append(f"    - {r.tool}({args_txt}): {r.error}")

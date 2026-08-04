@@ -47,15 +47,20 @@ class HookSubscriber:
 
     async def handle(self, event) -> None:
         if isinstance(event, FileChangedEvent):
-            await self._hook.fire_file_changed(
-                FileChangedPayload(
-                    path=event.path,
-                    change_type=event.change_type,
-                    prior_version=event.prior_version,
-                    version=event.version,
-                    attribution=event.attribution,
+            try:
+                await self._hook.fire_file_changed(
+                    FileChangedPayload(
+                        path=event.path,
+                        change_type=event.change_type,
+                        prior_version=event.prior_version,
+                        version=event.version,
+                        attribution=event.attribution,
+                    )
                 )
-            )
+            except Exception:
+                # Observation hooks are best-effort; the durable file fact and
+                # watcher loop must not be rolled back by advisory hook failure.
+                return
             return
         binding = _BINDINGS.get(event.name)
         if binding is not None:

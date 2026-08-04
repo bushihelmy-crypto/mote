@@ -1,4 +1,5 @@
 """Durable logical Artifact index over a content-addressed blob store."""
+
 from __future__ import annotations
 
 import hashlib
@@ -6,12 +7,21 @@ import json
 import os
 import sqlite3
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
 from mote.contracts.artifact import (
     ArtifactContentRef,
+    ArtifactDeletionClaim,
+    ArtifactDeletionCommand,
+    ArtifactDeletionReceipt,
+    ArtifactDeletionState,
+    ArtifactHold,
+    ArtifactHoldKind,
+    ArtifactOwnerKind,
+    ArtifactOwnershipEdge,
     ArtifactPublication,
     ArtifactPublicationIntent,
     ArtifactPublicationState,
@@ -21,6 +31,7 @@ from mote.contracts.artifact import (
     ArtifactRetention,
     ArtifactRevision,
     ArtifactSensitivity,
+    ContentLocator,
 )
 from mote.contracts.artifact.errors import (
     ArtifactIdempotencyConflictError,
@@ -29,8 +40,9 @@ from mote.contracts.artifact.errors import (
     ArtifactRetentionError,
     ArtifactRevisionConflictError,
 )
-from mote.contracts.content import ContentIdentity
+from mote.contracts.content import ContentDigest, ContentIdentity
 from mote.contracts.ports.artifact.store import ArtifactBlobStore
+from mote.runtime.persistence import disk_io
 from mote.runtime.persistence.async_io import run_disk_io
 
 from .ownership import ArtifactOwnership
@@ -43,6 +55,7 @@ _RETENTION_RANK = {
     ArtifactRetention.PINNED: 3,
 }
 ARTIFACT_INDEX_FILENAME = "artifacts.sqlite3"
+ARTIFACT_ACTIVATION_MANIFEST_SCHEMA = "mote.artifact-store/v2"
 
 
 class DurableArtifactStore:
@@ -63,6 +76,411 @@ class DurableArtifactStore:
     @property
     def index_path(self) -> Path:
         return self._index_path
+
+    def replace_ownership_edges(
+        self,
+        *,
+        owner_kind: ArtifactOwnerKind,
+        owner_id: str,
+        generation: int,
+        content_digests: tuple[str, ...],
+    ) -> None:
+        edges = tuple(ArtifactOwnershipEdge(owner_kind, owner_id, digest, generation) for digest in content_digests)
+        if len(content_digests) != len(set(content_digests)):
+            raise ValueError("Artifact ownership edges contain duplicate content")
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT MAX(generation) AS generation FROM artifact_edges WHERE owner_kind = ? AND owner_id = ?",
+                (owner_kind.value, owner_id),
+            ).fetchone()["generation"]
+            if current is not None and generation <= current:
+                raise ArtifactRevisionConflictError("Artifact edge generation did not advance")
+            connection.execute(
+                "DELETE FROM artifact_edges WHERE owner_kind = ? AND owner_id = ?", (owner_kind.value, owner_id)
+            )
+            connection.executemany(
+                "INSERT INTO artifact_edges(owner_kind, owner_id, content_digest, generation) VALUES (?, ?, ?, ?)",
+                tuple((edge.owner_kind.value, edge.owner_id, edge.content_digest, edge.generation) for edge in edges),
+            )
+            connection.commit()
+
+    def release_ownership_edges(
+        self,
+        *,
+        owner_kind: ArtifactOwnerKind,
+        owner_id: str,
+        expected_generation: int,
+        release_generation: int,
+    ) -> tuple[str, ...]:
+        """Release exactly one owner's edges without touching another domain's facts."""
+        if release_generation <= expected_generation:
+            raise ValueError("Artifact edge release generation must advance")
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT content_digest, generation FROM artifact_edges WHERE owner_kind = ? AND owner_id = ? "
+                "ORDER BY content_digest",
+                (owner_kind.value, owner_id),
+            ).fetchall()
+            if rows and any(row["generation"] != expected_generation for row in rows):
+                raise ArtifactRevisionConflictError("Artifact edge release expectation is stale")
+            digests = tuple(row["content_digest"] for row in rows)
+            logical_rows = connection.execute(
+                "SELECT artifact_id, revision FROM artifact_owner_facts WHERE owner_kind = ? AND owner_id = ? "
+                "AND released = 0 ORDER BY artifact_id, revision",
+                (owner_kind.value, owner_id),
+            ).fetchall()
+            for logical in logical_rows:
+                self._release_owner(
+                    connection,
+                    logical["artifact_id"],
+                    logical["revision"],
+                    owner_kind.value,
+                    owner_id,
+                )
+            connection.execute(
+                "DELETE FROM artifact_edges WHERE owner_kind = ? AND owner_id = ?",
+                (owner_kind.value, owner_id),
+            )
+            connection.execute(
+                "INSERT INTO artifact_edge_tombstones(owner_kind, owner_id, generation, released_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(owner_kind, owner_id) DO UPDATE SET "
+                "generation=excluded.generation, released_at=excluded.released_at",
+                (owner_kind.value, owner_id, release_generation, self._now_text()),
+            )
+            connection.commit()
+            return digests
+
+    def ownership_edges(self, *, owner_kind: ArtifactOwnerKind, owner_id: str) -> tuple[ArtifactOwnershipEdge, ...]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT content_digest, generation FROM artifact_edges WHERE owner_kind = ? AND owner_id = ? "
+                "ORDER BY content_digest",
+                (owner_kind.value, owner_id),
+            ).fetchall()
+            return tuple(
+                ArtifactOwnershipEdge(owner_kind, owner_id, row["content_digest"], row["generation"]) for row in rows
+            )
+
+    def publish_reachability_closure(self, *, generation: int, producer_ids: tuple[str, ...]) -> None:
+        if type(generation) is not int or generation < 1:
+            raise ValueError("Artifact reachability closure identity is invalid")
+        canonical = tuple(sorted(set(producer_ids)))
+        if not canonical or canonical != producer_ids or any(type(item) is not str or not item for item in canonical):
+            raise ValueError("Artifact reachability producer inventory is invalid")
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute("SELECT generation FROM artifact_closure WHERE singleton = 1").fetchone()
+            if current is not None and generation <= current["generation"]:
+                raise ArtifactRevisionConflictError("Artifact closure generation did not advance")
+            observed = tuple(
+                row["producer_id"]
+                for row in connection.execute(
+                    "SELECT producer_id FROM artifact_producers WHERE generation = ? ORDER BY producer_id",
+                    (generation,),
+                ).fetchall()
+            )
+            if observed != canonical:
+                raise ArtifactRetentionError("Artifact closure producer inventory is incomplete")
+            connection.execute(
+                "INSERT INTO artifact_closure(singleton, generation, producer_ids, committed_at) VALUES (1, ?, ?, ?) "
+                "ON CONFLICT(singleton) DO UPDATE SET generation=excluded.generation, "
+                "producer_ids=excluded.producer_ids, committed_at=excluded.committed_at",
+                (generation, json.dumps(canonical), self._now_text()),
+            )
+            connection.commit()
+
+    def publish_gc_closure(self, *, producer_roots: tuple[tuple[str, tuple[str, ...]], ...]) -> int:
+        """Atomically replace the collector's complete, frozen reachability closure."""
+        producer_ids = tuple(item[0] for item in producer_roots)
+        if not producer_ids or tuple(sorted(set(producer_ids))) != producer_ids:
+            raise ValueError("Artifact GC producer identities must be non-empty, unique, and sorted")
+        for producer_id, digests in producer_roots:
+            if not producer_id or tuple(sorted(set(digests))) != digests or any(not digest for digest in digests):
+                raise ValueError("Artifact GC closure contains invalid producer content")
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            prior = connection.execute("SELECT generation FROM artifact_closure WHERE singleton = 1").fetchone()
+            if prior is not None:
+                current = tuple(
+                    (row["producer_id"], row["content_digest"])
+                    for row in connection.execute(
+                        "SELECT producer_id, content_digest FROM artifact_closure_roots "
+                        "WHERE generation = ? ORDER BY producer_id, content_digest",
+                        (prior["generation"],),
+                    ).fetchall()
+                )
+                proposed = tuple((producer_id, digest) for producer_id, digests in producer_roots for digest in digests)
+                current_producers = tuple(
+                    row["producer_id"]
+                    for row in connection.execute(
+                        "SELECT producer_id FROM artifact_producers WHERE generation = ? ORDER BY producer_id",
+                        (prior["generation"],),
+                    ).fetchall()
+                )
+                if current == proposed and current_producers == producer_ids:
+                    connection.rollback()
+                    return prior["generation"]
+            generation = 1 if prior is None else prior["generation"] + 1
+            connection.execute("DELETE FROM artifact_producers WHERE generation < ?", (generation,))
+            connection.execute("DELETE FROM artifact_closure_roots WHERE generation < ?", (generation,))
+            connection.executemany(
+                "INSERT INTO artifact_closure_roots(producer_id, content_digest, generation) VALUES (?, ?, ?)",
+                tuple(
+                    (producer_id, digest, generation) for producer_id, digests in producer_roots for digest in digests
+                ),
+            )
+            connection.executemany(
+                "INSERT INTO artifact_producers(producer_id, generation) VALUES (?, ?)",
+                tuple((producer_id, generation) for producer_id in producer_ids),
+            )
+            connection.execute(
+                "INSERT INTO artifact_closure(singleton, generation, producer_ids, committed_at) VALUES (1, ?, ?, ?) "
+                "ON CONFLICT(singleton) DO UPDATE SET generation=excluded.generation, "
+                "producer_ids=excluded.producer_ids, committed_at=excluded.committed_at",
+                (generation, json.dumps(producer_ids), self._now_text()),
+            )
+            connection.commit()
+            return generation
+
+    def put_hold(self, hold: ArtifactHold) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            prior = connection.execute(
+                "SELECT generation FROM artifact_holds WHERE hold_id = ?", (hold.hold_id,)
+            ).fetchone()
+            if prior is not None and hold.generation <= prior["generation"]:
+                raise ArtifactRevisionConflictError("Artifact hold generation did not advance")
+            connection.execute(
+                "INSERT INTO artifact_holds(hold_id, kind, content_digest, owner_id, generation, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(hold_id) DO UPDATE SET kind=excluded.kind, "
+                "content_digest=excluded.content_digest, owner_id=excluded.owner_id, "
+                "generation=excluded.generation, expires_at=excluded.expires_at",
+                (
+                    hold.hold_id,
+                    hold.kind.value,
+                    hold.content_digest,
+                    hold.owner_id,
+                    hold.generation,
+                    None if hold.expires_at is None else hold.expires_at.astimezone(timezone.utc).isoformat(),
+                ),
+            )
+            connection.commit()
+
+    def release_hold(self, hold_id: str, *, owner_id: str, expected_generation: int) -> bool:
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM artifact_holds WHERE hold_id = ? AND owner_id = ? AND generation = ?",
+                (hold_id, owner_id, expected_generation),
+            )
+            connection.commit()
+            return cursor.rowcount == 1
+
+    def claim_unreachable_content(
+        self,
+        command: ArtifactDeletionCommand,
+        *,
+        owner_id: str,
+        fencing_token: int,
+    ) -> ArtifactDeletionClaim | None:
+        content_digest = command.content_digest
+        if type(owner_id) is not str or not owner_id or type(fencing_token) is not int or fencing_token < 1:
+            raise ValueError("Artifact deletion claim identity is invalid")
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            closure = connection.execute("SELECT generation FROM artifact_closure WHERE singleton = 1").fetchone()
+            reachable = connection.execute(
+                "SELECT 1 FROM artifact_edges WHERE content_digest = ? UNION ALL "
+                "SELECT 1 FROM artifact_closure_roots WHERE content_digest = ? LIMIT 1",
+                (content_digest, content_digest),
+            ).fetchone()
+            held = connection.execute(
+                "SELECT 1 FROM artifact_holds WHERE content_digest = ? AND "
+                "(expires_at IS NULL OR expires_at > ?) LIMIT 1",
+                (content_digest, self._now_text()),
+            ).fetchone()
+            if closure is None or reachable is not None or held is not None:
+                connection.rollback()
+                return None
+            prior = connection.execute(
+                "SELECT command_id, revision, content_digest FROM artifact_deletions WHERE command_id = ?",
+                (command.command_id,),
+            ).fetchone()
+            if prior is not None and prior["content_digest"] != content_digest:
+                raise ArtifactRevisionConflictError("Artifact deletion command preimage conflicts")
+            revision = 1 if prior is None else prior["revision"] + 1
+            connection.execute(
+                "INSERT INTO artifact_deletions(command_id, content_digest, requested_by, requested_at, state, "
+                "closure_generation, revision, owner_id, fencing_token, updated_at, detail) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '') ON CONFLICT(command_id) DO UPDATE SET "
+                "state=excluded.state, closure_generation=excluded.closure_generation, revision=excluded.revision, "
+                "owner_id=excluded.owner_id, fencing_token=excluded.fencing_token, updated_at=excluded.updated_at",
+                (
+                    command.command_id,
+                    content_digest,
+                    command.requested_by,
+                    command.requested_at.astimezone(timezone.utc).isoformat(),
+                    ArtifactDeletionState.CLAIMED.value,
+                    closure["generation"],
+                    revision,
+                    owner_id,
+                    fencing_token,
+                    self._now_text(),
+                ),
+            )
+            connection.commit()
+            return ArtifactDeletionClaim(
+                command.command_id, content_digest, closure["generation"], revision, owner_id, fencing_token
+            )
+
+    def validate_deletion_claim(self, claim: ArtifactDeletionClaim) -> bool:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT closure_generation, revision, owner_id, fencing_token, state FROM artifact_deletions "
+                "WHERE command_id = ?",
+                (claim.command_id,),
+            ).fetchone()
+            closure = connection.execute("SELECT generation FROM artifact_closure WHERE singleton = 1").fetchone()
+            reachable = connection.execute(
+                "SELECT 1 FROM artifact_edges WHERE content_digest = ? UNION ALL "
+                "SELECT 1 FROM artifact_closure_roots WHERE content_digest = ? LIMIT 1",
+                (claim.content_digest, claim.content_digest),
+            ).fetchone()
+            return bool(
+                row is not None
+                and closure is not None
+                and reachable is None
+                and row["closure_generation"] == closure["generation"] == claim.closure_generation
+                and row["revision"] == claim.claim_revision
+                and row["owner_id"] == claim.owner_id
+                and row["fencing_token"] == claim.fencing_token
+                and row["state"] not in {ArtifactDeletionState.SETTLED.value, ArtifactDeletionState.IN_DOUBT.value}
+            )
+
+    def advance_deletion(
+        self, claim: ArtifactDeletionClaim, state: ArtifactDeletionState, *, detail: str = ""
+    ) -> ArtifactDeletionReceipt:
+        allowed = {
+            ArtifactDeletionState.CLAIMED: ArtifactDeletionState.REFERENCES_RELEASING,
+            ArtifactDeletionState.REFERENCES_RELEASING: ArtifactDeletionState.METADATA_TOMBSTONED,
+            ArtifactDeletionState.METADATA_TOMBSTONED: ArtifactDeletionState.BLOBS_RECLAIMING,
+            ArtifactDeletionState.BLOBS_RECLAIMING: ArtifactDeletionState.DIRECTORY_RETIRING,
+            ArtifactDeletionState.DIRECTORY_RETIRING: ArtifactDeletionState.SETTLED,
+        }
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM artifact_deletions WHERE command_id = ?", (claim.command_id,)
+            ).fetchone()
+            if (
+                row is None
+                or row["revision"] != claim.claim_revision
+                or row["owner_id"] != claim.owner_id
+                or row["fencing_token"] != claim.fencing_token
+            ):
+                raise ArtifactRevisionConflictError("Artifact deletion claim is stale")
+            current = ArtifactDeletionState(row["state"])
+            if state is not ArtifactDeletionState.IN_DOUBT and allowed.get(current) is not state:
+                raise ArtifactRevisionConflictError("Artifact deletion transition is invalid")
+            if state in {ArtifactDeletionState.REFERENCES_RELEASING, ArtifactDeletionState.METADATA_TOMBSTONED}:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM artifact_edges WHERE content_digest = ? UNION ALL "
+                        "SELECT 1 FROM artifact_closure_roots WHERE content_digest = ? LIMIT 1",
+                        (claim.content_digest, claim.content_digest),
+                    ).fetchone()
+                    is not None
+                ):
+                    raise ArtifactRetentionError("Artifact deletion remains reachable")
+            revision = row["revision"] + 1
+            updated_at = self._now_text()
+            connection.execute(
+                "UPDATE artifact_deletions SET state = ?, revision = ?, updated_at = ?, detail = ? "
+                "WHERE command_id = ? AND revision = ?",
+                (state.value, revision, updated_at, detail, claim.command_id, row["revision"]),
+            )
+            connection.commit()
+            return ArtifactDeletionReceipt(
+                claim.command_id, claim.content_digest, state, revision, datetime.fromisoformat(updated_at), detail
+            )
+
+    def scan_in_doubt_deletions(self, *, after_command_id: str = "", limit: int = 128) -> tuple[str, ...]:
+        if type(limit) is not int or limit < 1 or limit > 4096:
+            raise ValueError("Artifact deletion scan limit is invalid")
+        with self._lock, self._connect() as connection:
+            return tuple(
+                row["command_id"]
+                for row in connection.execute(
+                    "SELECT command_id FROM artifact_deletions WHERE state = ? AND command_id > ? "
+                    "ORDER BY command_id LIMIT ?",
+                    (ArtifactDeletionState.IN_DOUBT.value, after_command_id, limit),
+                ).fetchall()
+            )
+
+    def gc_cursor(self, *, closure_generation: int) -> str:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT closure_generation, content_digest FROM artifact_gc_cursor WHERE singleton = 1"
+            ).fetchone()
+            if row is None or row["closure_generation"] != closure_generation:
+                return ""
+            return row["content_digest"]
+
+    def advance_gc_cursor(self, *, closure_generation: int, content_digest: str) -> None:
+        with self._lock, self._connect() as connection:
+            closure = connection.execute("SELECT generation FROM artifact_closure WHERE singleton = 1").fetchone()
+            if closure is None or closure["generation"] != closure_generation:
+                raise ArtifactRevisionConflictError("Artifact GC cursor closure is stale")
+            connection.execute(
+                "INSERT INTO artifact_gc_cursor(singleton, closure_generation, content_digest) VALUES (1, ?, ?) "
+                "ON CONFLICT(singleton) DO UPDATE SET closure_generation=excluded.closure_generation, "
+                "content_digest=excluded.content_digest",
+                (closure_generation, content_digest),
+            )
+            connection.commit()
+
+    def resume_in_doubt_deletion(self, command_id: str, *, owner_id: str, fencing_token: int) -> ArtifactDeletionClaim:
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM artifact_deletions WHERE command_id = ?", (command_id,)).fetchone()
+            closure = connection.execute("SELECT generation FROM artifact_closure WHERE singleton = 1").fetchone()
+            if row is None or row["state"] != ArtifactDeletionState.IN_DOUBT.value or closure is None:
+                raise ArtifactRevisionConflictError("Artifact deletion is not resumable")
+            reachable = connection.execute(
+                "SELECT 1 FROM artifact_edges WHERE content_digest = ? UNION ALL "
+                "SELECT 1 FROM artifact_closure_roots WHERE content_digest = ? LIMIT 1",
+                (row["content_digest"], row["content_digest"]),
+            ).fetchone()
+            held = connection.execute(
+                "SELECT 1 FROM artifact_holds WHERE content_digest = ? AND "
+                "(expires_at IS NULL OR expires_at > ?) LIMIT 1",
+                (row["content_digest"], self._now_text()),
+            ).fetchone()
+            if reachable is not None or held is not None:
+                raise ArtifactRetentionError("Artifact deletion recovery is blocked")
+            revision = row["revision"] + 1
+            connection.execute(
+                "UPDATE artifact_deletions SET state = ?, closure_generation = ?, revision = ?, owner_id = ?, "
+                "fencing_token = ?, updated_at = ?, detail = '' WHERE command_id = ?",
+                (
+                    ArtifactDeletionState.CLAIMED.value,
+                    closure["generation"],
+                    revision,
+                    owner_id,
+                    fencing_token,
+                    self._now_text(),
+                    command_id,
+                ),
+            )
+            connection.commit()
+            return ArtifactDeletionClaim(
+                command_id, row["content_digest"], closure["generation"], revision, owner_id, fencing_token
+            )
+
+    @staticmethod
+    def _now_text() -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     async def publish(self, request: ArtifactPublishRequest) -> ArtifactRevision:
         return await run_disk_io(self._publish, request)
@@ -108,70 +526,6 @@ class DurableArtifactStore:
 
     async def resolve_lookup(self, lookup_key: str) -> ArtifactRevision | None:
         return await run_disk_io(self._resolve_lookup, lookup_key)
-
-    def release_session_scope(self) -> int:
-        """Release expired EPHEMERAL/SESSION metadata during session cleanup."""
-        return self.release_retentions((ArtifactRetention.EPHEMERAL, ArtifactRetention.SESSION))
-
-    def release_retentions(self, retentions: tuple[ArtifactRetention, ...]) -> int:
-        normalized = tuple(ArtifactRetention(item) for item in retentions)
-        values = tuple(item.value for item in normalized)
-        if not values:
-            return 0
-        placeholders = ", ".join("?" for _ in values)
-        visible = set(self._ownership.visible_owners())
-        with self._lock, self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                owner_rows = tuple(
-                    row
-                    for row in connection.execute(
-                        "SELECT artifact_id, revision, owner_kind, owner_id "
-                        "FROM artifact_owners "
-                        f"WHERE released = 0 AND retention IN ({placeholders})",
-                        values,
-                    ).fetchall()
-                    if (row["owner_kind"], row["owner_id"]) in visible
-                )
-                keys = set()
-                for row in owner_rows:
-                    keys.add((row["artifact_id"], row["revision"]))
-                    self._release_owner(
-                        connection,
-                        row["artifact_id"],
-                        row["revision"],
-                        row["owner_kind"],
-                        row["owner_id"],
-                    )
-                publication_ids = tuple(
-                    row["publication_id"]
-                    for row in connection.execute(
-                        "SELECT publication_id, owner_kind, owner_id "
-                        "FROM artifact_publication_outbox "
-                        "WHERE state IN (?, ?) "
-                        f"AND retention IN ({placeholders})",
-                        (
-                            ArtifactPublicationState.QUEUED.value,
-                            ArtifactPublicationState.FAILED.value,
-                            *values,
-                        ),
-                    ).fetchall()
-                    if (row["owner_kind"], row["owner_id"]) in visible
-                )
-                for publication_id in publication_ids:
-                    connection.execute(
-                        "DELETE FROM artifact_publication_outbox_representations " "WHERE publication_id = ?",
-                        (publication_id,),
-                    )
-                    connection.execute(
-                        "DELETE FROM artifact_publication_outbox " "WHERE publication_id = ?",
-                        (publication_id,),
-                    )
-                connection.commit()
-                return len(keys)
-            except BaseException:
-                connection.rollback()
-                raise
 
     async def import_revision(
         self,
@@ -229,7 +583,11 @@ class DurableArtifactStore:
         exports = []
         for revision in revisions:
             contents = tuple(
-                self._blobs.read_bytes(ArtifactContentRef(ContentIdentity(ref.digest, ref.size), ref.content_ref))
+                self._blobs.read_bytes(
+                    ArtifactContentRef(
+                        ContentIdentity(ContentDigest(ref.digest), ref.size), ContentLocator(ref.content_ref)
+                    )
+                )
                 for ref in revision.representations
             )
             exports.append(
@@ -265,7 +623,11 @@ class DurableArtifactStore:
                 ).fetchall()
             )
         contents = tuple(
-            self._blobs.read_bytes(ArtifactContentRef(ContentIdentity(ref.digest, ref.size), ref.content_ref))
+            self._blobs.read_bytes(
+                ArtifactContentRef(
+                    ContentIdentity(ContentDigest(ref.digest), ref.size), ContentLocator(ref.content_ref)
+                )
+            )
             for ref in exported.representations
         )
         return ArtifactRevisionTransfer(exported, contents, records)
@@ -1070,7 +1432,9 @@ class DurableArtifactStore:
                     representation=ref.representation,
                 )
         return self._blobs.read_bytes(
-            ArtifactContentRef(ContentIdentity(stored.digest, stored.size), stored.content_ref)
+            ArtifactContentRef(
+                ContentIdentity(ContentDigest(stored.digest), stored.size), ContentLocator(stored.content_ref)
+            )
         )
 
     def _promote(
@@ -1108,7 +1472,7 @@ class DurableArtifactStore:
                     target_id,
                 ):
                     connection.execute(
-                        "UPDATE artifact_owners SET released = 1 "
+                        "UPDATE artifact_owner_facts SET released = 1 "
                         "WHERE artifact_id = ? AND revision = ? "
                         "AND owner_kind = ? AND owner_id = ?",
                         (
@@ -1168,7 +1532,7 @@ class DurableArtifactStore:
         owner_id: str,
     ) -> None:
         connection.execute(
-            "UPDATE artifact_owners SET released = 1 "
+            "UPDATE artifact_owner_facts SET released = 1 "
             "WHERE artifact_id = ? AND revision = ? "
             "AND owner_kind = ? AND owner_id = ?",
             (artifact_id, revision, owner_kind, owner_id),
@@ -1178,6 +1542,36 @@ class DurableArtifactStore:
             artifact_id,
             revision,
         )
+        DurableArtifactStore._refresh_edges_for_legacy_owner(connection, owner_kind, owner_id)
+
+    @staticmethod
+    def _refresh_edges_for_legacy_owner(connection: sqlite3.Connection, owner_kind: str, owner_id: str) -> None:
+        canonical_kind = ArtifactOwnerKind.SESSION if owner_kind == "session" else ArtifactOwnerKind.PROJECT
+        edge_owner_id = owner_id if owner_kind != "global" else "global"
+        prior = connection.execute(
+            "SELECT MAX(generation) AS generation FROM artifact_edges WHERE owner_kind = ? AND owner_id = ?",
+            (canonical_kind.value, edge_owner_id),
+        ).fetchone()["generation"]
+        generation = 1 if prior is None else prior + 1
+        digests = tuple(
+            row["digest"]
+            for row in connection.execute(
+                "SELECT DISTINCT representations.digest FROM artifact_owner_facts AS owners "
+                "JOIN artifact_representations AS representations ON "
+                "representations.artifact_id = owners.artifact_id AND representations.revision = owners.revision "
+                "WHERE owners.owner_kind = ? AND owners.owner_id = ? AND owners.released = 0 "
+                "AND representations.released = 0 ORDER BY representations.digest",
+                (owner_kind, owner_id),
+            ).fetchall()
+        )
+        connection.execute(
+            "DELETE FROM artifact_edges WHERE owner_kind = ? AND owner_id = ?",
+            (canonical_kind.value, edge_owner_id),
+        )
+        connection.executemany(
+            "INSERT INTO artifact_edges(owner_kind, owner_id, content_digest, generation) VALUES (?, ?, ?, ?)",
+            tuple((canonical_kind.value, edge_owner_id, digest, generation) for digest in digests),
+        )
 
     @staticmethod
     def _finalize_unowned_revision(
@@ -1186,7 +1580,7 @@ class DurableArtifactStore:
         revision: int,
     ) -> None:
         owner = connection.execute(
-            "SELECT 1 FROM artifact_owners " "WHERE artifact_id = ? AND revision = ? AND released = 0 LIMIT 1",
+            "SELECT 1 FROM artifact_owner_facts " "WHERE artifact_id = ? AND revision = ? AND released = 0 LIMIT 1",
             (artifact_id, revision),
         ).fetchone()
         if owner is not None:
@@ -1228,13 +1622,45 @@ class DurableArtifactStore:
 
     def _connect(self) -> sqlite3.Connection:
         self._index_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        manifest = self._index_path.with_name("activation-manifest.json")
+        if manifest.exists():
+            try:
+                activation = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise RuntimeError("Artifact activation manifest is unreadable") from exc
+            if (
+                type(activation) is not dict
+                or set(activation) != {"schema", "generation", "source_digest", "evidence_retention_days"}
+                or activation["schema"] != ARTIFACT_ACTIVATION_MANIFEST_SCHEMA
+                or type(activation["generation"]) is not int
+                or activation["generation"] < 1
+                or type(activation["source_digest"]) is not str
+                or activation["evidence_retention_days"] != 180
+            ):
+                raise RuntimeError("Artifact activation manifest is invalid")
+        elif self._index_path.exists() and self._index_path.stat().st_size:
+            raise RuntimeError("Artifact store requires explicit v1 to v2 migration")
+        else:
+            disk_io.atomic_write(
+                manifest,
+                json.dumps(
+                    {
+                        "schema": ARTIFACT_ACTIVATION_MANIFEST_SCHEMA,
+                        "generation": 1,
+                        "source_digest": "empty",
+                        "evidence_retention_days": 180,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode(),
+                fsync=True,
+            )
         if os.name == "posix":
             os.chmod(self._index_path.parent, 0o700)
         connection = sqlite3.connect(self._index_path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA synchronous = FULL")
-        connection.executescript(
-            """
+        connection.executescript("""
             CREATE TABLE IF NOT EXISTS artifact_representations (
                 artifact_id TEXT NOT NULL,
                 revision INTEGER NOT NULL,
@@ -1272,6 +1698,18 @@ class DurableArtifactStore:
                 released INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (artifact_id, revision, owner_kind, owner_id)
             );
+            CREATE TABLE IF NOT EXISTS artifact_owner_facts (
+                artifact_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                owner_kind TEXT NOT NULL CHECK (owner_kind IN ("session", "project", "global")),
+                owner_id TEXT NOT NULL,
+                retention TEXT NOT NULL,
+                released INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (artifact_id, revision, owner_kind, owner_id)
+            );
+            INSERT OR IGNORE INTO artifact_owner_facts
+                (artifact_id, revision, owner_kind, owner_id, retention, released)
+                SELECT artifact_id, revision, owner_kind, owner_id, retention, released FROM artifact_owners;
             CREATE TABLE IF NOT EXISTS artifact_publication_outbox (
                 publication_id TEXT PRIMARY KEY,
                 artifact_id TEXT NOT NULL,
@@ -1299,8 +1737,64 @@ class DurableArtifactStore:
                 suggested_name TEXT NOT NULL,
                 PRIMARY KEY (publication_id, representation)
             );
-            """
-        )
+            CREATE TABLE IF NOT EXISTS artifact_edges (
+                owner_kind TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                content_digest TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation > 0),
+                PRIMARY KEY (owner_kind, owner_id, content_digest)
+            );
+            CREATE TABLE IF NOT EXISTS artifact_closure (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                generation INTEGER NOT NULL CHECK (generation > 0),
+                producer_ids TEXT NOT NULL,
+                committed_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS artifact_producers (
+                producer_id TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation > 0),
+                PRIMARY KEY (producer_id, generation)
+            );
+            CREATE TABLE IF NOT EXISTS artifact_closure_roots (
+                producer_id TEXT NOT NULL, content_digest TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK(generation > 0),
+                PRIMARY KEY(producer_id, content_digest, generation)
+            );
+            CREATE TABLE IF NOT EXISTS artifact_edge_tombstones (
+                owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK(generation > 0), released_at TEXT NOT NULL,
+                PRIMARY KEY(owner_kind, owner_id)
+            );
+            CREATE TABLE IF NOT EXISTS artifact_holds (
+                hold_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                content_digest TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation > 0),
+                expires_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS artifact_deletions (
+                command_id TEXT PRIMARY KEY,
+                content_digest TEXT NOT NULL,
+                requested_by TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                state TEXT NOT NULL,
+                closure_generation INTEGER NOT NULL,
+                revision INTEGER NOT NULL CHECK (revision > 0),
+                owner_id TEXT NOT NULL,
+                fencing_token INTEGER NOT NULL CHECK (fencing_token > 0),
+                updated_at TEXT NOT NULL,
+                detail TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS artifact_gc_cursor (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                closure_generation INTEGER NOT NULL CHECK(closure_generation > 0),
+                content_digest TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS artifact_edges_by_content ON artifact_edges(content_digest);
+            CREATE INDEX IF NOT EXISTS artifact_holds_by_content ON artifact_holds(content_digest);
+            CREATE INDEX IF NOT EXISTS artifact_deletions_by_state ON artifact_deletions(state, updated_at, command_id);
+            """)
         connection.commit()
         if os.name == "posix":
             os.chmod(self._index_path, 0o600)
@@ -1393,7 +1887,7 @@ class DurableArtifactStore:
         return tuple(
             row
             for row in connection.execute(
-                "SELECT owner_kind, owner_id, retention FROM artifact_owners "
+                "SELECT owner_kind, owner_id, retention FROM artifact_owner_facts "
                 "WHERE artifact_id = ? AND revision = ? AND released = 0",
                 (artifact_id, revision),
             ).fetchall()
@@ -1417,12 +1911,36 @@ class DurableArtifactStore:
         retention = ArtifactRetention(retention)
         owner_kind, owner_id = self._ownership.owner_for(retention)
         connection.execute(
-            "INSERT INTO artifact_owners "
+            "INSERT INTO artifact_owner_facts "
             "(artifact_id, revision, owner_kind, owner_id, retention, released) "
             "VALUES (?, ?, ?, ?, ?, 0) "
             "ON CONFLICT(artifact_id, revision, owner_kind, owner_id) DO UPDATE SET "
             "retention = excluded.retention, released = 0",
             (artifact_id, revision, owner_kind, owner_id, retention.value),
+        )
+        canonical_kind = ArtifactOwnerKind.SESSION if owner_kind == "session" else ArtifactOwnerKind.PROJECT
+        edge_owner_id = owner_id if owner_kind != "global" else "global"
+        prior_generation = connection.execute(
+            "SELECT MAX(generation) AS generation FROM artifact_edges WHERE owner_kind = ? AND owner_id = ?",
+            (canonical_kind.value, edge_owner_id),
+        ).fetchone()["generation"]
+        generation = 1 if prior_generation is None else prior_generation + 1
+        connection.execute(
+            "UPDATE artifact_edges SET generation = ? WHERE owner_kind = ? AND owner_id = ?",
+            (generation, canonical_kind.value, edge_owner_id),
+        )
+        digests = tuple(
+            row["digest"]
+            for row in connection.execute(
+                "SELECT digest FROM artifact_representations WHERE artifact_id = ? AND revision = ? "
+                "AND released = 0 ORDER BY digest",
+                (artifact_id, revision),
+            ).fetchall()
+        )
+        connection.executemany(
+            "INSERT INTO artifact_edges(owner_kind, owner_id, content_digest, generation) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(owner_kind, owner_id, content_digest) DO UPDATE SET generation=excluded.generation",
+            tuple((canonical_kind.value, edge_owner_id, digest, generation) for digest in digests),
         )
         self._sync_revision_retention(connection, artifact_id, revision)
 
@@ -1433,7 +1951,7 @@ class DurableArtifactStore:
         revision: int,
     ) -> None:
         rows = connection.execute(
-            "SELECT retention FROM artifact_owners " "WHERE artifact_id = ? AND revision = ? AND released = 0",
+            "SELECT retention FROM artifact_owner_facts " "WHERE artifact_id = ? AND revision = ? AND released = 0",
             (artifact_id, revision),
         ).fetchall()
         if not rows:
@@ -1481,7 +1999,7 @@ class DurableArtifactStore:
         if not owner_rows:
             owner_rows = tuple(
                 connection.execute(
-                    "SELECT owner_kind, owner_id, retention FROM artifact_owners "
+                    "SELECT owner_kind, owner_id, retention FROM artifact_owner_facts "
                     "WHERE artifact_id = ? AND revision = ? AND released = 0",
                     (artifact_id, revision),
                 ).fetchall()
@@ -1658,4 +2176,4 @@ class DurableArtifactStore:
         return f"artifact-publication:{digest}"
 
 
-__all__ = ["ARTIFACT_INDEX_FILENAME", "DurableArtifactStore"]
+__all__ = ["ARTIFACT_ACTIVATION_MANIFEST_SCHEMA", "ARTIFACT_INDEX_FILENAME", "DurableArtifactStore"]

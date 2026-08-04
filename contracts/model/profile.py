@@ -5,9 +5,7 @@
 This is the keystone the LLM-provider layer hangs off. It consolidates the four
 formerly-scattered per-model capability substring lists (vision / PDF input /
 native tool search / native web search) into ONE mergeable, model-name-keyed
-:class:`ModelProfile` registry, and adds two new capability facets that had no
-home before: ``supports_thinking`` (the reasoning/thinking gate) and
-``json_schema_transformer`` (a per-model tool-schema rewrite hook).
+:class:`ModelProfile` registry and owns the reasoning/thinking capability gate.
 
 Design (mirrors pydantic-ai's ModelProfile merge, adapted to mote):
 
@@ -33,7 +31,7 @@ is behaviour-preserving for every real model id (all markers are lower-case).
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, replace
-from typing import Callable, Optional
+from typing import Optional
 
 __all__ = ["ModelProfile", "DEFAULT_PROFILE", "merge_profile", "profile_for"]
 
@@ -66,11 +64,6 @@ class ModelProfile:
     # ``thinking={...}`` / OpenAI ``reasoning_effort`` / Responses ``reasoning``).
     supports_thinking: bool = False
     supports_native_structured_output: bool = False
-    # Optional per-model rewrite of each tool's JSON Schema before it is wrapped
-    # in the provider envelope (for a model that rejects a schema construct other
-    # models accept). ``None`` == identity (the common case). The exception layer
-    # never imports transformers; this is a pure ``dict -> dict`` value hook.
-    json_schema_transformer: Optional[Callable[[dict], dict]] = None
 
 
 DEFAULT_PROFILE = ModelProfile()
@@ -100,8 +93,6 @@ def merge_profile(base: ModelProfile, override: Optional[ModelProfile]) -> Model
 #
 # Grouped by canonical model capability families plus the new
 # thinking facet. Extend a row (or add one) as new capable models land; to fix a
-# per-model schema quirk, set ``json_schema_transformer=`` on the relevant row
-# (none needed today — the hook stays inert until a real quirk appears).
 # ---------------------------------------------------------------------------
 
 _VISION = ModelProfile(supports_vision=True)

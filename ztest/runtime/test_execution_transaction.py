@@ -25,7 +25,7 @@ class Checkpoint:
         self.recorded = 0
         self.discarded = 0
 
-    def record_result(self):
+    async def record_result(self):
         self.recorded += 1
 
     def discard(self):

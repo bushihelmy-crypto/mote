@@ -23,7 +23,7 @@ class _FrozenRecord(BaseModel):
 
 class ServiceCallPlannedRecord(_FrozenRecord):
     kind: Literal["service_call_planned"] = "service_call_planned"
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     service_call_id: str = Field(min_length=1)
     plan_id: str = Field(min_length=1)
     route_id: str = Field(min_length=1)
@@ -42,7 +42,7 @@ class ServiceCallPlannedRecord(_FrozenRecord):
 
 class ServiceAttemptStartedRecord(_FrozenRecord):
     kind: Literal["service_attempt_started"] = "service_attempt_started"
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     service_call_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
     ordinal: int = Field(ge=1)
@@ -56,7 +56,7 @@ class ServiceAttemptStartedRecord(_FrozenRecord):
 
 class ServiceReceiptAcceptedRecord(_FrozenRecord):
     kind: Literal["service_receipt_accepted"] = "service_receipt_accepted"
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     service_call_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
     receipt: ServiceReceipt
@@ -66,7 +66,7 @@ class ServiceReceiptAcceptedRecord(_FrozenRecord):
 
 class ServiceCallSuspendedRecord(_FrozenRecord):
     kind: Literal["service_call_suspended"] = "service_call_suspended"
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     service_call_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
     reason: Literal["deadline"] = "deadline"
@@ -76,7 +76,7 @@ class ServiceCallSuspendedRecord(_FrozenRecord):
 
 class ServiceAttemptFinishedRecord(_FrozenRecord):
     kind: Literal["service_attempt_finished"] = "service_attempt_finished"
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     service_call_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
     ordinal: int = Field(ge=1)
@@ -103,7 +103,7 @@ class ServiceAttemptFinishedRecord(_FrozenRecord):
 
 class ServiceDecisionRecord(_FrozenRecord):
     kind: Literal["service_decision_applied"] = "service_decision_applied"
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     service_call_id: str = Field(min_length=1)
     resume_generation: int = Field(default=0, ge=0)
     after_attempt_ordinal: int = Field(ge=0)
@@ -115,7 +115,7 @@ class ServiceDecisionRecord(_FrozenRecord):
 
 class ServiceCallFinishedRecord(_FrozenRecord):
     kind: Literal["service_call_finished"] = "service_call_finished"
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     service_call_id: str = Field(min_length=1)
     state: ServiceCallState
     selected_endpoint_id: str | None = None
@@ -148,7 +148,12 @@ class ServiceCallFinishedRecord(_FrozenRecord):
         if self.state is ServiceCallState.SUCCEEDED:
             if any(value is None for value in success_fields) or self.failure is not None:
                 raise ValueError("succeeded service call requires complete response provenance")
-        elif self.state in {ServiceCallState.FAILED, ServiceCallState.IN_DOUBT}:
+        elif self.state in {
+            ServiceCallState.FAILED,
+            ServiceCallState.IN_DOUBT,
+            ServiceCallState.CANCELLATION_IN_DOUBT,
+            ServiceCallState.OWNER_ACTION_REQUIRED,
+        }:
             if self.failure is None or self.response is not None:
                 raise ValueError("failed service call requires only a failure")
         elif self.response is not None or self.failure is not None:

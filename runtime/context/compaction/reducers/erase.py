@@ -56,7 +56,7 @@ class EraseReducer:
         if not erasable:
             return ReductionOutcome(transcript, strategy="erase")
 
-        call_ids = [m.metadata.get(TOOL_CALL_ID) for m in erasable]
+        call_ids = [call_id for m in erasable if isinstance((call_id := m.metadata.get(TOOL_CALL_ID)), str)]
         tokens_freed = sum(count_string_tokens(m.content or "", model) for m in erasable)
         new_transcript = transcript.erase_pairs(call_ids)
         target_met = new_transcript.token_count(model) <= request.target_tokens

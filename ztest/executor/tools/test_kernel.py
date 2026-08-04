@@ -12,6 +12,7 @@ fresh loop per call). The live session is owned by the per-test ``CapRole``
 through its ``RuntimeHost``, so there is no process-global singleton to leak
 across tests; each test still tears its kernel down to free the subprocess.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,10 +23,11 @@ import pytest
 from mote.contracts.interaction.handoff import HandoffRequest, HandoffStatus, HumanHandoffOutcome
 from mote.contracts.runtime import RuntimeRef, RuntimeState
 from mote.contracts.surface import NOTEBOOK_MEDIA_TYPE, NotebookDocument, SurfaceInput, SurfacePresentationMode
+from mote.contracts.tool.errors import ToolError
 from mote.product.toolsets.builtin.python import Python
 from mote.runtime.interactive.kernel.driver import OUTPUT_MAX_CHARS, KernelRuntimeDriver, KernelSession, _strip_ansi
 from mote.runtime.text.elision import cap_head_tail
-from mote.runtime.tools.tool_result import ToolError, ToolResult
+from mote.runtime.tools.tool_result import ToolResult
 
 from .conftest import CapRole, bind, run
 
@@ -568,7 +570,17 @@ class TestLiveSurface:
                 handle,
                 SurfaceInput(
                     kind="notebook.input_reply",
-                    data=json.dumps({"request_id": pending.request_id, "value": "Ada"}),
+                    data=json.dumps(
+                        {
+                            "request_id": pending.request_id,
+                            "value": "Ada",
+                            "document_revision": pending.document_revision,
+                            "kernel_epoch": pending.kernel_epoch,
+                            "connection_generation": pending.connection_generation,
+                            "human_generation": pending.human_generation,
+                            "expected_request_revision": pending.request_revision,
+                        }
+                    ),
                 ),
             )
             await asyncio.wait_for(execution, timeout=10)
@@ -581,7 +593,17 @@ class TestLiveSurface:
                     handle,
                     SurfaceInput(
                         kind="notebook.input_reply",
-                        data=json.dumps({"request_id": pending.request_id, "value": "late"}),
+                        data=json.dumps(
+                            {
+                                "request_id": pending.request_id,
+                                "value": "late",
+                                "document_revision": pending.document_revision,
+                                "kernel_epoch": pending.kernel_epoch,
+                                "connection_generation": pending.connection_generation,
+                                "human_generation": pending.human_generation,
+                                "expected_request_revision": pending.request_revision,
+                            }
+                        ),
                     ),
                 )
             await driver.detach_surface(handle)

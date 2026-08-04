@@ -72,7 +72,7 @@ async def test_callback_sync_dict():
     mgr = HookManager()
     mgr.register("UserPromptSubmit", lambda hi: {"additionalContext": "hi"})
     out = await mgr.fire("UserPromptSubmit", {"prompt": "x"})
-    assert out.additional_context == ["hi"]
+    assert out.additional_context == ("hi",)
     assert mgr.enabled is True
 
 
@@ -83,7 +83,7 @@ async def test_callback_async_outcome():
     async def cb(hi):
         return HookOutcome(behavior="deny", system_message="blocked")
 
-    mgr.register("PreToolUse", cb)
+    mgr.register_async("PreToolUse", cb)
     out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     assert out.behavior == "deny"
     assert out.system_message == "blocked"
@@ -111,7 +111,7 @@ async def test_failure_isolation():
     mgr.register("PreToolUse", lambda hi: {"additionalContext": "still here"})
     out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
     # The throwing handler is skipped; the good one still contributes.
-    assert out.additional_context == ["still here"]
+    assert out.additional_context == ("still here",)
 
 
 @pytest.mark.asyncio
@@ -191,7 +191,7 @@ async def test_command_handler_receives_payload_on_stdin(tmp_path):
     )
     mgr = _command_manager(cfg)
     out = await mgr.fire("PreToolUse", _pre_tool("Bash"))
-    assert out.additional_context == ["Bash"]
+    assert out.additional_context == ("Bash",)
 
 
 @pytest.mark.asyncio

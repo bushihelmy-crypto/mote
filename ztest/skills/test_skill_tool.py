@@ -8,15 +8,16 @@ skills to ``run_skill_fork``, and searches the long tail via ``query``. Tests
 inject the needed capabilities directly (mirroring ``BaseTool.bind`` setattr)
 rather than standing up a full Role.
 """
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
 
+from mote.contracts.tool.errors import ToolError
 from mote.product.skills.skill_pool import SkillPool
 from mote.product.toolsets.builtin.skill_tool import Skill
-from mote.runtime.tools.tool_result import ToolError
 
 from .conftest import write_skill
 

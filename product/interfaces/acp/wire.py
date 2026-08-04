@@ -45,6 +45,7 @@ from typing import List, Optional, Set
 
 from mote.contracts.async_work.codec import decode_async_work_observation, encode_async_work_observation
 from mote.product.presentation.events import events as ev
+from mote.product.presentation.events.catalog import ViewEventDisposition, adapter_disposition
 from mote.product.presentation.wire_types import WireObject, to_wire_json
 
 # ── ACP ``sessionUpdate`` discriminators (snake_case per the v1 schema) ─────
@@ -296,9 +297,10 @@ def to_acp_updates(event: ev.ViewEvent, state: AcpWireState) -> list[WireObject]
     tool_call-vs-tool_call_update distinction that mote's flat events don't
     carry). Unknown / display-only kinds → ``[]``.
     """
-    handler = _DISPATCH.get(event.kind)
-    if handler is None:
+    disposition = adapter_disposition(event, frozenset(_DISPATCH))
+    if disposition is ViewEventDisposition.INTENTIONALLY_OMITTED:
         return []
+    handler = _DISPATCH[event.kind]
     return handler(event, state)
 
 

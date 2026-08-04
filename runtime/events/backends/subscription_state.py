@@ -8,12 +8,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mote.contracts.events.envelope import StreamId
-from mote.contracts.ports.events.subscription import DeadLetterEntry, SubscriptionCheckpoint, SubscriptionIdentity
+from mote.contracts.ports.events.subscription import (
+    DeadLetterEntry,
+    SubscriptionCheckpoint,
+    SubscriptionIdentity,
+    SubscriptionOwnerLease,
+)
 from mote.runtime.events.journal import decode_event_record, encode_event_record
 from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.telemetry.logging import log_class
 
-_FORMAT_VERSION = 1
+_FORMAT_VERSION = 2
 _MAX_DEAD_LETTER_PAGE = 1_000
 
 
@@ -55,6 +60,30 @@ class SQLiteSubscriptionStateStore:
     ) -> int:
         return await run_disk_io(self._load_sync, identity, stream_id)
 
+    async def claim_owner(self, identity: SubscriptionIdentity, owner_id: str) -> SubscriptionOwnerLease:
+        return await run_disk_io(self._claim_owner_sync, identity, owner_id)
+
+    def _claim_owner_sync(self, identity: SubscriptionIdentity, owner_id: str) -> SubscriptionOwnerLease:
+        if type(owner_id) is not str or not owner_id:
+            raise ValueError("subscription owner identity is invalid")
+        with self._lock:
+            connection = self._require_connection()
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT generation, fencing_token FROM subscription_owners WHERE subscription = ?",
+                (str(identity),),
+            ).fetchone()
+            generation = 1 if row is None else row["generation"] + 1
+            fence = 1 if row is None else row["fencing_token"] + 1
+            connection.execute(
+                "INSERT INTO subscription_owners(subscription, owner_id, generation, fencing_token) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(subscription) DO UPDATE SET owner_id=excluded.owner_id, generation=excluded.generation, "
+                "fencing_token=excluded.fencing_token",
+                (str(identity), owner_id, generation, fence),
+            )
+            connection.commit()
+            return SubscriptionOwnerLease(identity, owner_id, generation, fence)
+
     async def save(self, checkpoint: SubscriptionCheckpoint) -> None:
         await run_disk_io(self._save_sync, checkpoint)
 
@@ -84,6 +113,53 @@ class SQLiteSubscriptionStateStore:
             subscription,
             limit,
         )
+
+    async def prune_dead_letters(
+        self,
+        *,
+        content_before: datetime,
+        tombstone_before: datetime,
+        limit: int = 1_000,
+    ) -> tuple[int, int]:
+        if content_before.tzinfo is None or tombstone_before.tzinfo is None or tombstone_before >= content_before:
+            raise ValueError("dead-letter retention boundaries are invalid")
+        if type(limit) is not int or not 1 <= limit <= _MAX_DEAD_LETTER_PAGE:
+            raise ValueError("dead-letter retention scan is outside its bound")
+        return await run_disk_io(self._prune_dead_letters_sync, content_before, tombstone_before, limit)
+
+    def _prune_dead_letters_sync(
+        self, content_before: datetime, tombstone_before: datetime, limit: int
+    ) -> tuple[int, int]:
+        with self._lock:
+            connection = self._require_connection()
+            connection.execute("BEGIN IMMEDIATE")
+            expired = connection.execute(
+                "SELECT subscription, stream_id, sequence, event_id, last_failed_at FROM subscription_dead_letters "
+                "WHERE last_failed_at < ? ORDER BY last_failed_at LIMIT ?",
+                (content_before.isoformat(), limit),
+            ).fetchall()
+            for row in expired:
+                connection.execute(
+                    "INSERT OR IGNORE INTO subscription_dead_letter_tombstones "
+                    "(subscription, stream_id, sequence, event_id, retired_at) VALUES (?, ?, ?, ?, ?)",
+                    (row["subscription"], row["stream_id"], row["sequence"], row["event_id"], row["last_failed_at"]),
+                )
+                connection.execute(
+                    "DELETE FROM subscription_dead_letters WHERE subscription=? AND stream_id=? AND sequence=?",
+                    (row["subscription"], row["stream_id"], row["sequence"]),
+                )
+            tombstones = connection.execute(
+                "SELECT subscription, stream_id, sequence FROM subscription_dead_letter_tombstones "
+                "WHERE retired_at < ? ORDER BY retired_at LIMIT ?",
+                (tombstone_before.isoformat(), limit),
+            ).fetchall()
+            for row in tombstones:
+                connection.execute(
+                    "DELETE FROM subscription_dead_letter_tombstones WHERE subscription=? AND stream_id=? AND sequence=?",
+                    (row["subscription"], row["stream_id"], row["sequence"]),
+                )
+            connection.commit()
+            return len(expired), len(tombstones)
 
     def _open_sync(self) -> None:
         with self._lock:
@@ -240,7 +316,7 @@ class SQLiteSubscriptionStateStore:
     ) -> None:
         row = connection.execute(
             """
-            SELECT sequence FROM subscription_checkpoints
+            SELECT sequence, owner_id, generation, fencing_token FROM subscription_checkpoints
             WHERE subscription = ? AND stream_id = ?
             """,
             (str(checkpoint.identity), str(checkpoint.stream_id)),
@@ -250,19 +326,35 @@ class SQLiteSubscriptionStateStore:
                 f"checkpoint for {checkpoint.identity!r}/{checkpoint.stream_id!r} "
                 f"would regress from {row['sequence']} to {checkpoint.sequence}"
             )
+        owner = connection.execute(
+            "SELECT owner_id, generation, fencing_token FROM subscription_owners WHERE subscription = ?",
+            (str(checkpoint.identity),),
+        ).fetchone()
+        if owner is None or (owner["owner_id"], owner["generation"], owner["fencing_token"]) != (
+            checkpoint.owner_id,
+            checkpoint.generation,
+            checkpoint.fencing_token,
+        ):
+            raise CheckpointRegressionError("stale subscription owner cannot advance checkpoint")
         connection.execute(
             """
             INSERT INTO subscription_checkpoints (
-                subscription, stream_id, sequence, updated_at
-            ) VALUES (?, ?, ?, ?)
+                subscription, stream_id, sequence, owner_id, generation, fencing_token, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(subscription, stream_id) DO UPDATE SET
                 sequence = excluded.sequence,
+                owner_id = excluded.owner_id,
+                generation = excluded.generation,
+                fencing_token = excluded.fencing_token,
                 updated_at = excluded.updated_at
             """,
             (
                 str(checkpoint.identity),
                 str(checkpoint.stream_id),
                 checkpoint.sequence,
+                checkpoint.owner_id,
+                checkpoint.generation,
+                checkpoint.fencing_token,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -297,19 +389,37 @@ class SQLiteSubscriptionStateStore:
             raise SubscriptionStateIntegrityError(f"subscription state format {version} is unsupported")
         connection.execute("BEGIN IMMEDIATE")
         try:
-            connection.execute(
-                """
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS subscription_checkpoints (
                     subscription TEXT NOT NULL,
                     stream_id TEXT NOT NULL,
                     sequence INTEGER NOT NULL CHECK(sequence >= 0),
+                    owner_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL CHECK(generation > 0),
+                    fencing_token INTEGER NOT NULL CHECK(fencing_token > 0),
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(subscription, stream_id)
                 ) WITHOUT ROWID
-                """
-            )
-            connection.execute(
-                """
+                """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS subscription_dead_letter_tombstones (
+                    subscription TEXT NOT NULL,
+                    stream_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK(sequence > 0),
+                    event_id TEXT NOT NULL,
+                    retired_at TEXT NOT NULL,
+                    PRIMARY KEY(subscription, stream_id, sequence)
+                ) WITHOUT ROWID
+                """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS subscription_owners (
+                    subscription TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL CHECK(generation > 0),
+                    fencing_token INTEGER NOT NULL CHECK(fencing_token > 0)
+                ) WITHOUT ROWID
+                """)
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS subscription_dead_letters (
                     subscription TEXT NOT NULL,
                     stream_id TEXT NOT NULL,
@@ -322,15 +432,18 @@ class SQLiteSubscriptionStateStore:
                     last_failed_at TEXT NOT NULL,
                     PRIMARY KEY(subscription, stream_id, sequence)
                 ) WITHOUT ROWID
-                """
-            )
+                """)
             expected_columns = {
                 "subscription_checkpoints": (
                     "subscription",
                     "stream_id",
                     "sequence",
+                    "owner_id",
+                    "generation",
+                    "fencing_token",
                     "updated_at",
                 ),
+                "subscription_owners": ("subscription", "owner_id", "generation", "fencing_token"),
                 "subscription_dead_letters": (
                     "subscription",
                     "stream_id",
@@ -341,6 +454,13 @@ class SQLiteSubscriptionStateStore:
                     "error",
                     "first_failed_at",
                     "last_failed_at",
+                ),
+                "subscription_dead_letter_tombstones": (
+                    "subscription",
+                    "stream_id",
+                    "sequence",
+                    "event_id",
+                    "retired_at",
                 ),
             }
             for table, expected in expected_columns.items():

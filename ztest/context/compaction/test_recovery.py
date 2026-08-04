@@ -9,6 +9,7 @@ correctly (tool metadata preserved, pristine dicts re-emitted, in-place folds
 reflected) and that "nothing freed" surfaces as ``None`` so the recovery loop
 does not spin on an identical payload.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -182,6 +183,7 @@ from mote.contracts.conversation.constants import HEAD_DROPPED_MESSAGE  # noqa: 
 from mote.runtime.context.compaction.reducers.drop import HeadDropReducer  # noqa: E402
 from mote.runtime.context.compaction.reducers.fold import FoldReducer  # noqa: E402
 from mote.runtime.context.compaction.reducers.summarize import SummarizeReducer  # noqa: E402
+from mote.runtime.models.message_wire import message_to_model_wire  # noqa: E402
 
 from ..conftest import FakeLLM, text_msg  # noqa: E402
 
@@ -193,7 +195,7 @@ def _plain_wire() -> list[dict]:
     enough to meet the target so summarize alone suffices."""
     msgs = [text_msg(("word " * 60) + f" {i}") for i in range(7)]
     msgs.append(text_msg("bye"))
-    return [m.to_dict() for m in msgs]
+    return [message_to_model_wire(m) for m in msgs]
 
 
 def _has_head_drop_marker(messages: list[dict]) -> bool:

@@ -20,10 +20,10 @@ call sites short-circuit with zero overhead.
 
 from __future__ import annotations
 
-import inspect
 import re
 import shlex
-from typing import Any, Awaitable, Callable, Optional, Union
+from dataclasses import dataclass, replace
+from typing import Awaitable, Callable, Optional, TypeAlias
 
 from mote.contracts.authorization import PermissionMode
 from mote.contracts.hook import (
@@ -55,9 +55,17 @@ from mote.runtime.tools.permission.engine import PermissionEngine
 
 # A hook callback: receives the HookInput, returns None / dict / HookOutcome,
 # either synchronously or as a coroutine.
-HookCallback = Callable[[HookInvocation], Union[None, dict, HookOutcome, Awaitable[Any]]]
+HookCallbackResult: TypeAlias = None | dict[str, object] | HookOutcome
+SyncHookCallback: TypeAlias = Callable[[HookInvocation], HookCallbackResult]
+AsyncHookCallback: TypeAlias = Callable[[HookInvocation], Awaitable[HookCallbackResult]]
 
 _CONTROL_EVENTS = frozenset({"PreToolUse"})
+
+
+@dataclass(frozen=True, slots=True)
+class _CompiledCommandGroup:
+    matcher: str | None
+    handlers: tuple[HookCommandHandler, ...]
 
 
 def _failure_outcome(event: str) -> HookOutcome:
@@ -105,19 +113,46 @@ class HookManager:
         self._command_sandbox = command_sandbox
         self._permission_engine = permission_engine
         # event_name -> list[(matcher, callback)]
-        self._callbacks: dict[str, list[tuple[Optional[str], HookCallback]]] = {}
+        self._callbacks: dict[str, list[tuple[Optional[str], AsyncHookCallback]]] = {}
+        self._activated = False
+        self._callback_snapshot: dict[str, tuple[tuple[Optional[str], AsyncHookCallback], ...]] = {}
+        self._command_snapshot: dict[str, tuple[_CompiledCommandGroup, ...]] = {}
 
     # ------------------------------------------------------------------
     # Registration (the programmatic / SDK path)
     # ------------------------------------------------------------------
 
-    def register(self, event: str, fn: HookCallback, matcher: Optional[str] = None) -> None:
-        """Register an in-process Python callback for ``event``.
+    def register(self, event: str, fn: SyncHookCallback, matcher: Optional[str] = None) -> None:
+        """Register an explicitly synchronous Python callback for ``event``.
 
         ``matcher`` follows the same syntax as a command-handler matcher
         (``None``/``*`` = all, ``A|B`` = exact pipe list, else regex).
         """
+        if self._activated:
+            raise RuntimeError("hook generation is already active")
+
+        async def invoke(invocation: HookInvocation) -> HookCallbackResult:
+            return fn(invocation)
+
+        self._callbacks.setdefault(event, []).append((matcher, invoke))
+
+    def register_async(self, event: str, fn: AsyncHookCallback, matcher: Optional[str] = None) -> None:
+        """Register an explicitly asynchronous Python callback for ``event``."""
+        if self._activated:
+            raise RuntimeError("hook generation is already active")
         self._callbacks.setdefault(event, []).append((matcher, fn))
+
+    def activate(self) -> None:
+        """Compile one immutable handler generation before the first invocation."""
+        if self._activated:
+            return
+        self._callback_snapshot = {event: tuple(entries) for event, entries in self._callbacks.items()}
+        events = self._config.events if self._config is not None else {}
+        self._command_snapshot = {
+            event: tuple(_CompiledCommandGroup(group.matcher, tuple(group.handlers)) for group in groups)
+            for event, groups in events.items()
+        }
+        self._activated = True
 
     # ------------------------------------------------------------------
     # Matching
@@ -153,9 +188,9 @@ class HookManager:
     @property
     def enabled(self) -> bool:
         """Cheap short-circuit: any command groups or registered callbacks."""
-        if self._callbacks:
+        if self._callback_snapshot if self._activated else self._callbacks:
             return True
-        events = getattr(self._config, "events", None)
+        events = self._command_snapshot if self._activated else (self._config.events if self._config else None)
         return bool(events)
 
     def _build_input(
@@ -181,25 +216,25 @@ class HookManager:
 
     def _command_handlers(self, event: str, query: Optional[str]) -> list[HookCommandHandler]:
         """The command handlers whose matcher group matches ``query``."""
-        events = getattr(self._config, "events", None)
+        self.activate()
+        events = self._command_snapshot
         if not events:
             return []
-        groups = events.get(event) or []
+        groups = events.get(event) or ()
         selected: list[HookCommandHandler] = []
         for group in groups:
-            matcher = getattr(group, "matcher", None)
+            matcher = group.matcher
             if self._matches(matcher, query):
-                selected.extend(getattr(group, "handlers", []) or [])
+                selected.extend(group.handlers)
         return selected
 
-    def _selected_callbacks(self, event: str, query: Optional[str]) -> list[HookCallback]:
-        return [fn for (matcher, fn) in self._callbacks.get(event, []) if self._matches(matcher, query)]
+    def _selected_callbacks(self, event: str, query: Optional[str]) -> list[AsyncHookCallback]:
+        self.activate()
+        return [fn for (matcher, fn) in self._callback_snapshot.get(event, ()) if self._matches(matcher, query)]
 
-    async def _run_callback(self, event: str, fn: HookCallback, hook_input: HookInvocation) -> HookOutcome:
+    async def _run_callback(self, event: str, fn: AsyncHookCallback, hook_input: HookInvocation) -> HookOutcome:
         try:
-            result = fn(hook_input)
-            if inspect.isawaitable(result):
-                result = await result
+            result = await fn(hook_input)
             return parse_callback_result(result)
         except Exception as exc:  # noqa: BLE001 — one bad hook must not break fire
             logger.warning("hook callback failed")
@@ -215,8 +250,10 @@ class HookManager:
             engine = self._permission_engine
             if engine is None:
                 outcome = _failure_outcome(event)
-                outcome.authorization_facts.append(HookAuthorizationFact(cfg.id, "deny"))
-                return outcome
+                return replace(
+                    outcome,
+                    authorization_facts=(*outcome.authorization_facts, HookAuthorizationFact(cfg.id, "deny")),
+                )
             target = shlex.join(cfg.argv)
             decision = await engine.check(
                 "HookCommand",
@@ -225,15 +262,19 @@ class HookManager:
             )
             if decision.behavior != "allow":
                 outcome = _failure_outcome(event)
-                outcome.authorization_facts.append(HookAuthorizationFact(cfg.id, "deny"))
-                return outcome
+                return replace(
+                    outcome,
+                    authorization_facts=(*outcome.authorization_facts, HookAuthorizationFact(cfg.id, "deny")),
+                )
             outcome = await run_command_handler(
                 cfg,
                 hook_input,
                 sandbox=self._command_sandbox,
             )
-            outcome.authorization_facts.append(HookAuthorizationFact(cfg.id, "allow"))
-            return outcome
+            return replace(
+                outcome,
+                authorization_facts=(*outcome.authorization_facts, HookAuthorizationFact(cfg.id, "allow")),
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("hook command handler failed")
             return _failure_outcome(event)
@@ -290,4 +331,4 @@ class HookManager:
         return HookIdentity(self._session_id, cwd, self._transcript_path)
 
 
-__all__ = ["HookManager", "HookCallback"]
+__all__ = ["AsyncHookCallback", "HookManager", "SyncHookCallback"]

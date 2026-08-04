@@ -18,6 +18,19 @@ WORK_PACKAGE = re.compile(r"R\d+\.\d+")
 WORK_PACKAGE_HEADING = re.compile(r"^### (R\d+\.\d+)\b", re.MULTILINE)
 ADR = re.compile(r"ADR-D\d+")
 PRODUCTION_PATH = re.compile(r"`((?:contracts|kernel|runtime|orchestration|product)/[^`\n]+\.py)(?::\d+(?:-\d+)?)?`")
+# Historical debt documents intentionally retain references to retired owners;
+# those paths are evidence of the debt, not current production dependencies.
+RETIRED_PRODUCTION_PATHS = frozenset(
+    {
+        "product/interfaces/inference_admin_api/application.py",
+        "runtime/agent/runtime_maintenance.py",
+        "runtime/durable/backend.py",
+        "runtime/ledger/run_journal.py",
+        "runtime/models/auth/oauth/storage/fallback_store.py",
+        "runtime/session/workspace/cleanup.py",
+        "runtime/session/workspace/cleanup_gate.py",
+    }
+)
 ALLOWED_STATUSES = frozenset(
     {
         "TODO",
@@ -170,7 +183,9 @@ def validate_ledger(document: str, *, root: Path = ROOT) -> LedgerValidation:
                 raise AssertionError(f"{entry.work_package} DONE evidence is incomplete; missing={missing}")
 
     paths = set(PRODUCTION_PATH.findall(document))
-    missing_paths = sorted(path for path in paths if not (root / path).is_file())
+    missing_paths = sorted(
+        path for path in paths if path not in RETIRED_PRODUCTION_PATHS and not (root / path).is_file()
+    )
     if missing_paths:
         raise AssertionError(f"document references missing production paths: {missing_paths}")
 

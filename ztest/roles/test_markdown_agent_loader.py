@@ -20,6 +20,7 @@ import mote.product.agents.markdown_loader as loader
 from mote.product.agents.catalog import AgentCatalog
 from mote.product.agents.factory import CodingAgentFactory
 from mote.product.agents.markdown_loader import _normalize_tools, discover_md_agents
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.product.extensions.sources import ExtensionSourcePolicy
 
 
@@ -120,7 +121,10 @@ class TestCatalog:
         policy = _point_discovery_at(monkeypatch, agents)
 
         catalog = AgentCatalog.from_types(
-            discover_md_agents(tmp_path, source_policy=policy).values(), CodingAgentFactory()
+            discover_md_agents(tmp_path, source_policy=policy).values(),
+            CodingAgentFactory(
+                model_checkpoint_policy=approved_model_checkpoint_policy(),
+            ),
         )
         cls = catalog.get("reviewer")
         assert cls is not None
@@ -136,7 +140,10 @@ class TestCatalog:
         policy = _point_discovery_at(monkeypatch, agents)
 
         first = AgentCatalog.from_types(
-            discover_md_agents(tmp_path, source_policy=policy).values(), CodingAgentFactory()
+            discover_md_agents(tmp_path, source_policy=policy).values(),
+            CodingAgentFactory(
+                model_checkpoint_policy=approved_model_checkpoint_policy(),
+            ),
         )
         _write_agent(
             agents,
@@ -144,7 +151,10 @@ class TestCatalog:
             "---\nname: reviewer\ndescription: changed\naliases: [review]\n---\nnew body\n",
         )
         second = AgentCatalog.from_types(
-            discover_md_agents(tmp_path, source_policy=policy).values(), CodingAgentFactory()
+            discover_md_agents(tmp_path, source_policy=policy).values(),
+            CodingAgentFactory(
+                model_checkpoint_policy=approved_model_checkpoint_policy(),
+            ),
         )
         assert first.version != second.version
         assert first.get("rev") is not None

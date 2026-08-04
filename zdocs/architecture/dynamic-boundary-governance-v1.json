@@ -814,12 +814,6 @@
       "symbol": "mote.runtime.artifacts.DurableArtifactStore"
     },
     {
-      "evidence": "configured durable backend adapter boundary",
-      "owner_id": "runtime",
-      "role": "external_adapter",
-      "symbol": "mote.runtime.durable.make_durable_backend"
-    },
-    {
       "evidence": "event-fabric capability declaration",
       "owner_id": "runtime",
       "role": "production_capability",
@@ -909,7 +903,7 @@
   ],
   "runtime_input": false,
   "schema": "governance-review-v1",
-  "source_digest": "sha256:66b60e31de3e1910701371df881fd5160fc5d5399b9f95c01e0df8e3fa62a495",
+  "source_digest": "sha256:27fc06d9619f8afb1cd438eca998dd12d2bc914304f6c60006838bf98d85a465",
   "transformations": [
     {
       "authority": "authoritative",

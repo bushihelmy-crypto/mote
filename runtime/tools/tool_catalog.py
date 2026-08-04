@@ -18,13 +18,11 @@ read derived from it.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterator
+from typing import Callable, Iterator
 
-from mote.contracts.tool.execution import ToolExecutionKind
 from mote.kernel.tools.spec_adapter import to_native_tool_specs
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_binding import ExecutableToolBinding
-from mote.runtime.tools.tool_classification import is_pipeline_tool
 
 
 class BoundToolCatalog:
@@ -45,7 +43,7 @@ class BoundToolCatalog:
         deferred: set[str] | None = None,
         get_revealed: Callable[[], set[str]] | None = None,
     ) -> None:
-        self._tools: dict[str, Any] = {}  # name -> BaseTool instance (aliases share one instance)
+        self._tools: dict[str, ExecutableToolBinding] = {}
         self._generation = 1
         # Names of tools hidden until discovered (schema-visibility only).
         self._deferred: set[str] = set(deferred) if deferred else set()
@@ -58,15 +56,11 @@ class BoundToolCatalog:
     # Storage
     # ------------------------------------------------------------------
 
-    def _live_tools(self) -> dict[str, Any]:
-        """Package-private mutable map used only by executor-owned internals."""
-        return self._tools
-
     @property
     def generation(self) -> int:
         return self._generation
 
-    def register(self, tool: Any, names: list[str]) -> None:
+    def register(self, tool: ExecutableToolBinding, names: list[str]) -> None:
         """Bind *tool* under every name in *names* (primary + aliases)."""
         duplicates = set(names) & self._tools.keys()
         if duplicates:
@@ -77,7 +71,9 @@ class BoundToolCatalog:
             self._tools[name] = tool
         self._generation += 1
 
-    def replace_mcp(self, bindings: tuple[tuple[Any, tuple[str, ...]], ...]) -> tuple[tuple[Any, ...], tuple[str, ...]]:
+    def replace_mcp(
+        self, bindings: tuple[tuple[ExecutableToolBinding, tuple[str, ...]], ...]
+    ) -> tuple[tuple[ExecutableToolBinding, ...], tuple[str, ...]]:
         """Atomically replace the complete MCP category after namespace validation."""
         retained = {name: tool for name, tool in self._tools.items() if self.category(tool) != "mcp"}
         candidate = dict(retained)
@@ -89,7 +85,7 @@ class BoundToolCatalog:
                 raise ValueError(f"MCP tool namespace conflict: {sorted(conflicts)!r}")
             candidate.update((name, tool) for name in names)
         old_names = tuple(self.mcp_names())
-        old_tools_by_identity: dict[int, Any] = {}
+        old_tools_by_identity: dict[int, ExecutableToolBinding] = {}
         for name in old_names:
             tool = self._tools[name]
             old_tools_by_identity.setdefault(id(tool), tool)
@@ -98,7 +94,7 @@ class BoundToolCatalog:
         self._generation += 1
         return old_tools, old_names
 
-    def get(self, name: str) -> Any | None:
+    def get(self, name: str) -> ExecutableToolBinding | None:
         """Resolve a tool by name/alias, or None."""
         return self._tools.get(name)
 
@@ -106,7 +102,7 @@ class BoundToolCatalog:
         """All bound names (aliases included)."""
         return list(self._tools.keys())
 
-    def names_for(self, tool: Any) -> list[str]:
+    def names_for(self, tool: ExecutableToolBinding) -> list[str]:
         """Every name routing to the SAME instance (by identity, not equality).
 
         So removing a tool takes all its aliases together and leaves names that
@@ -125,7 +121,7 @@ class BoundToolCatalog:
         self._tools.clear()
         self._generation += 1
 
-    def iter_unique(self) -> Iterator[Any]:
+    def iter_unique(self) -> Iterator[ExecutableToolBinding]:
         """Yield each bound instance exactly once, deduping aliases by identity.
 
         The single dedup primitive behind every schema collection and the
@@ -142,15 +138,15 @@ class BoundToolCatalog:
     # Classification
     # ------------------------------------------------------------------
 
-    def _is_mcp_tool(self, tool: Any) -> bool:
+    def _is_mcp_tool(self, tool: ExecutableToolBinding) -> bool:
         """Return True if the tool is a runtime-discovered MCP adapter."""
         return isinstance(tool, ExecutableToolBinding) and tool.definition.category == "mcp"
 
-    def _is_pipeline_tool(self, tool: Any) -> bool:
+    def _is_pipeline_tool(self, tool: ExecutableToolBinding) -> bool:
         """Return True if the tool is backed by a compiled Workflow pipeline."""
-        return is_pipeline_tool(tool)
+        return tool.definition.execution_kind.is_workflow
 
-    def category(self, tool: Any) -> str:
+    def category(self, tool: ExecutableToolBinding) -> str:
         """Classify a tool as ``mcp`` / ``pipeline`` / ``builtin``.
 
         MCP adapters and pipeline tools are runtime/graph-backed and get their
@@ -184,13 +180,13 @@ class BoundToolCatalog:
     # Deferral (tool-search visibility)
     # ------------------------------------------------------------------
 
-    def _is_hidden(self, tool: Any) -> bool:
+    def _is_hidden(self, tool: ExecutableToolBinding) -> bool:
         """True when *tool* is deferred and not yet revealed → schema withheld.
 
         This is the CLIENT-SIDE reveal predicate used by schema projection and
         the executor's dispatch gate.
         """
-        name = getattr(tool, "name", "")
+        name = tool.name
         return name in self._deferred and name not in self._get_revealed()
 
     def is_hidden(self, name: str) -> bool:
@@ -198,7 +194,7 @@ class BoundToolCatalog:
         tool = self._tools.get(name)
         return tool is not None and self._is_hidden(tool)
 
-    def _is_corpus(self, tool: Any) -> bool:
+    def _is_corpus(self, tool: ExecutableToolBinding) -> bool:
         """True when *tool* is a deferred-corpus member (regardless of revealed).
 
         The wire ``defer_loading`` flag for the Anthropic server-side tool-search
@@ -206,10 +202,10 @@ class BoundToolCatalog:
         NOT on the revealed set. So even a revealed tool keeps ``defer_loading``
         on the wire, keeping the ``tools=`` prefix byte-stable (cache preserved).
         """
-        return getattr(tool, "name", "") in self._deferred
+        return tool.name in self._deferred
 
     @staticmethod
-    def _menu_line(tool: Any) -> str:
+    def _menu_line(tool: ExecutableToolBinding) -> str:
         """The one-line blurb for *tool* in a search menu.
 
         The tool's :meth:`~mote.runtime.tools.base_tool.BaseTool.summary` — the first
@@ -218,10 +214,8 @@ class BoundToolCatalog:
         builders share, so the derivation is made in one place. Falls back to
         the tool's name if it exposes no ``summary`` (e.g. a bare stand-in).
         """
-        name = str(getattr(tool, "name", ""))
-        if isinstance(tool, ExecutableToolBinding):
-            return tool.definition.summary or name
-        return name
+        name = tool.name
+        return tool.definition.summary or name
 
     def deferred_index(self, *, include_revealed: bool = True) -> dict[str, str]:
         """The compact menu of deferred tools → ``{name: one-line desc}``.
@@ -248,7 +242,7 @@ class BoundToolCatalog:
         revealed = self._get_revealed() if not include_revealed else set()
         index: dict[str, str] = {}
         for tool in self.iter_unique():
-            name = getattr(tool, "name", "")
+            name = tool.name
             if name not in self._deferred or name in revealed:
                 continue
             index[name] = self._menu_line(tool)
@@ -268,7 +262,7 @@ class BoundToolCatalog:
         """
         index: dict[str, str] = {}
         for tool in self.iter_unique():
-            name = getattr(tool, "name", "")
+            name = tool.name
             if name not in self._deferred:
                 continue
             if isinstance(tool, ExecutableToolBinding):
@@ -300,7 +294,7 @@ class BoundToolCatalog:
         revealed = self._get_revealed()
         menu: dict[str, str] = {}
         for tool in self.iter_unique():
-            name = getattr(tool, "name", "")
+            name = tool.name
             if name not in self._deferred or name in revealed:
                 continue
             menu[name] = self._menu_line(tool)
@@ -316,7 +310,7 @@ class BoundToolCatalog:
         wanted = {n for n in names if n in self._deferred}
         out: dict[str, str] = {}
         for tool in self.iter_unique():
-            name = getattr(tool, "name", "")
+            name = tool.name
             if name not in wanted:
                 continue
             if isinstance(tool, ExecutableToolBinding):
@@ -332,7 +326,7 @@ class BoundToolCatalog:
         """
         names: set[str] = set()
         for name, tool in self._tools.items():
-            if getattr(tool, "reconstructable", False):
+            if tool.reconstructable:
                 names.add(name)
         return frozenset(names)
 
@@ -344,8 +338,7 @@ class BoundToolCatalog:
         """
         names: set[str] = set()
         for name, tool in self._tools.items():
-            definition = getattr(tool, "definition", None)
-            kind = getattr(definition, "execution_kind", ToolExecutionKind.ATOMIC)
+            kind = tool.definition.execution_kind
             if kind.is_workflow:
                 names.add(name)
         return frozenset(names)
@@ -361,7 +354,7 @@ class BoundToolCatalog:
         """
         names: set[str] = set()
         for name, tool in self._tools.items():
-            if getattr(tool, "graph_excluded", False):
+            if tool.graph_excluded:
                 names.add(name)
         return frozenset(names)
 
@@ -378,7 +371,7 @@ class XmlToolCatalog(BoundToolCatalog):
                 continue
             if not isinstance(tool, ExecutableToolBinding) or not isinstance(tool.definition, XmlToolDefinition):
                 raise TypeError("XmlToolCatalog contains a non-XML bound tool")
-            schema = dict(tool.definition.render(tool.wrapped_tool))
+            schema = dict(tool.compiled_definition.rendered_schema)
             schemas[str(schema["name"])] = schema
         return schemas
 
@@ -403,7 +396,7 @@ class NativeToolCatalog(BoundToolCatalog):
                 continue
             if not isinstance(tool, ExecutableToolBinding) or not isinstance(tool.definition, NativeToolDefinition):
                 raise TypeError("NativeToolCatalog contains a non-Native bound tool")
-            schema = dict(tool.definition.render(tool.wrapped_tool))
+            schema = dict(tool.compiled_definition.rendered_schema)
             schemas[str(schema["name"])] = schema
         return schemas
 
@@ -414,7 +407,7 @@ class NativeToolCatalog(BoundToolCatalog):
                 raise TypeError("NativeToolCatalog contains a non-Native bound tool")
             if self._is_hidden(tool):
                 continue
-            schema = dict(tool.definition.render(tool.wrapped_tool))
+            schema = dict(tool.compiled_definition.rendered_schema)
             native[str(schema["name"])] = schema
         return to_native_tool_specs(native, provider=provider)
 
@@ -427,7 +420,7 @@ class NativeToolCatalog(BoundToolCatalog):
                 raise TypeError("NativeToolCatalog contains a non-Native bound tool")
             if not include_hidden and self._is_hidden(tool):
                 continue
-            schema = dict(tool.definition.render(tool.wrapped_tool))
+            schema = dict(tool.compiled_definition.rendered_schema)
             schema["defer_loading"] = self._is_corpus(tool)
             specs.append(schema)
         return specs

@@ -7,6 +7,7 @@
 the documented OUTPUT_SECTION shape. ``record_turn`` is exercised against the
 channel directly; the think round is faked via :class:`FakeThinkEngine`.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -155,7 +156,6 @@ class TestIterCommands:
     @pytest.mark.asyncio
     async def test_none_content_yields_nothing(self):
         engine = FakeThinkEngine(content="", tool_calls=None)
-        engine.result.content = None  # simulate a missing-content result
         assert await collect(XmlCommandChannel(), engine, {"Read"}) == []
 
     @pytest.mark.asyncio
@@ -282,5 +282,4 @@ class TestTerminalDefault:
 
     def test_turn_signature_empty_when_no_content(self):
         engine = FakeThinkEngine(content="")
-        engine.result.content = None
         assert XmlCommandChannel().turn_signature(engine.result) == ""

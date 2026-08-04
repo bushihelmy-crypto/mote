@@ -14,6 +14,7 @@ import pytest
 
 pytest.importorskip("textual")
 
+from mote.contracts.tool.identity import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity
 from mote.product.interfaces.textual.app import ViewEventMessage
 from mote.product.interfaces.textual.consumer import TextualConsumer
 from mote.product.interfaces.textual.surface import TextualSurface
@@ -45,14 +46,26 @@ class _FakeApp:
         self.posted.append(message)
 
 
+def _identity(value: str) -> ToolInvocationIdentity:
+    return ToolInvocationIdentity(
+        ToolInvocationId(value),
+        ToolAttemptOrdinal(1),
+        "test-definition",
+        1,
+        "sha256:test",
+        "test-owner",
+        "test-run",
+    )
+
+
 _ALL_EVENTS = [
     MessageBlockStarted(),
     MessageBlockDelta(text="hi"),
     MessageBlockCompleted(markdown="done", streamed=True),
     ReasoningDelta(text="think"),
-    ToolCallStarted(tool_name="Read", tool_use_id="tu-1"),
-    ToolCallCompleted(tool_name="Read", tool_use_id="tu-1", summary="ok"),
-    MediaBlock(media_kind="image", ref="/tmp/x.png"),
+    ToolCallStarted(identity=_identity("tu-1"), tool_name="Read"),
+    ToolCallCompleted(identity=_identity("tu-1"), tool_name="Read", summary="ok"),
+    MediaBlock(identity=_identity("media-1"), media_kind="image", ref="/tmp/x.png"),
     TaskProgress(stage="build", status="running"),
     Notice(text="note", level="info"),
     ErrorRaised(text="boom"),

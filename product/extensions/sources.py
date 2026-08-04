@@ -60,6 +60,7 @@ class ExtensionSource:
     content_digest: str
     decision: ExtensionTrustDecision
     approval_principal: str | None
+    approval_generation: str
     content: bytes
 
     @property
@@ -81,6 +82,7 @@ class ExtensionSource:
 @dataclass(frozen=True, slots=True)
 class ApprovedExtensionSnapshot:
     approvals: tuple[ExtensionApproval, ...] = ()
+    generation: str = "mote.extension-approvals/v1"
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -103,6 +105,7 @@ class ExtensionSourcePolicy:
     ) -> None:
         self._user_root = user_root.resolve()
         self._builtin_roots = tuple(root.resolve() for root in builtin_roots)
+        self._approval_generation = snapshot.generation
         self._approvals = {
             (
                 approval.kind,
@@ -160,6 +163,7 @@ class ExtensionSourcePolicy:
             content_digest=digest,
             decision=(ExtensionTrustDecision.APPROVED if approved else ExtensionTrustDecision.REJECTED),
             approval_principal=principal,
+            approval_generation=self._approval_generation,
             content=content,
         )
 

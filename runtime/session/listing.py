@@ -27,7 +27,7 @@ from typing import List, Optional
 from mote.runtime.events.journal import decode_event_record
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import MessageEvent, MetaUpdateEvent, SessionMetaEvent
-from mote.runtime.session.log import ROLLOUT_FILENAME, _default_base_dir
+from mote.runtime.session.log import ROLLOUT_FILENAME, SessionLog, _default_base_dir
 from mote.runtime.telemetry.logging import log_call
 
 #: How many leading bytes to scan for meta + first message + the head title.
@@ -131,6 +131,9 @@ def _read_tail_meta(path: Path, size: int) -> tuple[Optional[str], Optional[str]
 
 
 def _read_lite(rollout: Path, session_id: str) -> Optional[SessionInfo]:
+    # The byte-window projection is only an optimization after the canonical
+    # owner has verified v2 activation, identity, checksum chain and manifest.
+    SessionLog(session_id, base_dir=str(rollout.parent.parent)).committed_version
     try:
         stat = rollout.stat()
     except OSError:

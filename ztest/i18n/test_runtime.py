@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Runtime seam: plural rules, negotiation/fallback, detect, ``t()`` + scoping."""
+
 from __future__ import annotations
 
 from mote.product.i18n import keys as K
@@ -63,11 +64,8 @@ def test_t_missing_key_returns_marker() -> None:
     assert t("no.such.key") == "\u27e6no.such.key\u27e7"
 
 
-def test_lookup_falls_back_to_base_locale() -> None:
-    # A key present only in en (BASE_LOCALE) still resolves for a zh lookup path
-    # via the fallback chain (loc.code → loc.language → BASE_LOCALE).
-    from mote.product.i18n.runtime import register_catalog
+def test_catalog_surface_is_fixed_and_has_no_public_mutation() -> None:
+    from mote.product.i18n import runtime
 
-    register_catalog("en", {"test.only_en": "base-only"})
-    zh_loc = negotiate("zh")
-    assert _lookup(zh_loc, "test.only_en") == "base-only"
+    assert not hasattr(runtime, "register_catalog")
+    assert _lookup(negotiate("zh"), K.STATUS_IDLE) == "就绪"

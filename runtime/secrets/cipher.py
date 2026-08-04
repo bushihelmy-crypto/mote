@@ -1,4 +1,4 @@
-"""Vault encryption strategy behind the Runtime secret store.
+"""Canonical AES-GCM encryption behind the Runtime secret store.
 
 The vault file (``~/.mote/secrets.json``) is stored **encrypted**, never as
 plaintext JSON: a leaked file, a stray backup, or a ``cat`` of the config dir
@@ -16,9 +16,8 @@ swappable so the *key source* is a policy choice, not a hard-coded assumption:
   ``~/.mote/vault.key``, auto-generated on first use and locked to ``0600``.
   keyring is intentionally *not* used — no usable backend exists on the target
   WSL2 host (``NoKeyringError``), so a self-managed key file is the honest floor.
-* :func:`build_cipher` — a tiny name→builder registry (``"aes"`` today), so a new
-  strategy (e.g. a passphrase-derived scrypt key via ``MOTE_VAULT_PASSPHRASE``)
-  slots in as one more entry without touching the store or the subscribers.
+* :func:`build_aes_cipher` — the explicit construction boundary. No single-item
+  registry or reflective algorithm selection is exposed.
 
 Leaf module: imports only stdlib + ``cryptography``. It has zero knowledge of the
 event infrastructure, the config loader, or the store — the store depends on it, never the
@@ -60,11 +59,6 @@ class VaultCipher(Protocol):
         that failure and refuses to operate with incomplete redaction state.
         """
         ...
-
-
-class SecretsCipherConfig(Protocol):
-    cipher: str
-    key_path: str | None
 
 
 class AesGcmCipher:
@@ -153,32 +147,11 @@ class KeyFileProvider:
         return key
 
 
-def build_cipher(config: SecretsCipherConfig, *, default_key_path: Path | None = None) -> VaultCipher:
-    """Resolve a :class:`VaultCipher` from a ``SecretsConfig``-shaped object.
+def build_aes_cipher(key_path: Path) -> VaultCipher:
+    """Build the sole approved vault cipher from its explicit key authority."""
 
-    Reads ``config.cipher`` (the strategy name) and dispatches through the
-    registry. Unknown names fail loud — a typo in a security knob must not
-    silently fall back to a weaker (or no) cipher.
-    """
-    name = getattr(config, "cipher", "aes") or "aes"
-    builder = _REGISTRY.get(name)
-    if builder is None:
-        raise ValueError(f"unknown vault cipher strategy {name!r}; known: {sorted(_REGISTRY)}")
-    return builder(config, default_key_path)
-
-
-def _build_aes(config: SecretsCipherConfig, default_key_path: Path | None) -> VaultCipher:
-    key_path = getattr(config, "key_path", None)
-    resolved = Path(key_path) if key_path else default_key_path
-    if resolved is None:
-        raise ValueError("AES vault cipher requires an explicit key path")
-    provider = KeyFileProvider(resolved)
+    provider = KeyFileProvider(key_path)
     return DeferredVaultCipher(lambda: AesGcmCipher(provider.key()))
-
-
-#: name → cipher builder. Add a strategy here (one line) to make it selectable
-#: via ``config.secrets.cipher`` without touching the store or subscribers.
-_REGISTRY = {"aes": _build_aes}
 
 
 __all__ = [
@@ -186,5 +159,5 @@ __all__ = [
     "AesGcmCipher",
     "DeferredVaultCipher",
     "KeyFileProvider",
-    "build_cipher",
+    "build_aes_cipher",
 ]

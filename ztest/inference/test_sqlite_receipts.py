@@ -20,6 +20,7 @@ from mote.product.inference.backends.sqlite import (
     SQLiteBusyError,
     SQLiteIntegrityError,
 )
+from ztest.inference.test_generation import _artifact
 
 
 def test_execution_owner_record_is_idempotent_conflict_safe_and_restart_readable(tmp_path):
@@ -119,6 +120,9 @@ def test_sqlite_startup_check_and_verified_backup_restore(tmp_path):
         backup = tmp_path / "backup" / "authority.sqlite3"
         store = SQLiteAttemptReceiptStore(authority)
         await store.initialize()
+        generation = _artifact("generation-1")
+        await store.stage_generation(generation)
+        await store.activate_generation(generation.generation_id, generation.artifact_digest)
         await store.accept(_receipt(ReceiptState.ACCEPTED, 1))
         report = await store.verify_startup(hard_min_free_bytes=0)
         assert report.integrity == "ok"

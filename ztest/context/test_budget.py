@@ -11,6 +11,7 @@ The buffer-tier and ``evaluate`` tests patch a single helper each
 (``effective_window`` / ``count_tokens``) so the assertions read against exact,
 hand-computed thresholds rather than the machine's real token counts.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -37,12 +38,6 @@ def test_count_tokens_grows_with_content():
     short = budget.count_tokens([UserMessage(content="hi")], "gpt-4")
     long = budget.count_tokens([UserMessage(content="hello world " * 100)], "gpt-4")
     assert long > short > 0
-
-
-def test_count_tokens_accepts_plain_dicts():
-    """A built request is already wire-format dicts; the counter must handle both."""
-    n = budget.count_tokens([{"role": "user", "content": "hello there"}], "gpt-4")
-    assert n > 0
 
 
 def test_count_tokens_drops_tool_calls_envelope():

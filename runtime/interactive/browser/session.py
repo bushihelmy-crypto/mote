@@ -24,6 +24,7 @@ re-opens those tabs in a fresh browser seeded with that session — *without*
 re-running any of the original navigation/click actions. Only page URLs +
 storage are restored; live DOM state, scroll position, and in-flight JS are not.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -1647,7 +1648,7 @@ class BrowserSession:
         page = self._active_page()
         result = await page.evaluate(expression)
         try:
-            return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+            return json.dumps(result, ensure_ascii=False, indent=2)
         except (TypeError, ValueError):  # noqa: BLE001 — non-JSON value
             return repr(result)
 

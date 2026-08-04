@@ -10,14 +10,11 @@ The public surface for localising the CLI's human-facing text (``cli/view`` +
     from mote.product.i18n import keys as K
     t(K.SUMMARY_READ_LINES, count=1024)
 
-Importing this package registers the bundled zh + en catalogs as a side effect.
 Model-facing text is deliberately not localised by this Product presentation package.
 """
 
 from __future__ import annotations
 
-# Registers the bundled catalogs (zh + en) into the runtime as an import side effect.
-from mote.product.i18n import catalog as _catalog  # noqa: E402,F401  (side-effecting)
 from mote.product.i18n.locale import Locale, available_locales, get_locale, negotiate
 from mote.product.i18n.runtime import (
     BASE_LOCALE,
@@ -25,7 +22,6 @@ from mote.product.i18n.runtime import (
     current_locale,
     locales,
     negotiate_and_set,
-    register_catalog,
     set_locale,
     t,
     use_locale,
@@ -37,7 +33,6 @@ __all__ = [
     "use_locale",
     "current_locale",
     "negotiate_and_set",
-    "register_catalog",
     "locales",
     "available_locales",
     "get_locale",

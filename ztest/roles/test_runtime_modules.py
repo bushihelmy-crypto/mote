@@ -11,7 +11,7 @@ from mote.contracts.file import TransactionStatus
 from mote.contracts.ports.artifact.store import ArtifactResolver, ArtifactStore
 from mote.contracts.ports.events.subscription import Reliability
 from mote.contracts.runtime import CheckpointFidelity, RuntimeCheckpoint, RuntimeCommitFact, RuntimeProjectionIntent
-from mote.contracts.surface import CanvasDocument, CanvasElement
+from mote.contracts.surface import CanvasDocument, CanvasRectangle
 from mote.kernel.execution import ExecutionEngine
 from mote.runtime.agent.component_graph import ComponentKey
 from mote.runtime.agent.component_keys import ARTIFACT_REPOSITORY_BUNDLE, RUNTIME_PROJECTION_JOURNAL
@@ -63,7 +63,6 @@ def test_session_module_owns_complete_component_keyset():
         "session_log",
         "session_projection",
         "subscription_state_store",
-        "event_fabric",
         "session_fact_committer",
         "file_operations",
         "artifact_repository_bundle",
@@ -89,14 +88,14 @@ def test_session_manifest_has_no_duplicate_keys():
 
 
 def test_role_manifest_owns_one_durable_session_projection(role):
-    fabric = role.components.event_fabric
+    fabric = role._components.event_fabric
     workers = fabric.dispatcher.subscriptions
 
     assert len(workers) == 1
     assert workers[0].spec.identity == SESSION_PROJECTION_SUBSCRIPTION
     assert workers[0].spec.reliability is Reliability.DURABLE
-    assert role.components.session_projection.stream_id == role.session_log.stream_id
-    assert not role.components.subscription_state_store.path.exists()
+    assert role._components.session_projection.stream_id == role.session_log.stream_id
+    assert not role._components.subscription_state_store.path.exists()
 
 
 @pytest.mark.asyncio
@@ -106,17 +105,17 @@ async def test_role_session_projection_tracks_commits_and_persists_barrier(role)
         await role._emit_session_start()
         message = UserMessage(content="durable projection")
         result = await role.session_log.append(MessageEvent(message))
-        await role.components.event_fabric.wait_until(
+        await role._components.event_fabric.wait_until(
             SESSION_PROJECTION_SUBSCRIPTION,
             role.session_log.stream_id,
             result.last_sequence,
         )
 
-        state = role.components.session_projection.snapshot()
+        state = role._components.session_projection.snapshot()
         assert state.through_sequence == result.last_sequence
         assert [item.content for item in state.transcript_messages] == ["durable projection"]
         assert (
-            await role.components.subscription_state_store.load(
+            await role._components.subscription_state_store.load(
                 SESSION_PROJECTION_SUBSCRIPTION,
                 role.session_log.stream_id,
             )
@@ -136,8 +135,8 @@ async def test_history_clear_applies_local_projections_before_return(
     try:
         await role._emit_session_start()
         await role.context_manager.add(UserMessage(content="clear me"))
-        before_clear = role.components.event_fabric.dispatcher.cursor(role.session_log.stream_id)
-        await role.components.event_fabric.wait_until(
+        before_clear = role._components.event_fabric.dispatcher.cursor(role.session_log.stream_id)
+        await role._components.event_fabric.wait_until(
             SESSION_PROJECTION_SUBSCRIPTION,
             role.session_log.stream_id,
             before_clear,
@@ -154,18 +153,18 @@ async def test_history_clear_applies_local_projections_before_return(
 
         await role.context_manager.clear()
 
-        committed = role.components.event_fabric.dispatcher.cursor(role.session_log.stream_id)
+        committed = role._components.event_fabric.dispatcher.cursor(role.session_log.stream_id)
         assert committed > before_clear
         assert len(role.resource_registry) == 0
         assert tool_catalog._sent_names == set()
-        assert tool_catalog not in role.components._build_telemetry_subscribers()
+        assert tool_catalog not in role._components._build_telemetry_subscribers()
 
-        await role.components.event_fabric.wait_until(
+        await role._components.event_fabric.wait_until(
             SESSION_PROJECTION_SUBSCRIPTION,
             role.session_log.stream_id,
             committed,
         )
-        state = role.components.session_projection.snapshot()
+        state = role._components.session_projection.snapshot()
         assert state.through_sequence == committed
         assert state.transcript_messages == []
         assert state.model_context_messages == []
@@ -184,7 +183,7 @@ async def test_role_file_mutation_commits_through_running_fabric(
     await role._ensure_ready()
     try:
         await role._emit_session_start()
-        initial_sequence = role.components.event_fabric.dispatcher.cursor(role.session_log.stream_id)
+        initial_sequence = role._components.event_fabric.dispatcher.cursor(role.session_log.stream_id)
         target = tmp_path / "fabric-edit.txt"
         capabilities = role.tool_capabilities()
 
@@ -195,8 +194,8 @@ async def test_role_file_mutation_commits_through_running_fabric(
             )
         )
         outcome = await capabilities["commit_edit_plan"](plan.plan_id)
-        committed_sequence = role.components.event_fabric.dispatcher.cursor(role.session_log.stream_id)
-        await role.components.event_fabric.wait_until(
+        committed_sequence = role._components.event_fabric.dispatcher.cursor(role.session_log.stream_id)
+        await role._components.event_fabric.wait_until(
             SESSION_PROJECTION_SUBSCRIPTION,
             role.session_log.stream_id,
             committed_sequence,
@@ -205,7 +204,7 @@ async def test_role_file_mutation_commits_through_running_fabric(
         assert outcome.result.status is TransactionStatus.COMMITTED
         assert target.read_text() == "committed through fabric\n"
         assert committed_sequence > initial_sequence
-        assert role.components.session_projection.snapshot().through_sequence == committed_sequence
+        assert role._components.session_projection.snapshot().through_sequence == committed_sequence
     finally:
         await role.cleanup()
 
@@ -218,18 +217,17 @@ def test_artifact_store_wiring_uses_workspace_artifact_repository(role):
     workspace_root = role.session_log.workspace_root
     assert store.index_path == workspace_root / ".artifacts" / "artifacts.sqlite3"
     assert isinstance(store._blobs, ContentAddressedArtifactBlobStore)
-    bundle = role.components._graph.get(ARTIFACT_REPOSITORY_BUNDLE)
+    bundle = role._components._graph.get(ARTIFACT_REPOSITORY_BUNDLE)
     assert store._blobs._repository is bundle.repository
     assert bundle.repository is not role.file_operations.artifacts
-    assert role.components.artifact_store is store
-    assert role.tool_capabilities()["get_artifact_store"]() is store
+    assert role._components.artifact_store is store
 
     resolver = role.artifact_resolver
     assert isinstance(resolver, ArtifactResolver)
-    assert role.components.artifact_resolver is resolver
+    assert role._components.artifact_resolver is resolver
 
     publisher = role.artifact_publisher
-    assert role.components.artifact_publisher is publisher
+    assert role._components.artifact_publisher is publisher
     assert role.tool_capabilities()["get_artifact_publisher"]() is publisher
 
 
@@ -239,9 +237,8 @@ async def test_role_readiness_reconciles_runtime_projection_from_checkpoint(role
         await role._emit_session_start()
         document = CanvasDocument(
             elements=[
-                CanvasElement(
+                CanvasRectangle(
                     id="durable-node",
-                    kind="rect",
                     x=5,
                     y=10,
                     width=80,
@@ -277,7 +274,7 @@ async def test_role_readiness_reconciles_runtime_projection_from_checkpoint(role
             ),
             reason="write-commit",
         )
-        journal = role.components._graph.get(RUNTIME_PROJECTION_JOURNAL)
+        journal = role._components._graph.get(RUNTIME_PROJECTION_JOURNAL)
         await journal.record_commit(fact)
 
         await role._ensure_ready()
@@ -344,13 +341,13 @@ async def test_artifact_reconcile_once_retries_transient_batch_failure(
         calls.append("succeeded")
 
     monkeypatch.setattr(publisher, "reconcile_pending", fail_once)
-    await role.components.reconcile_artifact_publications_once()
+    await role._components.reconcile_artifact_publications_once()
     monkeypatch.setattr(publisher, "reconcile_pending", succeed)
-    await role.components.reconcile_artifact_publications_once()
-    await role.components.reconcile_artifact_publications_once()
+    await role._components.reconcile_artifact_publications_once()
+    await role._components.reconcile_artifact_publications_once()
 
     assert calls == ["failed", "succeeded"]
-    await role.components.close_maintenance()
+    await role._components.close_owner_tasks()
 
 
 @pytest.mark.asyncio
@@ -386,13 +383,13 @@ async def test_artifact_reconcile_dead_letters_permanent_item_in_current_role(
     )
     await role.artifact_store.stage("runtime:report:conflict", request)
 
-    await role.components.reconcile_artifact_publications_once()
-    await role.components.reconcile_artifact_publications_once()
+    await role._components.reconcile_artifact_publications_once()
+    await role._components.reconcile_artifact_publications_once()
 
     failed = await role.artifact_store.load("runtime:report:conflict")
     assert failed.attempts == 1
     assert failed.state is ArtifactPublicationState.DEAD_LETTER
-    await role.components.close_maintenance()
+    await role._components.close_owner_tasks()
 
 
 @pytest.mark.asyncio
@@ -414,14 +411,14 @@ async def test_artifact_reconciliation_drains_more_than_one_batch_in_current_rol
     for index in range(101):
         await role.artifact_store.stage(f"backlog:{index}", request)
 
-    await role.components.reconcile_artifact_publications_once()
+    await role._components.reconcile_artifact_publications_once()
     for _ in range(100):
         if not await role.artifact_store.pending_ids(1):
             break
         await asyncio.sleep(0.01)
 
     assert await role.artifact_store.pending_ids(1) == ()
-    await role.components.close_maintenance()
+    await role._components.close_owner_tasks()
 
 
 def test_integrations_module_owns_complete_component_keyset():

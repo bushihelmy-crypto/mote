@@ -3,21 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
 
-from mote.contracts.tool.catalog import ToolDispatchRequest, ToolDispatchResult, ToolExecutionOutcome
-
-BoundCallable = Callable[[dict[str, Any]], Awaitable[Any]]
-
-
-class UnrecoverableBindingError(RuntimeError):
-    pass
+from mote.contracts.tool.catalog import ToolDispatchRequest
+from mote.runtime.tools.tool_binding import ExecutableToolBinding
 
 
 @dataclass(frozen=True, slots=True)
 class PinnedToolInvocation:
     semantic_identity: str
-    invoke: BoundCallable
+    canonical_name: str
+    binding: ExecutableToolBinding
+    catalog_generation: int
 
 
 class BoundToolRegistry:
@@ -30,21 +26,14 @@ class BoundToolRegistry:
             raise ValueError("tool snapshot revision is already pinned")
         self._revisions[key] = dict(tools)
 
-    async def dispatch(self, request: ToolDispatchRequest) -> ToolDispatchResult[ToolExecutionOutcome]:
+    def resolve(self, request: ToolDispatchRequest) -> tuple[PinnedToolInvocation | None, str]:
         tools = self._revisions.get((request.snapshot_id, request.registry_revision))
         if tools is None:
-            return ToolDispatchResult(False, conflict="unrecoverable_binding")
+            return None, "unrecoverable_binding"
         tool = tools.get(request.tool_name)
         if tool is None:
-            return ToolDispatchResult(False, conflict="tool_not_in_snapshot")
-        arguments = dict(request.arguments)
-        if request.call_id:
-            arguments["__mote_call_id"] = request.call_id
-        try:
-            value = await tool.invoke(arguments)
-        except UnrecoverableBindingError:
-            return ToolDispatchResult(False, conflict="unrecoverable_binding")
-        return ToolDispatchResult(True, value=value)
+            return None, "tool_not_in_snapshot"
+        return tool, ""
 
     def release(self, snapshot_id: str, revision: int, *, references: int) -> bool:
         if references:
@@ -52,4 +41,4 @@ class BoundToolRegistry:
         return self._revisions.pop((snapshot_id, revision), None) is not None
 
 
-__all__ = ["BoundToolRegistry", "PinnedToolInvocation", "UnrecoverableBindingError"]
+__all__ = ["BoundToolRegistry", "PinnedToolInvocation"]

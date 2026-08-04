@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import types
 import typing
-from typing import Any, Awaitable, Callable, Optional, Union
+from typing import Any, Callable, Optional, Protocol, TypeVar, Union
 
+from typing_extensions import TypeForm
+
+from mote.contracts.output import RunKind
+from mote.contracts.ports.output.evaluation import OutputEngine
 from mote.contracts.workflow.definition_source import TrustedWorkflowBlueprintSource, WorkflowDefinitionSource
+from mote.kernel.output import OutputContract
 from mote.kernel.tools.docstrings import first_line
-from mote.kernel.tools.spec_adapter import annotation_to_json_schema
 from mote.orchestration.workflows.base_node import BaseNode, _parse_params_from_docstring
-from mote.orchestration.workflows.channels import NoOutput, derive_output_fields, derive_reducers
+from mote.orchestration.workflows.channels import ChannelReducer, NoOutput, derive_output_fields, derive_reducers
 from mote.orchestration.workflows.deferred import WorkflowDeferredResult
 from mote.orchestration.workflows.definition import WorkflowDefinitionCompiler
 from mote.orchestration.workflows.engine import resume as _resume
@@ -26,6 +30,9 @@ from mote.orchestration.workflows.types import (
     GraphPause,
     GraphRunState,
     GraphState,
+    NodeParameterSpec,
+    WorkflowDeferredExecutor,
+    WorkflowNodeCallable,
     _ConditionalEdge,
     _Edge,
     _LlmEdge,
@@ -33,12 +40,31 @@ from mote.orchestration.workflows.types import (
     _WaitingEdge,
 )
 
+RouterInputT = TypeVar("RouterInputT")
+WorkflowNodeCallableT = TypeVar("WorkflowNodeCallableT", bound=WorkflowNodeCallable)
+
+
+class GraphOutputEngineFactory(Protocol):
+    """Construct the typed-output engine used for one graph terminal value."""
+
+    def __call__(
+        self,
+        contract: OutputContract[object],
+        *,
+        run_id: str,
+        run_kind: RunKind,
+    ) -> OutputEngine[object]: ...
+
+
 # ---------------------------------------------------------------------------
 # Type-compatibility check for compile-time param validation
 # ---------------------------------------------------------------------------
 
 
-def _types_compatible(source_type: type, target_type: type) -> bool:
+def _types_compatible(
+    source_type: TypeForm[object],
+    target_type: TypeForm[object],
+) -> bool:
     """Check whether *source_type* is assignable to *target_type* (lightweight).
 
     Handles:
@@ -48,7 +74,7 @@ def _types_compatible(source_type: type, target_type: type) -> bool:
 
     Does NOT perform full variance analysis or generic parameter checks.
     """
-    origin = getattr(source_type, "__origin__", None)
+    origin = typing.get_origin(source_type)
 
     # typing.Any is compatible with anything
     if source_type is typing.Any or target_type is typing.Any:
@@ -63,11 +89,9 @@ def _types_compatible(source_type: type, target_type: type) -> bool:
         return all(_types_compatible(a, target_type) for a in args)
 
     # Concrete types — issubclass (guard against non-class types)
-    try:
-        return issubclass(source_type, target_type)
-    except TypeError:
-        # source_type isn't a proper class (e.g. a generic alias) — skip
+    if not isinstance(source_type, type) or not isinstance(target_type, type):
         return True
+    return issubclass(source_type, target_type)
 
 
 class WorkflowBuilder:
@@ -85,8 +109,9 @@ class WorkflowBuilder:
         state_schema: type[GraphState] = GraphState,
         max_restarts: int = 3,
         recursion_limit: int = 100,
-        output_contract: Any = None,
-        output_engine_factory: Optional[Callable[..., Any]] = None,
+        output_contract: OutputContract[object] | None = None,
+        output_engine_factory: GraphOutputEngineFactory | None = None,
+        output_engine_identity: str = "",
         output: type[NoOutput] | None = None,
         definition_version: int = 1,
     ):
@@ -117,6 +142,7 @@ class WorkflowBuilder:
             raise ValueError("output_contract and output_engine_factory must be provided together")
         self.output_contract = output_contract
         self.output_engine_factory = output_engine_factory
+        self.output_engine_identity = output_engine_identity
         self._no_output = output is NoOutput
         self._nodes: dict[str, _NodeDef] = {}
         self._edges: list[_Edge] = []
@@ -125,7 +151,7 @@ class WorkflowBuilder:
         self._llm_edges: list[_LlmEdge] = []
         # field name → reducer, derived from ``state_schema`` Annotated metadata
         # at compile time (see ``compile``).
-        self._reducers: dict[str, Callable] = {}
+        self._reducers: dict[str, ChannelReducer] = {}
         # Names of ``Output``-marked state fields — the declared result. Derived
         # at compile time alongside reducers; empty means "no declared output",
         # so the run result falls back to the whole state (see engine).
@@ -152,17 +178,17 @@ class WorkflowBuilder:
     def node(
         self,
         name: str,
-        params: Optional[dict[str, dict]] = None,
+        params: Optional[dict[str, NodeParameterSpec]] = None,
         *,
         implementation_id: str | None = None,
-    ):
+    ) -> Callable[[WorkflowNodeCallableT], WorkflowNodeCallableT]:
         """Decorator: register a node. ``description`` is taken from the docstring.
 
         Retry policy is owned by the engine (fixed budget + exponential backoff),
         so nodes expose no retry knobs.
         """
 
-        def decorator(fn):
+        def decorator(fn: WorkflowNodeCallableT) -> WorkflowNodeCallableT:
             self.add_node(
                 name,
                 fn,
@@ -176,8 +202,8 @@ class WorkflowBuilder:
     def add_node(
         self,
         name: str,
-        fn: Union[Callable, BaseNode, type],
-        params: Optional[dict[str, dict]] = None,
+        fn: WorkflowNodeCallable | BaseNode | type[BaseNode],
+        params: Optional[dict[str, NodeParameterSpec]] = None,
         *,
         implementation_id: str | None = None,
     ) -> None:
@@ -235,15 +261,19 @@ class WorkflowBuilder:
     def add_conditional_edges(
         self,
         from_node: str,
-        router: Callable[[GraphState], str],
+        router: Callable[[RouterInputT], str],
         mapping: dict[str, str],
         *,
+        projector: Callable[[GraphState], RouterInputT],
         implementation_id: str | None = None,
     ) -> None:
+        def route(state: GraphState) -> str:
+            return router(projector(state))
+
         self._conditional_edges.append(
             _ConditionalEdge(
                 from_node,
-                router,
+                route,
                 mapping,
                 implementation_id or "",
             )
@@ -291,7 +321,7 @@ class WorkflowBuilder:
         if not self._output_fields and not self._no_output:
             raise ValueError("workflow must declare an Output field or output=NoOutput")
 
-    def compile(self) -> Callable[..., Awaitable[WorkflowDeferredResult]]:
+    def compile(self) -> WorkflowDeferredExecutor:
         """Compile through the one canonical immutable definition."""
         return self.build().compile()
 
@@ -324,10 +354,14 @@ class WorkflowBuilder:
 
     # --- resume (delegates to engine) ---
 
-    def resume(self, state: GraphState, from_nodes: list[str], run_state: Any = None) -> WorkflowDeferredResult:
+    def resume(
+        self, state: GraphState, from_nodes: list[str], run_state: GraphRunState | None = None
+    ) -> WorkflowDeferredResult[GraphState | GraphPause]:
         return _resume(self, state, from_nodes, run_state)
 
-    def resume_skip(self, state: GraphState, skip_nodes: list[str], run_state: Any = None) -> WorkflowDeferredResult:
+    def resume_skip(
+        self, state: GraphState, skip_nodes: list[str], run_state: GraphRunState | None = None
+    ) -> WorkflowDeferredResult[GraphState | GraphPause]:
         return _resume_skip(self, state, skip_nodes, run_state)
 
     def resume_skip_and_from(
@@ -335,8 +369,8 @@ class WorkflowBuilder:
         state: GraphState,
         skip_nodes: list[str],
         from_nodes: list[str],
-        run_state: Any = None,
-    ) -> WorkflowDeferredResult:
+        run_state: GraphRunState | None = None,
+    ) -> WorkflowDeferredResult[GraphState | GraphPause]:
         return _rsaf(self, state, skip_nodes, from_nodes, run_state)
 
     @property
@@ -351,37 +385,6 @@ class WorkflowBuilder:
         Equivalent to ``state_schema.model_json_schema()`` — a pydantic freebie.
         """
         return self.state_schema.model_json_schema()
-
-    def get_node_schemas(self) -> dict[str, dict]:
-        """Per-node JSON Schemas: ``{node_name: schema_dict}``.
-
-        Each schema is derived from the node's declared params (type + description).
-        Nodes without typed params get an empty-properties schema.
-        """
-
-        result: dict[str, dict] = {}
-        for name, node_def in self._nodes.items():
-            properties: dict[str, dict] = {}
-            required: list[str] = []
-            for pname, pinfo in node_def.params.items():
-                ptype = pinfo.get("type")
-                if ptype is not None:
-                    prop = annotation_to_json_schema(ptype)
-                else:
-                    prop = {"type": "string"}
-                desc = pinfo.get("desc")
-                if desc:
-                    prop["description"] = desc
-                source = pinfo.get("from")
-                if source:
-                    prop["x-source"] = source
-                properties[pname] = prop
-                required.append(pname)
-            schema: dict = {"type": "object", "properties": properties}
-            if required:
-                schema["required"] = required
-            result[name] = schema
-        return result
 
     # --- normalization ---
 
@@ -531,13 +534,11 @@ class WorkflowBuilder:
                                     f"expected {expected_type}"
                                 )
                 else:
-                    # Non-$input source references a state *field* (the first
-                    # dotted segment). With the field/channel model any node may
-                    # write any field — and ``extra="allow"`` lets undeclared
-                    # fields land at runtime — so an undeclared reference is not
-                    # a compile-time error. Declared fields are accepted as-is;
-                    # nothing to reject here.
-                    pass
+                    field_name = source.split(".", 1)[0]
+                    if field_name not in self.state_schema.model_fields:
+                        raise ValueError(
+                            f"Node '{name}' param '{param_name}' references unknown state field: {field_name}"
+                        )
 
     # --- helpers ---
 

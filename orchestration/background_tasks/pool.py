@@ -39,8 +39,9 @@ from mote.orchestration.background_tasks.model import (
     BackgroundTaskNotification,
     PollFactory,
     TaskAttemptSettlement,
-    TaskMeta,
+    TaskSnapshot,
     TaskType,
+    _TaskState,
 )
 from mote.orchestration.background_tasks.operation import (
     CoroutineOperation,
@@ -100,8 +101,8 @@ class BackgroundTaskPool:
         wake: Optional[Callable[[], None]] = None,
         session_id: str = "",
         limit_config: Optional[ToolResultLimitConfig] = None,
-        on_terminal_result: Optional[Callable[[TaskMeta], None]] = None,
-        retire_result: Optional[Callable[[str], None]] = None,
+        on_terminal_result: Optional[Callable[[TaskSnapshot], None]] = None,
+        retire_result: Optional[Callable[[TaskId], None]] = None,
         owner: BackgroundTaskOwner | None = None,
     ) -> None:
         self._msg_buffer = msg_buffer
@@ -143,11 +144,11 @@ class BackgroundTaskPool:
         # ``report_progress`` events land on disk and surface as
         # ``<delta-summary>`` blocks via ``TaskAttachmentGenerator``.
         self._output_store = output_store
-        self._tasks: dict[str, asyncio.Task] = {}
-        self._operations: dict[str, DeferredOperation] = {}
+        self._tasks: dict[TaskId, asyncio.Task] = {}
+        self._operations: dict[TaskId, DeferredOperation] = {}
         self._stop_tasks: set[asyncio.Task] = set()
-        self._meta: dict[str, TaskMeta] = {}  # all tasks (running + completed)
-        self._attempt_history: dict[str, list[TaskAttemptSettlement]] = {}
+        self._meta: dict[TaskId, _TaskState] = {}  # owner-private mutable state
+        self._attempt_history: dict[TaskId, list[TaskAttemptSettlement]] = {}
         self._counter = 0
         # One-shot completion futures. Each waiter (wait_any / wait_all /
         # wait_for_completion) registers its own future via _next_completion;
@@ -176,7 +177,7 @@ class BackgroundTaskPool:
         if owner != self._owner:
             raise RuntimeError("background-task owner/incarnation lost")
 
-    def _reserve_pin(self, task_id: str, attempt_id: AttemptId) -> LocalTaskReference:
+    def _reserve_pin(self, task_id: TaskId, attempt_id: AttemptId) -> LocalTaskReference:
         reference = LocalTaskReference(self._owner, TaskId(task_id), attempt_id)
         with self._lifecycle_lock:
             if self._lifecycle_state is not BackgroundTaskPoolState.ACTIVE:
@@ -242,9 +243,9 @@ class BackgroundTaskPool:
         """
         deferred = operation if isinstance(operation, DeferredOperation) else CoroutineOperation(operation)
         self._counter += 1
-        task_id = f"bg_{self._counter}"
+        task_id = TaskId(f"bg_{self._counter}")
 
-        meta = TaskMeta(
+        meta = _TaskState(
             task_id=task_id,
             attempt_id=AttemptId(1),
             command_name=command_name,
@@ -319,17 +320,17 @@ class BackgroundTaskPool:
         """
         self._wake = wake
 
-    def set_on_terminal_result(self, cb: Optional[Callable[[TaskMeta], None]]) -> None:
+    def set_on_terminal_result(self, cb: Optional[Callable[[TaskSnapshot], None]]) -> None:
         """Bind (or rebind) the whole-task-terminal result callback.
 
         Called once per task at its terminal (in ``_on_done``) with the task's
-        :class:`TaskMeta`; the Role wires this to register the push-once result
+        immutable task snapshot; Product registers the push-once result
         as a re-projectable ResourceUnit. Late-bound (see ``__init__``) because
         the Role owns the registry and may wire after construction.
         """
         self._on_terminal_result = cb
 
-    def set_retire_result(self, cb: Optional[Callable[[str], None]]) -> None:
+    def set_retire_result(self, cb: Optional[Callable[[TaskId], None]]) -> None:
         """Bind (or rebind) the consume→retire callback.
 
         Called with a ``task_id`` when the model consumes a task's result
@@ -404,34 +405,35 @@ class BackgroundTaskPool:
         return len(self._tasks)
 
     @property
-    def pending_ids(self) -> list[str]:
+    def pending_ids(self) -> list[TaskId]:
         """Task ids of all running tasks (snapshot)."""
         return list(self._tasks.keys())
 
-    def get_task_info(self, task_id: str) -> Optional[TaskMeta]:
+    def get_task_info(self, task_id: TaskId) -> Optional[TaskSnapshot]:
         """Return metadata for a task (running or recently completed).
 
         Returns ``None`` if the task_id is unknown.
         """
-        return self._meta.get(task_id)
+        state = self._meta.get(task_id)
+        return state.snapshot() if state is not None else None
 
-    def get_outcome(self, task_id: str):
+    def get_outcome(self, task_id: TaskId):
         """Return the background-owned terminal outcome, if available."""
         meta = self._meta.get(task_id)
         return meta.outcome if meta is not None else None
 
     def get_attempt_history(
         self,
-        task_id: str,
+        task_id: TaskId,
     ) -> tuple[TaskAttemptSettlement, ...]:
         """Return immutable settlements for retired attempts only."""
         return tuple(self._attempt_history.get(task_id, ()))
 
-    def list_tasks(self) -> list[TaskMeta]:
+    def list_tasks(self) -> list[TaskSnapshot]:
         """Return metadata for all tracked tasks (running + recently completed)."""
-        return list(self._meta.values())
+        return [state.snapshot() for state in self._meta.values()]
 
-    def mark_retrieved(self, task_id: str) -> None:
+    def mark_retrieved(self, task_id: TaskId) -> None:
         """Record that the model has consumed a task's push-once result.
 
         The consume tools call this on a
@@ -451,7 +453,7 @@ class BackgroundTaskPool:
                 logger.debug(f"BackgroundTaskPool: retire_result failed for {task_id}: {exc}")
         self._maybe_reap_meta(task_id, meta)
 
-    def _maybe_reap_meta(self, task_id: str, meta: TaskMeta) -> None:
+    def _maybe_reap_meta(self, task_id: TaskId, meta: _TaskState) -> None:
         """Drop a fully-consumed terminal task's meta so ``_meta`` stays bounded.
 
         Reaped only when the task is consumed (``retrieved``) and no longer
@@ -464,7 +466,7 @@ class BackgroundTaskPool:
             return
         self._meta.pop(task_id, None)
 
-    def cancel(self, task_id: str) -> bool:
+    def cancel(self, task_id: TaskId) -> bool:
         """Cancel a running background task.
 
         Returns ``True`` if the task was found and cancel was requested,
@@ -485,7 +487,7 @@ class BackgroundTaskPool:
             task.cancel()
         return True
 
-    def cancel_for_cap(self, task_id: str) -> bool:
+    def cancel_for_cap(self, task_id: TaskId) -> bool:
         """Cancel a task because its output exceeded the disk size cap.
 
         Sets a flag so ``_on_done`` includes the cap reason in ``result``,
@@ -496,9 +498,9 @@ class BackgroundTaskPool:
             meta._output_capped = True
         return self.cancel(task_id)
 
-    def list_tasks_for_agent(self, agent_id: str) -> list[TaskMeta]:
+    def list_tasks_for_agent(self, agent_id: str) -> list[TaskSnapshot]:
         """Return all tasks belonging to *agent_id*."""
-        return [m for m in self._meta.values() if m.agent_id == agent_id]
+        return [state.snapshot() for state in self._meta.values() if state.agent_id == agent_id]
 
     def cancel_tasks_for_agent(self, agent_id: str) -> list[str]:
         """Cancel all running tasks belonging to *agent_id*.
@@ -516,7 +518,7 @@ class BackgroundTaskPool:
 
     def resubmit(
         self,
-        task_id: str,
+        task_id: TaskId,
         operation: "DeferredOperation | PollFactory",
         *,
         timeout: Optional[float] = None,
@@ -525,7 +527,7 @@ class BackgroundTaskPool:
         """Retry an operation under an existing model-visible task_id.
 
         Resets the task's status to RUNNING and attaches a fresh asyncio.Task.
-        The existing generic ``TaskMeta`` is preserved.
+        The model-visible TaskId is preserved while owner-private state advances.
 
         Args:
             task_id: An existing task_id previously returned by :meth:`submit`.
@@ -631,7 +633,7 @@ class BackgroundTaskPool:
 
         Unlike :meth:`submit`, this does **not** wrap the task with a
         semaphore or timeout — the task is already executing.  The pool
-        will track it, update :class:`TaskMeta` on completion, and push
+        will track it, update owner-private state on completion, and push
         a ``BackgroundTaskNotification`` as usual.
 
         Args:
@@ -645,9 +647,9 @@ class BackgroundTaskPool:
             A new task_id (e.g. ``"bg_3"``).
         """
         self._counter += 1
-        task_id = f"bg_{self._counter}"
+        task_id = TaskId(f"bg_{self._counter}")
 
-        meta = TaskMeta(
+        meta = _TaskState(
             task_id=task_id,
             command_name=command_name,
             status=BackgroundTaskStatus.RUNNING,
@@ -796,7 +798,7 @@ class BackgroundTaskPool:
     async def _run_with_semaphore(
         self,
         runner: Callable[[], Coroutine],
-        task_id: str,
+        task_id: TaskId,
         attempt_id: AttemptId,
         operation: DeferredOperation | None = None,
     ):
@@ -825,7 +827,7 @@ class BackgroundTaskPool:
 
     async def _request_operation_stop(
         self,
-        task_id: str,
+        task_id: TaskId,
         operation: DeferredOperation,
         reason: StopReason,
     ) -> None:
@@ -872,7 +874,7 @@ class BackgroundTaskPool:
     async def _with_progress(
         self,
         coro: Coroutine,
-        task_id: str,
+        task_id: TaskId,
         attempt_id: AttemptId,
         telemetry=None,
     ):
@@ -918,7 +920,7 @@ class BackgroundTaskPool:
 
     @staticmethod
     def _build_xml(
-        task_id: str,
+        task_id: TaskId,
         command_name: str,
         status: str,
         summary: str,
@@ -989,7 +991,7 @@ class BackgroundTaskPool:
         self._wake_runtime()
         return True
 
-    def _limit_block(self, output: str, command_name: str, task_id: str) -> str:
+    def _limit_block(self, output: str, command_name: str, task_id: TaskId) -> str:
         """Apply the shared result-limit policy to a terminal text block.
 
         The single scoping point for a background task's outgoing text — the
@@ -1023,7 +1025,7 @@ class BackgroundTaskPool:
 
     def _on_done(
         self,
-        task_id: str,
+        task_id: TaskId,
         attempt_id: AttemptId,
         command_name: str,
         task: asyncio.Task,
@@ -1200,7 +1202,8 @@ class BackgroundTaskPool:
             and not meta.retrieved
         ):
             try:
-                self._on_terminal_result(meta)
+                self._on_terminal_result(meta.snapshot())
+                meta.registered_resource = True
             except Exception as exc:  # noqa: BLE001 — registration is best-effort
                 logger.debug(f"BackgroundTaskPool: on_terminal_result failed for {task_id}: {exc}")
                 terminal_settled = False
@@ -1231,10 +1234,10 @@ class BackgroundTaskPool:
 
     async def _settle_completed_attempt(
         self,
-        task_id: str,
+        task_id: TaskId,
         attempt_id: AttemptId,
         task: asyncio.Task,
-        meta: TaskMeta,
+        meta: _TaskState,
     ) -> None:
         """Flush attempt-owned resources before releasing its work pin."""
         reference = LocalTaskReference(self._owner, TaskId(task_id), attempt_id)

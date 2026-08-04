@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from mote.contracts.ports.artifact.store import ArtifactLookupIndex, ArtifactResolver
+from mote.contracts.ports.artifact.store import ArtifactRepositoryService, ArtifactResolver
 from mote.contracts.ports.artifact.store import ReliableArtifactPublisher as ArtifactPublisherPort
 from mote.contracts.ports.code_intelligence.code_map import CodeMapIndexer
 from mote.contracts.ports.code_intelligence.lsp import DiagnosticsProvider
@@ -99,7 +99,7 @@ EVENT_FABRIC: ComponentKey[EventFabric] = ComponentKey("event_fabric")
 FILE_OPERATIONS: ComponentKey[FileOperations] = ComponentKey("file_operations")
 ARTIFACT_REPOSITORY_BUNDLE: ComponentKey[ArtifactRepositoryBundle] = ComponentKey("artifact_repository_bundle")
 ARTIFACT_BLOB_STORE: ComponentKey[ContentAddressedArtifactBlobStore] = ComponentKey("artifact_blob_store")
-ARTIFACT_STORE: ComponentKey[ArtifactLookupIndex] = ComponentKey("artifact_store")
+ARTIFACT_STORE: ComponentKey[ArtifactRepositoryService] = ComponentKey("artifact_store")
 ARTIFACT_PUBLISHER: ComponentKey[ArtifactPublisherPort] = ComponentKey("artifact_publisher")
 CHECKPOINT_PAYLOAD_STORE: ComponentKey[ArtifactCheckpointPayloadStore] = ComponentKey("checkpoint_payload_store")
 RUNTIME_PROJECTION_JOURNAL: ComponentKey[SessionRuntimeProjectionJournal] = ComponentKey("runtime_projection_journal")

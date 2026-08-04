@@ -22,13 +22,14 @@ from mote.product.composition.model_reload import ApplicationReloadCoordinator
 from mote.product.composition.model_startup import install_initial_application_composition
 from mote.product.composition.service_gateway import builtin_service_gateway
 from mote.product.config.bootstrap import ensure_mote_home
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.product.config.schema import Config
 from mote.product.extensions.sources import ApprovedExtensionSnapshot
 from mote.product.inference.backends.sqlite import SQLiteAttemptReceiptStore, SQLiteUsageLedger
 from mote.product.paths import RuntimePaths
 from mote.product.workflows.agent_service import AgentWorkflowService
 from mote.product.workflows.durability import ProductWorkflowDurability, TrustedWorkflowBlueprint
-from mote.product.workflows.temporal_catalog import activate_temporal_effect_plane
+from mote.product.workflows.temporal_effects import TemporalWorkflowEffects
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleResource
 from mote.runtime.engine import ClosableAgent, EngineAgentRequest
 from mote.runtime.models.clients.context import Context
@@ -38,7 +39,6 @@ from mote.runtime.resilience.admission import ResourceAdmissionController
 from mote.runtime.resilience.failover.operator import LocalModelOperatorAuditStore, model_operator_audit_path
 from mote.runtime.service_gateway import LocalServiceCallJournal, service_call_journal_root
 from mote.runtime.services import EngineServices
-from mote.runtime.session.workspace.store import SessionWorkspace
 
 AgentT = TypeVar("AgentT", bound=ClosableAgent)
 
@@ -115,7 +115,10 @@ async def activate_application_composition(
         oauth_root=paths.oauth_root,
         cost_tracker=context.cost_manager,
         admission_controller=context.model_operator,
-        model_call_journal=LocalModelCallJournal(model_call_journal_root(paths.workspace_root)),
+        model_call_journal=LocalModelCallJournal(
+            model_call_journal_root(paths.workspace_root),
+            policy=approved_model_checkpoint_policy(),
+        ),
     )
     try:
         application_lease = await composition.acquire()
@@ -161,12 +164,11 @@ async def activate_application(request: ApplicationBuildRequest) -> Application[
             blueprint.blueprint_version,
             blueprint.factory,
         )
-    durable_config = request.config.tools.durable
-    if durable_config.enabled and durable_config.backend == "temporal":
+    workflow_config = request.config.workflows
+    if workflow_config.temporal_enabled:
         workflow_durability.attach_temporal_effect_plane(
-            activate_temporal_effect_plane(
-                durable_config.temporal,
-                workspace=SessionWorkspace(request.paths.workspace_root),
+            TemporalWorkflowEffects(
+                workflow_config.temporal,
                 dispatch=workflow_durability.dispatch_temporal_effect,
             )
         )
@@ -239,6 +241,7 @@ async def activate_application(request: ApplicationBuildRequest) -> Application[
             application_composition=composition,
             agent_budget=agent_budget,
             workflow_governance=workflow_durability,
+            workflow_delivery=workflow_durability,
             application_reloader=(
                 ApplicationReloadCoordinator(
                     composition=composition,
@@ -247,7 +250,10 @@ async def activate_application(request: ApplicationBuildRequest) -> Application[
                     oauth_root=request.paths.oauth_root,
                     cost_tracker=context.cost_manager,
                     admission_controller=context.model_operator,
-                    model_call_journal=LocalModelCallJournal(model_call_journal_root(request.paths.workspace_root)),
+                    model_call_journal=LocalModelCallJournal(
+                        model_call_journal_root(request.paths.workspace_root),
+                        policy=approved_model_checkpoint_policy(),
+                    ),
                 )
                 if request.reload_config is not None
                 else None

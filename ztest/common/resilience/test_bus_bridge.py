@@ -7,9 +7,11 @@ breaker mirror its state changes onto active telemetry as
 :class:`BreakerStateChangeEvent` observations. No telemetry bound → the hook is a
 silent no-op (a breaker tripping outside a runtime scope never raises).
 """
+
 from __future__ import annotations
 
-from mote.runtime.events import BreakerStateChangeEvent, bind_telemetry, breaker_telemetry_hook
+from mote.contracts.events.model import BreakerStateChangeEvent
+from mote.runtime.events import bind_telemetry, breaker_telemetry_hook
 from mote.runtime.resilience import BreakerConfig, ResourceHealthRegistry
 from mote.ztest.telemetry import InlineTelemetry
 

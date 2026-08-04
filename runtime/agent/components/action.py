@@ -41,10 +41,10 @@ from mote.runtime.config.mcp import MCPServerConfig
 from mote.runtime.interactive.browser.profile import BrowserProfileStore
 from mote.runtime.models.media_projection import build_media_materializer
 from mote.runtime.output.graph_service import GraphOutputService
-from mote.runtime.secrets.cipher import build_cipher
+from mote.runtime.secrets.cipher import build_aes_cipher
 from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.tools.policy import build_permission_engine, build_tool_call_policy, build_tool_result_policy
-from mote.runtime.tools.provider import AnyToolset
+from mote.runtime.tools.provider import ContextFreeToolset
 from mote.runtime.tools.tool_executor import ToolExecutor
 
 AgentDepsT = TypeVar("AgentDepsT")
@@ -64,7 +64,7 @@ class ActionComponentInputs:
     secrets_root: Path | None = None
     browser_profiles_root: Path | None = None
     oauth_root: Path | None = None
-    toolsets: tuple[AnyToolset, ...] = ()
+    toolsets: tuple[ContextFreeToolset, ...] = ()
     tool_policy_extensions: tuple[ToolCallPolicyExtensionSpec, ...] = ()
     deferred_result_projector_factory: DeferredResultProjectorFactory | None = None
     mcp_servers: tuple[MCPServerConfig, ...] = ()
@@ -199,22 +199,18 @@ def _build_command_channel(ctx: RoleBuildContext):
 
 
 def _build_browser_profile_store(ctx: RoleBuildContext, inputs: ActionComponentInputs) -> BrowserProfileStore:
-    secrets_cfg = ctx.role.config.secrets
     secrets_root = inputs.secrets_root
     profiles_root = inputs.browser_profiles_root
     if secrets_root is None or profiles_root is None:
         raise ValueError("Agent composition requires secrets and browser profile roots")
     return BrowserProfileStore(
-        lambda: build_cipher(
-            secrets_cfg,
-            default_key_path=secrets_root / "vault.key",
-        ),
+        lambda: build_aes_cipher(secrets_root / "vault.key"),
         root=profiles_root,
     )
 
 
 def _build_graph_output_service(ctx: RoleBuildContext) -> GraphOutputService:
-    services = ctx.role.wiring.services
+    services = ctx.role._wiring.services
     context = services.context if services is not None else None
     return GraphOutputService(
         take_restore=ctx.role._state_ctl.take_pending_graph_output_restore,
@@ -280,8 +276,7 @@ def _build_executor(ctx: RoleBuildContext, inputs: ActionComponentInputs) -> Too
         tool_call_policy=ctx.dep(TOOL_CALL_POLICY),
         tool_result_policy=ctx.dep(TOOL_RESULT_POLICY),
         limit_config=tools_cfg.result_limit,
-        journal_config=tools_cfg.run_journal,
-        durable_config=tools_cfg.durable,
+        effect_store_config=tools_cfg.effect_store,
         loop_guard_config=tools_cfg.loop_guard,
         telemetry=ctx.dep(TELEMETRY),
         deferred_result_projector=deferred_projector,

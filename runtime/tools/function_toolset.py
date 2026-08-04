@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Generic, Protocol, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
 from mote.contracts.tool import NativeToolSchema, XmlToolSchema
@@ -34,14 +34,25 @@ class _TypedFunctionInvocation(Generic[AgentDepsT, ToolDepsT]):
         project: DepsProjector[AgentDepsT, ToolDepsT],
         context: Callable[[], RunContext[AgentDepsT]],
     ) -> None:
-        self._function = function
+        if inspect.iscoroutinefunction(function):
+            async_function = cast(Callable[..., Awaitable[object]], function)
+
+            async def invoke(context: ToolContext[ToolDepsT], arguments: dict[str, Any]) -> object:
+                return await async_function(context, **arguments)
+
+        else:
+            sync_function = cast(Callable[..., object], function)
+
+            async def invoke(context: ToolContext[ToolDepsT], arguments: dict[str, Any]) -> object:
+                return sync_function(context, **arguments)
+
+        self._invoke = invoke
         self._project = project
         self._context = context
 
-    async def __call__(self, arguments: dict[str, Any]) -> Any:
+    async def __call__(self, arguments: dict[str, Any]) -> object:
         tool_context = self._context().for_tool(self._project)
-        result = self._function(tool_context, **arguments)
-        return await result if inspect.isawaitable(result) else result
+        return await self._invoke(tool_context, arguments)
 
 
 def _model_callable(function: Callable[..., Any]) -> Callable[..., Any]:
@@ -122,13 +133,13 @@ def _xml_function_definition(
     function: Callable[..., Any],
     invoke: _FunctionInvocation,
     name: str,
-) -> XmlToolDefinition[Any]:
+) -> XmlToolDefinition:
     _validate_xml_signature(function)
     model_function = _model_callable(function)
     docstring = inspect.getdoc(model_function) or ""
     capability_type = _capability_type(function, invoke, name)
 
-    def render(_capability: Any) -> XmlToolSchema:
+    def render(_capability: BaseTool) -> XmlToolSchema:
         return {
             "name": name,
             "description": description_body(docstring),
@@ -152,12 +163,12 @@ def _native_function_definition(
     function: Callable[..., Any],
     invoke: _FunctionInvocation,
     name: str,
-) -> NativeToolDefinition[Any]:
+) -> NativeToolDefinition:
     model_function = _model_callable(function)
     docstring = inspect.getdoc(model_function) or ""
     capability_type = _capability_type(function, invoke, name)
 
-    def render(_capability: Any) -> NativeToolSchema:
+    def render(_capability: BaseTool) -> NativeToolSchema:
         return {
             "name": name,
             "description": description_body(docstring),
@@ -181,7 +192,7 @@ class XmlFunctionToolset(XmlToolset[AgentDepsT], Generic[AgentDepsT]):
     """Function tools explicitly registered for the scalar XML protocol."""
 
     def __init__(self, id: str, *, version: str = "1") -> None:
-        self._registered: dict[str, XmlToolDefinition[Any]] = {}
+        self._registered: dict[str, XmlToolDefinition] = {}
         self._function_context: RunContext[AgentDepsT] | None = None
         super().__init__(id, lambda: self._registered.values(), version=version)
 
@@ -218,7 +229,7 @@ class NativeFunctionToolset(NativeToolset[AgentDepsT], Generic[AgentDepsT]):
     """Function tools explicitly registered for structured native tool use."""
 
     def __init__(self, id: str, *, version: str = "1") -> None:
-        self._registered: dict[str, NativeToolDefinition[Any]] = {}
+        self._registered: dict[str, NativeToolDefinition] = {}
         self._function_context: RunContext[AgentDepsT] | None = None
         super().__init__(id, lambda: self._registered.values(), version=version)
 

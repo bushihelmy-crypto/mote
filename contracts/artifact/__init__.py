@@ -1,5 +1,19 @@
 """Stable artifact identity, publication, retention, and resolution contracts."""
 
+from mote.contracts.artifact.governance import (
+    ARTIFACT_DELETION_TOMBSTONE_RETENTION_SECONDS,
+    EPHEMERAL_RETENTION_SECONDS,
+    SESSION_RETENTION_SECONDS,
+    ArtifactCompletenessManifest,
+    ArtifactDeletionClaim,
+    ArtifactDeletionCommand,
+    ArtifactDeletionReceipt,
+    ArtifactDeletionState,
+    ArtifactHold,
+    ArtifactHoldKind,
+    ArtifactOwnerKind,
+    ArtifactOwnershipEdge,
+)
 from mote.contracts.artifact.models import (
     ArtifactContentRef,
     ArtifactPublication,
@@ -21,6 +35,15 @@ from mote.contracts.artifact.models import (
 )
 
 __all__ = [
+    "ArtifactDeletionClaim",
+    "ArtifactDeletionCommand",
+    "ArtifactDeletionReceipt",
+    "ArtifactDeletionState",
+    "ArtifactCompletenessManifest",
+    "ArtifactHold",
+    "ArtifactHoldKind",
+    "ArtifactOwnerKind",
+    "ArtifactOwnershipEdge",
     "ArtifactContentRef",
     "ArtifactPublication",
     "ArtifactPublicationFailure",
@@ -38,4 +61,7 @@ __all__ = [
     "ArtifactSensitivity",
     "ContentLocator",
     "ResolvedArtifact",
+    "ARTIFACT_DELETION_TOMBSTONE_RETENTION_SECONDS",
+    "EPHEMERAL_RETENTION_SECONDS",
+    "SESSION_RETENTION_SECONDS",
 ]

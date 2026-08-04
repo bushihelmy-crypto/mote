@@ -7,21 +7,23 @@ the lazy registration in ``common.schema`` (no eager import), and that
 ``PermissionConfig`` accepts an optional runtime block + ``SandboxConfig`` an
 ``allowed_domains`` list.
 """
+
 from __future__ import annotations
+
+import pytest
 
 from mote.runtime.sandbox.config import SandboxRuntimeConfig
 from mote.runtime.tools.permission.config import PermissionConfig, SandboxConfig
 
 
 class TestSandboxRuntimeConfig:
-    def test_defaults_disabled(self):
+    def test_defaults_are_enforced_networked_profile(self):
         cfg = SandboxRuntimeConfig()
-        assert cfg.enabled is False
         assert cfg.backend == "auto"
         assert cfg.network == "proxy"
         assert cfg.harden_process is True
         assert cfg.seccomp is True
-        assert cfg.fail_if_unavailable is False
+        assert cfg.fail_if_unavailable is True
         assert cfg.allowed_domains == []
 
     def test_seccomp_toggle(self):
@@ -47,12 +49,14 @@ class TestSandboxRuntimeConfig:
 
     def test_network_enforcement_defaults_on(self):
         assert SandboxRuntimeConfig().network_enforcement is True
-        assert SandboxRuntimeConfig(network_enforcement=False).network_enforcement is False
+        with pytest.raises(ValueError):
+            SandboxRuntimeConfig(network_enforcement=False)
 
     def test_network_enforced_only_for_proxy(self):
         assert SandboxRuntimeConfig(network="proxy").network_enforced() is True
-        assert SandboxRuntimeConfig(network="off").network_enforced() is False
-        assert SandboxRuntimeConfig(network="open").network_enforced() is False
+        assert SandboxRuntimeConfig(profile="isolated-compute", network="off").network_enforced() is False
+        with pytest.raises(ValueError):
+            SandboxRuntimeConfig(network="open")
 
     def test_accepts_allowed_domains(self):
         cfg = SandboxRuntimeConfig(allowed_domains=["*.pypi.org", "github.com"])
@@ -65,9 +69,8 @@ class TestPermissionConfigRuntime:
         assert pc.runtime is None
 
     def test_runtime_block_parses(self):
-        pc = PermissionConfig(runtime={"enabled": True, "backend": "bwrap", "network": "off"})
+        pc = PermissionConfig(runtime={"profile": "isolated-compute", "backend": "bwrap", "network": "off"})
         assert pc.runtime is not None
-        assert pc.runtime.enabled is True
         assert pc.runtime.backend == "bwrap"
         assert pc.runtime.network == "off"
 

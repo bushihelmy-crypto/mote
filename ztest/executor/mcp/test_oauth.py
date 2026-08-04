@@ -20,6 +20,7 @@ import pytest
 from mote.contracts.config.model.oauth import OAuthProviderConfig
 from mote.contracts.tool.transport import MCPTransportType
 from mote.runtime.config.mcp import MCPServerConfig
+from mote.runtime.models.auth.oauth.models import OAuthToken
 from mote.runtime.tools.mcp import oauth as oauth_bridge
 from mote.runtime.tools.mcp.oauth import _OAuthManagerAuth, build_mcp_auth
 
@@ -40,9 +41,16 @@ class _FakeManager:
         type(self).last_provider = provider
         self._n = 0
 
-    def get_valid_token(self) -> str:
+    class _Borrow:
+        def __init__(self, token: str) -> None:
+            self.token = OAuthToken(access_token=token)
+
+    def acquire_valid_borrow(self, *, expires_at):
         self._n += 1
-        return f"tok-{self._n}"
+        return self._Borrow(f"tok-{self._n}")
+
+    def release_borrow(self, borrow) -> None:
+        return None
 
 
 def _oauth_cfg() -> OAuthProviderConfig:
@@ -100,8 +108,10 @@ def test_sync_flow_sets_authorization_header(monkeypatch):
     )
     auth = build_mcp_auth(cfg)
     request = httpx.Request("GET", "https://x/sse")
-    authed = next(auth.auth_flow(request))
+    flow = auth.auth_flow(request)
+    authed = next(flow)
     assert authed.headers["Authorization"] == "Bearer tok-1"
+    flow.close()
 
 
 def test_auth_reconsults_manager_each_request(monkeypatch):
@@ -117,8 +127,12 @@ def test_auth_reconsults_manager_each_request(monkeypatch):
         oauth=_oauth_cfg(),
     )
     auth = build_mcp_auth(cfg)
-    first = next(auth.auth_flow(httpx.Request("GET", "https://x/sse")))
-    second = next(auth.auth_flow(httpx.Request("GET", "https://x/sse")))
+    first_flow = auth.auth_flow(httpx.Request("GET", "https://x/sse"))
+    first = next(first_flow)
+    first_flow.close()
+    second_flow = auth.auth_flow(httpx.Request("GET", "https://x/sse"))
+    second = next(second_flow)
+    second_flow.close()
     assert first.headers["Authorization"] == "Bearer tok-1"
     assert second.headers["Authorization"] == "Bearer tok-2"
 

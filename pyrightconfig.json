@@ -8,15 +8,14 @@
     "**/*.egg-info"
   ],
   "extraPaths": [".."],
+  "venvPath": "/home/longert/anaconda3/envs",
+  "venv": "metagpt",
   "typeCheckingMode": "basic",
   "pythonVersion": "3.11",
 
   "ignore": [
-    "common/observability/langfuse_backend.py",
-    "common/observability/langfuse_integration.py",
-    "router/ml/v4_features.py",
-    "memory/procedural_memory/manager.py",
-    "durable_exec/temporal"
+    "product/inference/daemon/rpc/gateway_v1_pb2.py",
+    "product/inference/daemon/rpc/gateway_v1_pb2_grpc.py"
   ],
 
   "reportMissingImports": "error",

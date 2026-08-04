@@ -12,8 +12,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import BinaryIO
 
-from mote.contracts.artifact import ArtifactContentRef
-from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.artifact import ArtifactContentRef, ContentLocator
+from mote.contracts.content.identity import ContentDigest, ContentIdentity
 from mote.contracts.file.errors import SnapshotDurabilityError
 from mote.contracts.file.identity import LockMode, LockSpec
 from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
@@ -290,7 +290,7 @@ class FileMutationArtifactRepository:
     def _content_ref(artifact: ContentIdentity) -> ArtifactContentRef:
         return ArtifactContentRef(
             identity=artifact,
-            locator=f"sha256:{artifact.digest}",
+            locator=ContentLocator(f"sha256:{artifact.digest}"),
         )
 
     @staticmethod
@@ -382,7 +382,7 @@ class ArtifactCapture(AbstractContextManager["ArtifactCapture"]):
             os.fsync(self._stream.fileno())
             self._stream.close()
             self._stream = None
-            artifact = ContentIdentity(digest=self._digest.hexdigest(), size=self._size)
+            artifact = ContentIdentity(digest=ContentDigest(self._digest.hexdigest()), size=self._size)
             result = self.repository._publish_capture(
                 self.stage,
                 self._temp_path,

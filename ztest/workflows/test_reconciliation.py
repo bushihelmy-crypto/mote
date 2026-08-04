@@ -7,6 +7,7 @@ import pytest
 
 from mote.contracts.agent.runtime_identity import AgentId, CancellationEpoch, IncarnationGeneration, LineageRevision
 from mote.contracts.clock import UNIX_UTC_CLOCK, AbsoluteInstant
+from mote.contracts.ports.agent.delivery import AgentDeliveryCommandDisposition, AgentDeliveryCommandReceipt
 from mote.contracts.runtime.errors import LeaseFencedError
 from mote.contracts.runtime.operation_ownership import (
     EffectCapability,
@@ -34,6 +35,8 @@ from mote.contracts.workflow.identity import WorkflowDefinitionId, WorkflowRunId
 from mote.orchestration.workflows.durable import (
     CreateWorkflowRun,
     ReconcileState,
+    WorkflowEffectOwnerActionCommand,
+    WorkflowEffectOwnerActionResolution,
     WorkflowGovernanceCancellationInbox,
     WorkflowGovernanceCancellationReconciler,
     WorkflowReconciler,
@@ -61,6 +64,34 @@ def _runtime(tmp_path, *, max_attempts=3):
         max_attempts=max_attempts,
     )
     return reconciler, store, now
+
+
+def test_effect_capacity_backpressures_without_eviction(tmp_path) -> None:
+    ownership = LeaseOperationOwnership(InMemoryLeaseCoordinator(), backend=OperationBackend.LOCAL_FILE)
+    store = WorkflowReconciliationStore(tmp_path / "reconcile.json", ownership, effect_capacity=1)
+    reconciler = WorkflowReconciler(
+        store,
+        ownership,
+        deployment_id="test",
+        holder_id="worker",
+        backend=OperationBackend.LOCAL_FILE,
+        now=lambda: AbsoluteInstant(1, UNIX_UTC_CLOCK, 10_000_000_000),
+    )
+    reconciler.submit_effect(WorkflowRunId("run"), "one", EffectCapability.IDEMPOTENT_BY_KEY, "{}")
+    with pytest.raises(RuntimeError, match="backpressured"):
+        reconciler.submit_effect(WorkflowRunId("run"), "two", EffectCapability.IDEMPOTENT_BY_KEY, "{}")
+
+
+def test_terminal_effect_retention_creates_fenced_tombstone(tmp_path) -> None:
+    reconciler, store, now = _runtime(tmp_path)
+    intent = reconciler.submit_effect(WorkflowRunId("run"), "one", EffectCapability.IDEMPOTENT_BY_KEY, "{}")
+    reconciler.reconcile_effects(lambda _item: (EffectSettlement.SUCCEEDED, "receipt"))
+    tombstone = store.tombstone_effect(intent.effect_id, before=now[0], now=now[0])
+    assert tombstone.effect_id == intent.effect_id
+    assert intent.effect_id not in store.records()["effects"]
+    assert intent.effect_id in store.records()["tombstones"]
+    store.purge_effect_tombstone(intent.effect_id, before=now[0])
+    assert intent.effect_id not in store.records()["tombstones"]
 
 
 def test_effect_intent_is_durable_before_execute_and_receipt_settles(tmp_path) -> None:
@@ -91,6 +122,23 @@ def test_non_replayable_unknown_result_is_in_doubt_not_retried(tmp_path) -> None
     reconciler.reconcile_effects(fail)
     assert store.records()["effects"][intent.effect_id].state is ReconcileState.IN_DOUBT
     assert reconciler.reconcile_effects(fail) == 0
+
+
+def test_in_doubt_effect_can_be_fenced_for_owner_action(tmp_path) -> None:
+    reconciler, store, _ = _runtime(tmp_path)
+    intent = reconciler.submit_effect(WorkflowRunId("run"), "email", EffectCapability.NON_REPLAYABLE, "{}")
+
+    reconciler.reconcile_effects(lambda _item: (_ for _ in ()).throw(ConnectionError("unknown")))
+    settled = reconciler.require_owner_action(
+        WorkflowEffectOwnerActionCommand(intent.effect_id, "provider outcome requires review")
+    )
+    assert settled.state is ReconcileState.OWNER_ACTION_REQUIRED
+    assert reconciler.effects_requiring_owner_action() == (settled,)
+    resolved = reconciler.acknowledge_owner_action(
+        WorkflowEffectOwnerActionResolution(intent.effect_id, "operator-receipt", True)
+    )
+    assert resolved.state is ReconcileState.SETTLED
+    assert resolved.provider_receipt == "operator-receipt"
 
 
 def test_retry_has_bounded_schedule_and_poison_dead_letters(tmp_path) -> None:
@@ -472,23 +520,27 @@ def test_product_activation_periodically_rediscovers_terminal_delivery(tmp_path)
     async def scenario() -> None:
         root = tmp_path / "product-workflows"
         first = ProductWorkflowDurability(root, scan_interval_seconds=0.01)
-        first.reconciler.submit_terminal(WorkflowRunId("run"), "agent:a:task:1", "done")
+        first.reconciler.submit_terminal(WorkflowRunId("run"), "agent:a:workflow:run", "done")
         await first.aclose()
 
         delivered: list[str] = []
         restarted = ProductWorkflowDurability(root, scan_interval_seconds=0.01)
-        assert restarted.pending_terminal_destinations("agent:a:") == ("agent:a:task:1",)
-        restarted.register_terminal_deliverer(
-            "agent:a:task:1",
-            lambda delivery: not delivered.append(delivery.outcome_payload),
-        )
+        assert restarted.pending_terminal_destinations("agent:a:") == ("agent:a:workflow:run",)
+
+        class Delivery:
+            def dispatch(self, command):
+                delivered.append(command.content)
+                return AgentDeliveryCommandReceipt(AgentDeliveryCommandDisposition.ACCEPTED, command.source_id)
+
+        port = Delivery()
+        restarted.register_agent_delivery(AgentId("a"), port)
         await restarted.start()
         for _ in range(20):
             if delivered:
                 break
             await asyncio.sleep(0.01)
         await restarted.aclose()
-        assert delivered == ["done"]
+        assert delivered == ["<workflow-result run_id='run'>done</workflow-result>"]
         assert restarted.pending_terminal_destinations("agent:a:") == ()
 
     asyncio.run(scenario())

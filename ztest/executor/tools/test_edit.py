@@ -1,15 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for the exact, plan-backed Edit tool."""
+
 from __future__ import annotations
 
 import os
 
 import pytest
 
+from mote.contracts.tool.errors import ToolError
 from mote.product.toolsets.builtin.edit import Edit
 from mote.product.toolsets.builtin.read import Read
-from mote.runtime.tools.tool_result import ToolError
 
 from .conftest import CapRole, bind, mark_read, run, write_file
 

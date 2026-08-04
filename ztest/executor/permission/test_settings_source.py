@@ -15,12 +15,18 @@ All tests point the loader at tmp files by monkeypatching ``settings_paths``
 (the single seam ``load_permission_rules`` funnels through), so nothing touches
 the real ``.mote/settings.local.json`` files on disk.
 """
+
 import json
 
 import pytest
 
 from mote.product.config.adapters import permissions as settings_source
-from mote.product.config.adapters.permissions import SETTINGS_FILE_NAME, load_permission_rules, settings_paths
+from mote.product.config.adapters.permissions import (
+    PRODUCT_PERMISSION_BASELINE_GENERATION,
+    SETTINGS_FILE_NAME,
+    load_permission_rules,
+    settings_paths,
+)
 from mote.product.paths import default_runtime_paths, mote_layered_files
 
 
@@ -70,21 +76,27 @@ class TestSettingsPaths:
 
 
 class TestLoadMissingOrEmpty:
+    def test_product_baseline_has_versioned_identity(self):
+        assert PRODUCT_PERMISSION_BASELINE_GENERATION == "mote.product-permissions/v1"
+
     def test_missing_file_returns_none(self, settings_file):
         # File never created.
         assert load_permission_rules() is None
 
     def test_empty_file_returns_none(self, settings_file):
         settings_file.write_text("", encoding="utf-8")
-        assert load_permission_rules() is None
+        with pytest.raises(ValueError, match="malformed"):
+            load_permission_rules()
 
     def test_whitespace_only_returns_none(self, settings_file):
         settings_file.write_text("   \n  ", encoding="utf-8")
-        assert load_permission_rules() is None
+        with pytest.raises(ValueError, match="malformed"):
+            load_permission_rules()
 
     def test_malformed_json_returns_none(self, settings_file):
         settings_file.write_text("{not valid json", encoding="utf-8")
-        assert load_permission_rules() is None
+        with pytest.raises(ValueError, match="malformed"):
+            load_permission_rules()
 
     def test_no_permissions_key_returns_none(self, settings_file):
         _write(settings_file, {"somethingElse": {}})
@@ -92,11 +104,13 @@ class TestLoadMissingOrEmpty:
 
     def test_permissions_not_a_dict_returns_none(self, settings_file):
         _write(settings_file, {"permissions": ["not", "a", "map"]})
-        assert load_permission_rules() is None
+        with pytest.raises(ValueError, match="invalid permissions"):
+            load_permission_rules()
 
     def test_top_level_not_a_dict_returns_none(self, settings_file):
         _write(settings_file, ["a", "list"])
-        assert load_permission_rules() is None
+        with pytest.raises(ValueError, match="root must be an object"):
+            load_permission_rules()
 
     def test_empty_rule_lists_return_none(self, settings_file):
         _write(settings_file, {"permissions": {"allow": [], "deny": [], "ask": []}})
@@ -129,27 +143,23 @@ class TestRuleParsing:
         assert cfg.deny == []
         assert cfg.ask == []
 
-    def test_non_string_entries_dropped(self, settings_file):
+    def test_non_string_entries_fail_closed(self, settings_file):
         _write(
             settings_file,
             {"permissions": {"allow": ["Read", 42, None, {"x": 1}, "Grep"]}},
         )
-        cfg = load_permission_rules()
-        assert cfg is not None
-        assert cfg.allow == ["Read", "Grep"]
+        with pytest.raises(ValueError, match="must be a string"):
+            load_permission_rules()
 
-    def test_whitespace_entries_stripped_and_blanks_dropped(self, settings_file):
+    def test_blank_entries_fail_closed(self, settings_file):
         _write(settings_file, {"permissions": {"allow": ["  Read  ", "   ", ""]}})
-        cfg = load_permission_rules()
-        assert cfg is not None
-        assert cfg.allow == ["Read"]
+        with pytest.raises(ValueError, match="must not be blank"):
+            load_permission_rules()
 
-    def test_non_list_bucket_ignored(self, settings_file):
+    def test_non_list_bucket_fails_closed(self, settings_file):
         _write(settings_file, {"permissions": {"allow": "Read", "deny": ["X"]}})
-        cfg = load_permission_rules()
-        assert cfg is not None
-        assert cfg.allow == []
-        assert cfg.deny == ["X"]
+        with pytest.raises(ValueError, match="must be a JSON list"):
+            load_permission_rules()
 
 
 class TestLayerUnion:
@@ -192,12 +202,11 @@ class TestLayerUnion:
         assert cfg.deny == ["Bash(rm -rf*)"]
         assert cfg.allow == ["Read"]
 
-    def test_one_bad_layer_does_not_break_the_union(self, tmp_path, monkeypatch):
+    def test_one_bad_layer_blocks_the_union(self, tmp_path, monkeypatch):
         good = tmp_path / "good.json"
         bad = tmp_path / "bad.json"
         _write(good, {"permissions": {"allow": ["Read"]}})
         bad.write_text("{not valid json", encoding="utf-8")
         monkeypatch.setattr(settings_source, "settings_paths", lambda cwd=None: [good, bad])
-        cfg = load_permission_rules()
-        assert cfg is not None
-        assert cfg.allow == ["Read"]
+        with pytest.raises(ValueError, match="malformed"):
+            load_permission_rules()

@@ -31,6 +31,7 @@ from mote.contracts.service import (
     ServiceCallRecovery,
     ServiceCallState,
     ServiceCallSuspendedRecord,
+    ServiceCancelCommand,
     ServiceCompleted,
     ServiceDecisionRecord,
     ServiceEndpointDescriptor,
@@ -701,7 +702,16 @@ class RuntimeServiceGateway:
     async def cancel(self, service_call_id: str) -> bool:
         if not self._journal.records(service_call_id):
             return False
-        await self._journal.request_cancel(service_call_id)
+        expected_revision = len(self._journal.records(service_call_id))
+        command_id = "svc-cancel-" + hashlib.sha256(f"{service_call_id}\0{expected_revision}".encode()).hexdigest()
+        await self._journal.request_cancel(
+            ServiceCancelCommand(
+                command_id=command_id,
+                service_call_id=service_call_id,
+                authority_id="runtime-service-gateway",
+                expected_stream_revision=expected_revision,
+            )
+        )
         lock = self._locks.setdefault(service_call_id, asyncio.Lock())
         try:
             async with lock:

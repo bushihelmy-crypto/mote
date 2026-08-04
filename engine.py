@@ -1,35 +1,49 @@
 """Public lifecycle and composition facade."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar, overload
 
 from mote.agent import Agent
+from mote.contracts.config.runtime_client import RuntimeClientActivationSpec
 from mote.contracts.tool import CommandProtocol
 from mote.kernel.output import OutputContract, text_output_contract
 from mote.model import Model
+from mote.product.agents.factory import RootAgentRequest
 from mote.product.composition.application import Application
 from mote.product.composition.container import ProductContainer
+from mote.product.composition.lifecycle import lifecycle_resources
 from mote.product.composition.model_reload import ApplicationReloadCoordinator
 from mote.product.composition.model_startup import install_initial_application_composition
 from mote.product.composition.service_gateway import builtin_service_gateway
 from mote.product.config.loader import load_config
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.product.paths import default_runtime_paths
 from mote.runtime.agent import Role, RoleSchema
+from mote.runtime.agent.role_state import RoleState
+from mote.runtime.agent.wiring import AgentDependencies, AgentWiring
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleResource
-from mote.runtime.engine import EngineState
+from mote.runtime.engine import EngineAgentRequest, EngineState
 from mote.runtime.models.clients.context import Context
 from mote.runtime.models.composition_context import CurrentRuntimeModelGateway
 from mote.runtime.models.failover import LocalModelCallJournal, model_call_journal_root
 from mote.runtime.resilience.admission import ResourceAdmissionController
 from mote.runtime.service_gateway import LocalServiceCallJournal, service_call_journal_root
 from mote.runtime.services import EngineServices
-from mote.runtime.tools.provider import AnyToolset
+from mote.runtime.tools.provider import ContextFreeToolset
 from mote.runtime.vcs import find_git_root
 
 DepsT = TypeVar("DepsT")
 OutputT = TypeVar("OutputT")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _PublicAgentRequest(EngineAgentRequest):
+    role_schema: RoleSchema
+    dependencies: AgentDependencies[Any, Any]
 
 
 class Engine:
@@ -56,15 +70,19 @@ class Engine:
             profile=profile,
             programmatic=selection.config_overlay() if selection is not None else None,
             user_config_root=paths.user_config_root,
-            source_root=paths.user_config_root,
         )
         container = ProductContainer.standard(config, cwd=root, paths=paths)
-        context = Context(config=config)
+        context = Context(
+            activation=RuntimeClientActivationSpec(
+                breaker=config.resilience.to_breaker_config(),
+                langfuse=config.observability.langfuse,
+            )
+        )
         admission = ResourceAdmissionController(breaker_config=config.resilience.to_breaker_config())
         context.model_operator = admission
         services = EngineServices(
             context=context,
-            resources=container.lifecycle_resources(),
+            resources=lifecycle_resources(container.routing_models),
         )
         self._cwd = str(root)
         self._startup_config = config
@@ -75,7 +93,6 @@ class Engine:
             profile=profile,
             programmatic=selection.config_overlay() if selection is not None else None,
             user_config_root=paths.user_config_root,
-            source_root=paths.user_config_root,
         )
         self._started = False
         self._runtime: Application[Role[Any, Any]] = Application(
@@ -98,10 +115,9 @@ class Engine:
         output_contract: OutputContract[OutputT],
         name: str = "Assistant",
         tools: Sequence[str] | None = None,
-        toolsets: Sequence[AnyToolset] | None = None,
+        toolsets: Sequence[ContextFreeToolset] | None = None,
         command_protocol: str | CommandProtocol = CommandProtocol.NATIVE,
-    ) -> Agent[DepsT, OutputT]:
-        ...
+    ) -> Agent[DepsT, OutputT]: ...
 
     @overload
     def agent(
@@ -111,10 +127,9 @@ class Engine:
         output_contract: None = None,
         name: str = "Assistant",
         tools: Sequence[str] | None = None,
-        toolsets: Sequence[AnyToolset] | None = None,
+        toolsets: Sequence[ContextFreeToolset] | None = None,
         command_protocol: str | CommandProtocol = CommandProtocol.NATIVE,
-    ) -> Agent[DepsT, str]:
-        ...
+    ) -> Agent[DepsT, str]: ...
 
     def agent(
         self,
@@ -123,7 +138,7 @@ class Engine:
         output_contract: OutputContract[Any] | None = None,
         name: str = "Assistant",
         tools: Sequence[str] | None = None,
-        toolsets: Sequence[AnyToolset] | None = None,
+        toolsets: Sequence[ContextFreeToolset] | None = None,
         command_protocol: str | CommandProtocol = CommandProtocol.NATIVE,
     ) -> Agent[Any, Any]:
         """Create a typed Agent without exposing Runtime construction details."""
@@ -151,9 +166,11 @@ class Engine:
                 declared.extend(toolset.tool_names())
             schema_kwargs["tools"] = list(dict.fromkeys(declared))
         role = self._runtime.agent(
-            name=name,
-            role_schema=RoleSchema(**schema_kwargs),
-            dependencies=dependencies,
+            _PublicAgentRequest(
+                name=name,
+                role_schema=RoleSchema(**schema_kwargs),
+                dependencies=dependencies,
+            )
         )
         return Agent._create(
             driver=role,
@@ -161,15 +178,25 @@ class Engine:
             is_open=lambda: self._runtime.state is EngineState.OPEN,
         )
 
-    def _build_role(self, **kwargs: Any) -> Role[Any, Any]:
-        role = self._runtime.container.agent_factory.build(
-            Role,
-            services=self._runtime.services,
-            **kwargs,
+    def _build_role(self, request: EngineAgentRequest) -> Role[Any, Any]:
+        if not isinstance(request, _PublicAgentRequest):
+            raise TypeError("public Engine requires its typed root Agent request")
+        state = RoleState(
+            working_dir=self._cwd,
+            original_working_dir=self._cwd,
+            project_root=find_git_root(self._cwd) or self._cwd,
         )
-        role.state.working_dir = self._cwd
-        role.state.original_working_dir = self._cwd
-        role.state.project_root = find_git_root(self._cwd) or self._cwd
+        role = self._runtime.container.agent_factory.root_builder(Role).build(
+            RootAgentRequest(
+                name=request.name,
+                role_schema=request.role_schema,
+                state=state,
+                wiring=AgentWiring(
+                    services=self._runtime.services,
+                    dependencies=request.dependencies,
+                ),
+            )
+        )
         return role
 
     async def aclose(self) -> None:
@@ -184,7 +211,10 @@ class Engine:
                 oauth_root=self._startup_paths.oauth_root,
                 cost_tracker=services.context.cost_manager,
                 admission_controller=services.context.model_operator,
-                model_call_journal=LocalModelCallJournal(model_call_journal_root(self._startup_paths.workspace_root)),
+                model_call_journal=LocalModelCallJournal(
+                    model_call_journal_root(self._startup_paths.workspace_root),
+                    policy=approved_model_checkpoint_policy(),
+                ),
             )
             services.application_composition = composition
             services.application_reloader = ApplicationReloadCoordinator(
@@ -194,7 +224,10 @@ class Engine:
                 oauth_root=self._startup_paths.oauth_root,
                 cost_tracker=services.context.cost_manager,
                 admission_controller=services.context.model_operator,
-                model_call_journal=LocalModelCallJournal(model_call_journal_root(self._startup_paths.workspace_root)),
+                model_call_journal=LocalModelCallJournal(
+                    model_call_journal_root(self._startup_paths.workspace_root),
+                    policy=approved_model_checkpoint_policy(),
+                ),
             )
             application_lease = await composition.acquire()
             try:

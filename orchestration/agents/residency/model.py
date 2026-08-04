@@ -62,7 +62,6 @@ class ResidencyRecord:
     record_revision: int
     materialization_fence: ResidencyFence
     state_snapshot: Mapping[str, JsonValue]
-    mailbox_snapshot: Mapping[str, JsonValue]
     message_buffer_snapshot: JsonValue
     lifecycle: ResidencyLifecycle = ResidencyLifecycle.MATERIALIZED
     install_fence: ResidencyFence | None = None
@@ -84,12 +83,10 @@ class ResidencyRecord:
         elif not isinstance(self.install_fence, ResidencyFence):
             raise ValueError("installing Residency record requires an install fence")
         state = freeze_json(self.state_snapshot, path="residency.state_snapshot")
-        mailbox = freeze_json(self.mailbox_snapshot, path="residency.mailbox_snapshot")
         messages = freeze_json(self.message_buffer_snapshot, path="residency.message_buffer_snapshot")
-        if not isinstance(state, Mapping) or not isinstance(mailbox, Mapping):
-            raise TypeError("Residency state and mailbox snapshots must be JSON objects")
+        if not isinstance(state, Mapping):
+            raise TypeError("Residency state snapshot must be a JSON object")
         object.__setattr__(self, "state_snapshot", cast(Mapping[str, JsonValue], state))
-        object.__setattr__(self, "mailbox_snapshot", cast(Mapping[str, JsonValue], mailbox))
         object.__setattr__(self, "message_buffer_snapshot", messages)
 
 

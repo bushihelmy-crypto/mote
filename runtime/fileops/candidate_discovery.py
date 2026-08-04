@@ -125,7 +125,7 @@ class CandidateDiscoveryService:
                 for raw_path in fields:
                     if not raw_path:
                         continue
-                    candidate = path_token(os.path.join(discovery_root, os.fsdecode(raw_path)))
+                    candidate = path_token(os.path.join(os.fsdecode(discovery_root), os.fsdecode(raw_path)))
                     if single_file and candidate.native != root.native:
                         continue
                     candidates.append(candidate)

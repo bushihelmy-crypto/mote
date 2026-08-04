@@ -39,7 +39,7 @@ def _sibling_temp(target, token: str):
         filename = b"." + basename + b".mote-" + token.encode("ascii") + b".tmp"
     else:
         filename = f".{basename}.mote-{token}.tmp"
-    return os.path.join(parent, filename)
+    return os.path.join(parent, filename)  # type: ignore[arg-type]  # bytes/str path branch is validated above
 
 
 def _sibling_tombstone(target, transaction_id: str):
@@ -50,7 +50,7 @@ def _sibling_tombstone(target, transaction_id: str):
         filename = b"." + basename + b".mote-delete-" + transaction_key.encode("ascii") + b".tombstone"
     else:
         filename = f".{basename}.mote-delete-{transaction_key}.tombstone"
-    return os.path.join(parent, filename)
+    return os.path.join(parent, filename)  # type: ignore[arg-type]  # bytes/str path branch is validated above
 
 
 def _fsync_parent(target) -> None:

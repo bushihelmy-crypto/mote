@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Hashable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Awaitable, Callable, Generic, TypeVar
 
 from mote.contracts.model.failover import (
     AttemptBudget,
@@ -22,18 +23,20 @@ from mote.runtime.telemetry.logging import log_class
 
 ResultT = TypeVar("ResultT")
 RequestT = TypeVar("RequestT")
-AttemptExecutor = Callable[[Any, RequestT], Awaitable[ResultT]]
-CredentialSelector = Callable[[Any], Any | None]
-EndpointSelector = Callable[[], Any | None]
+ProviderT = TypeVar("ProviderT")
+ProviderKeyT = TypeVar("ProviderKeyT", bound=Hashable)
+AttemptExecutor = Callable[[ProviderT, RequestT], Awaitable[ResultT]]
+CredentialSelector = Callable[[ProviderT], ProviderT | None]
+EndpointSelector = Callable[[], ProviderT | None]
 RequestTransformer = Callable[
-    [Any, RequestT, RequestTransform, FailureDisposition, Exception],
+    [ProviderT, RequestT, RequestTransform, FailureDisposition, Exception],
     Awaitable[RequestT | None],
 ]
 FailureClassifier = Callable[[Exception], FailureDisposition]
-ProviderKey = Callable[[Any], object]
-AdmissionAcquirer = Callable[[Any, float], AdmissionResult]
+ProviderKey = Callable[[ProviderT], ProviderKeyT]
+AdmissionAcquirer = Callable[[ProviderT, float], AdmissionResult]
 DecisionObserver = Callable[
-    [int, FailoverDecision, FailoverDecision, Any, Any],
+    [int, FailoverDecision, FailoverDecision, ProviderT, ProviderT],
     Awaitable[None],
 ]
 
@@ -52,30 +55,30 @@ def _budget_for_wire_limit(max_wire_attempts: int) -> AttemptBudget:
 
 
 @dataclass
-class _ModelCallState:
+class _ModelCallState(Generic[ProviderT, RequestT, ProviderKeyT]):
     """Mutable state owned by exactly one logical model call."""
 
-    provider: Any
-    request: Any
+    provider: ProviderT
+    request: RequestT
     started_at: float = field(default_factory=time.monotonic)
-    attempts_by_provider: dict[object, int] = field(default_factory=dict)
+    attempts_by_provider: dict[ProviderKeyT, int] = field(default_factory=dict)
     endpoint_switches: int = 0
     credential_rotations: int = 0
     request_transforms: int = 0
 
-    def record_attempt(self, key: object) -> None:
+    def record_attempt(self, key: ProviderKeyT) -> None:
         self.attempts_by_provider[key] = self.attempts_by_provider.get(key, 0) + 1
 
-    def attempts_on_provider(self, key: object) -> int:
+    def attempts_on_provider(self, key: ProviderKeyT) -> int:
         return self.attempts_by_provider.get(key, 0)
 
 
 @dataclass(frozen=True)
-class AttemptResumeSeed:
+class AttemptResumeSeed(Generic[ProviderKeyT]):
     """Durable budget consumption inherited by one resume generation."""
 
     wire_attempts: int = 0
-    attempts_by_provider: tuple[tuple[object, int], ...] = ()
+    attempts_by_provider: tuple[tuple[ProviderKeyT, int], ...] = ()
     endpoint_switches: int = 0
     credential_rotations: int = 0
     request_transforms: int = 0
@@ -83,7 +86,7 @@ class AttemptResumeSeed:
 
 
 @log_class(level="DEBUG")
-class AttemptOrchestrator:
+class AttemptOrchestrator(Generic[ProviderT, RequestT, ResultT, ProviderKeyT]):
     """Execute one immutable budget and one mutable ledger per logical call."""
 
     def __init__(
@@ -92,7 +95,7 @@ class AttemptOrchestrator:
         budget: AttemptBudget | None = None,
         policy: FailoverPolicy | None = None,
         classifier: FailureClassifier | None = None,
-        provider_key: ProviderKey | None = None,
+        provider_key: ProviderKey[ProviderT, ProviderKeyT],
         max_wire_attempts: int | None = None,
     ) -> None:
         if budget is not None and max_wire_attempts is not None:
@@ -104,20 +107,20 @@ class AttemptOrchestrator:
         self._budget = budget or AttemptBudget()
         self._policy = policy or DefaultFailoverPolicy()
         self._classifier = classifier or classify_failure
-        self._provider_key = provider_key or id
+        self._provider_key = provider_key
 
     async def run(
         self,
         *,
-        execute_once: AttemptExecutor[RequestT, ResultT],
-        primary: Any,
+        execute_once: AttemptExecutor[ProviderT, RequestT, ResultT],
+        primary: ProviderT,
         request: RequestT,
-        next_credential: CredentialSelector | None = None,
-        endpoint_selector_factory: Callable[[], EndpointSelector] | None = None,
-        request_transformer: RequestTransformer[RequestT] | None = None,
-        admit: AdmissionAcquirer | None = None,
-        resume_seed: AttemptResumeSeed | None = None,
-        observe_decision: DecisionObserver | None = None,
+        next_credential: CredentialSelector[ProviderT] | None = None,
+        endpoint_selector_factory: Callable[[], EndpointSelector[ProviderT]] | None = None,
+        request_transformer: RequestTransformer[ProviderT, RequestT] | None = None,
+        admit: AdmissionAcquirer[ProviderT] | None = None,
+        resume_seed: AttemptResumeSeed[ProviderKeyT] | None = None,
+        observe_decision: DecisionObserver[ProviderT] | None = None,
     ) -> ResultT:
         seed = resume_seed or AttemptResumeSeed()
         state = _ModelCallState(
@@ -230,10 +233,10 @@ class AttemptOrchestrator:
         attempt: int,
         exc: Exception,
         disposition: FailureDisposition,
-        state: _ModelCallState,
-        next_credential: CredentialSelector | None,
-        endpoint_selector: EndpointSelector | None,
-        request_transformer: RequestTransformer[Any] | None,
+        state: _ModelCallState[ProviderT, RequestT, ProviderKeyT],
+        next_credential: CredentialSelector[ProviderT] | None,
+        endpoint_selector: EndpointSelector[ProviderT] | None,
+        request_transformer: RequestTransformer[ProviderT, RequestT] | None,
     ) -> tuple[bool, FailoverDecision]:
         if decision.kind is DecisionKind.RETRY_SAME_ENDPOINT:
             if self._endpoint_attempt_limit_reached(state):
@@ -280,13 +283,13 @@ class AttemptOrchestrator:
             return self._switch_endpoint(state, endpoint_selector, decision.reason)
         return False, decision
 
-    def _endpoint_attempt_limit_reached(self, state: _ModelCallState) -> bool:
+    def _endpoint_attempt_limit_reached(self, state: _ModelCallState[ProviderT, RequestT, ProviderKeyT]) -> bool:
         return state.attempts_on_provider(self._provider_key(state.provider)) >= self._budget.max_attempts_per_endpoint
 
     def _switch_endpoint(
         self,
-        state: _ModelCallState,
-        endpoint_selector: EndpointSelector | None,
+        state: _ModelCallState[ProviderT, RequestT, ProviderKeyT],
+        endpoint_selector: EndpointSelector[ProviderT] | None,
         reason: str,
     ) -> tuple[bool, FailoverDecision]:
         switched = FailoverDecision(kind=DecisionKind.SWITCH_ENDPOINT, reason=reason)
@@ -301,7 +304,7 @@ class AttemptOrchestrator:
 
     async def _retry(
         self,
-        state: _ModelCallState,
+        state: _ModelCallState[ProviderT, RequestT, ProviderKeyT],
         attempt: int,
         exc: Exception,
         *,
@@ -317,9 +320,9 @@ class AttemptOrchestrator:
         await asyncio.sleep(delay)
         return True
 
-    def _remaining_seconds(self, state: _ModelCallState) -> float:
+    def _remaining_seconds(self, state: _ModelCallState[ProviderT, RequestT, ProviderKeyT]) -> float:
         elapsed = time.monotonic() - state.started_at
         return max(self._budget.total_deadline_seconds - elapsed, 0.0)
 
-    def _deadline_exhausted(self, state: _ModelCallState) -> bool:
+    def _deadline_exhausted(self, state: _ModelCallState[ProviderT, RequestT, ProviderKeyT]) -> bool:
         return self._remaining_seconds(state) <= 0.0

@@ -12,7 +12,7 @@ MODEL = ROOT / "orchestration/agents/residency/model.py"
 def test_residency_record_has_one_strict_versioned_owner() -> None:
     store = STORE.read_text(encoding="utf-8")
     model = MODEL.read_text(encoding="utf-8")
-    assert RESIDENCY_SCHEMA == "mote.agent-residency/v1"
+    assert RESIDENCY_SCHEMA == "mote.agent-residency/v2"
     for field in (
         "logical_agent_id",
         "root_agent_id",
@@ -38,7 +38,8 @@ def test_residency_uses_trusted_factory_and_canonical_lease_session_mailbox() ->
     assert "factory.build(record.state_snapshot)" in store
     assert "LeaseCoordinator" in store and "assert_current" in store
     assert "SessionLog" in store and "source_session_revision" in store
-    assert "Mailbox.load" in store
+    assert "Mailbox(session_id)" in store
+    assert "mailbox_snapshot" not in store
     assert "atomic_write" in store
     assert "migrate_legacy_record" not in store
     assert "upcast_legacy" not in store

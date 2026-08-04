@@ -50,11 +50,9 @@ class TracerBackend(Protocol):
         trace_id: str,
         label: str,
         attributes: dict,
-    ) -> Any:
-        ...
+    ) -> Any: ...
 
-    def end_span(self, handle: Any, *, status: str, error: str, attributes: dict) -> None:
-        ...
+    def end_span(self, handle: Any, *, status: str, error: str, attributes: dict) -> None: ...
 
     def start_generation(
         self,
@@ -65,8 +63,7 @@ class TracerBackend(Protocol):
         model: str,
         input: Any,
         metadata: dict,
-    ) -> Any:
-        ...
+    ) -> Any: ...
 
     def update_generation(
         self,
@@ -77,11 +74,9 @@ class TracerBackend(Protocol):
         metadata: Optional[dict] = None,
         level: Optional[str] = None,
         status_message: Optional[str] = None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    def end_generation(self, handle: Any) -> None:
-        ...
+    def end_generation(self, handle: Any) -> None: ...
 
 
 class TracingSubscriber:
@@ -121,7 +116,7 @@ class TracingSubscriber:
             parent_handle=self._spans.get(event.parent_span_id) if event.parent_span_id else None,
             trace_id=event.trace_id,
             label=event.label,
-            attributes=event.attributes,
+            attributes=dict(event.attributes),
         )
         self._spans[event.span_id] = handle
 
@@ -129,7 +124,7 @@ class TracingSubscriber:
         handle = self._spans.pop(event.span_id, None)
         if handle is None:
             return
-        self._backend.end_span(handle, status=event.status, error=event.error, attributes=event.attributes)
+        self._backend.end_span(handle, status=event.status, error=event.error, attributes=dict(event.attributes))
 
     # ------------------------------------------------------------ generations
     def _start_generation(self, event: ModelAttemptStartedEvent) -> None:

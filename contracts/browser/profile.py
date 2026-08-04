@@ -89,7 +89,10 @@ class BrowserStorageState:
         return {
             "cookies": [cookie.to_payload() for cookie in self.cookies],
             "origins": [
-                {"origin": origin.origin, "localStorage": [entry.__dict__ for entry in origin.local_storage]}
+                {
+                    "origin": origin.origin,
+                    "localStorage": [{"name": entry.name, "value": entry.value} for entry in origin.local_storage],
+                }
                 for origin in self.origins
             ],
         }
@@ -163,6 +166,14 @@ class BrowserProfileConflictError(BrowserProfileError):
 
 
 __all__ = [
-    *[name for name in globals() if name.startswith("Browser")],
+    "BrowserCookie",
+    "BrowserLocalStorageEntry",
+    "BrowserOriginState",
+    "BrowserStorageState",
+    "BrowserProfileSnapshot",
+    "BrowserProfileCommitReceipt",
+    "BrowserProfileError",
+    "BrowserProfileNotFoundError",
+    "BrowserProfileConflictError",
     "decode_browser_storage_state",
 ]

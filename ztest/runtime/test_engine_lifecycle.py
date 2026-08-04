@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from mote.kernel.output import text_output_contract
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleResource
 from mote.runtime.engine import Engine, EngineAgentRequest, EngineState
@@ -263,6 +264,7 @@ def test_agent_wiring_freezes_product_collections() -> None:
     source = {"rule": lambda: policy}
     wiring = AgentWiring(
         dependencies=CodingAgentFactory(
+            model_checkpoint_policy=approved_model_checkpoint_policy(),
             routing_strategy_builders_factory=lambda: source,
         ).dependencies(deps=None, output_contract=text_output_contract(), toolsets=())
     )

@@ -20,6 +20,11 @@ class _Event:
     name: str = "test.event"
 
 
+@dataclass(frozen=True)
+class _SubEvent(_Event):
+    pass
+
+
 def _binding(
     identity: str,
     handler,
@@ -170,6 +175,7 @@ async def test_typed_binding_filters_both_paths_and_skips_missing_sync_handler()
     )
 
     await runtime.emit(object())
+    await runtime.emit(_SubEvent(0))
     await runtime.emit(_Event(1))
     runtime.emit_sync(_Event(2))
     await runtime.drain()

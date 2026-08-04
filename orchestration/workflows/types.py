@@ -19,13 +19,39 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable, Coroutine, Optional, Sequence
+from typing import TYPE_CHECKING, Awaitable, Callable, Generic, Optional, Protocol, TypedDict, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import TypeForm
 
 from mote.contracts.task.status import ExecutionStatusProjection, ExecutionStatusSource
 from mote.orchestration.workflows.control import WorkflowPause
+from mote.orchestration.workflows.deferred import WorkflowDeferredResult
+
+if TYPE_CHECKING:
+    from mote.orchestration.workflows.graph import WorkflowBuilder
+
+
+class WorkflowDeferredExecutor(Protocol):
+    """Process-local executor produced by one compiled Workflow definition."""
+
+    async def __call__(self, **initial_state: object) -> WorkflowDeferredResult[GraphState | GraphPause]: ...
+
+
+StageResultT_co = TypeVar("StageResultT_co", covariant=True)
+WorkflowStateUpdate = Mapping[str, object] | None
+WorkflowNodeCallable = Callable[["GraphState"], Awaitable["Stage[WorkflowStateUpdate]"]]
+
+
+NodeParameterSpec = TypedDict(
+    "NodeParameterSpec",
+    {
+        "from": str,
+        "desc": str,
+        "type": TypeForm[object] | None,
+    },
+)
 
 # ---------------------------------------------------------------------------
 # Sentinels / well-known node names
@@ -120,33 +146,21 @@ class GraphRunState:
     activity_execution_id: str = field(default_factory=lambda: uuid4().hex)
 
     @classmethod
-    def for_graph(cls, graph: Any) -> "GraphRunState":
+    def for_graph(cls, graph: "WorkflowBuilder") -> "GraphRunState":
         """Build an empty run state with a PENDING record per declared node."""
         return cls(records={name: NodeRecord(name=name) for name in graph._nodes})
 
     @classmethod
-    def infer_from_state(cls, graph: Any, state: Any) -> "GraphRunState":
-        """Empty (all-PENDING) run state for a task that has no recorded one.
-
-        With the field/channel state model, node results are merged into state
-        *fields* (not stored under the node's own name), so completion can no
-        longer be inferred from ``getattr(state, node) is not None``. Live runs
-        always carry an authoritative ``GraphRunState``; this fallback only
-        bridges callers without one, and yields an empty record set.
-        """
-        return cls.for_graph(graph)
-
-    @classmethod
-    def ensure(cls, graph: Any, state: Any, run_state: Optional["GraphRunState"]) -> "GraphRunState":
-        """Return *run_state* when present, else infer one (fallback).
-
-        Live runs always thread their authoritative ``run_state`` in; this only
-        bridges callers (snapshots / tests) that have none, recovering a
-        best-effort state via :meth:`infer_from_state`.
-        """
+    def ensure(
+        cls,
+        graph: "WorkflowBuilder",
+        _state: "GraphState",
+        run_state: Optional["GraphRunState"],
+    ) -> "GraphRunState":
+        """Return the authoritative run state or create it from the definition."""
         if run_state is not None:
             return run_state
-        return cls.infer_from_state(graph, state)
+        return cls.for_graph(graph)
 
     def get(self, name: str) -> NodeRecord:
         rec = self.records.get(name)
@@ -155,11 +169,11 @@ class GraphRunState:
             self.records[name] = rec
         return rec
 
-    def completed_names(self) -> set:
+    def completed_names(self) -> set[str]:
         """Nodes that are authoritatively done (succeeded or skipped)."""
         return {n for n, r in self.records.items() if r.status in _TERMINAL_DONE}
 
-    def running_names(self) -> list:
+    def running_names(self) -> list[str]:
         return [n for n, r in self.records.items() if r.status == WorkflowNodeStatus.RUNNING]
 
     def mark_running(self, name: str) -> None:
@@ -188,7 +202,7 @@ class GraphRunState:
     def mark_failed(
         self,
         name: str,
-        error: Any,
+        error: BaseException,
         *,
         retries_attempted: int = 0,
         retries_limit: int = 0,
@@ -224,22 +238,17 @@ class GraphRunState:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class Stage:
-    """Describes how a single node executes (submit → optional poll)."""
+class Stage(Generic[StageResultT_co]):
+    """One node operation with its await-result relationship sealed at construction."""
 
-    submit: Coroutine
-    """Submit action. Awaited immediately; its value is fed to ``poll`` (if any)."""
+    def __init__(self, *, submit: Awaitable[StageResultT_co]) -> None:
+        async def execute() -> StageResultT_co:
+            return await submit
 
-    poll: Optional[Callable[[Any], Coroutine]] = None
-    """Poll factory. ``None`` = synchronous node (submit result is final);
-    otherwise it receives the submit result and returns a polling coroutine."""
+        self._execute = execute
 
-    name: Optional[str] = None
-    """Optional stage name (logging / error notifications)."""
-
-    timeout: Optional[float] = None
-    """Per-stage timeout (seconds) for the poll coroutine. ``None`` = no bound."""
+    async def execute(self) -> StageResultT_co:
+        return await self._execute()
 
 
 class GraphState(BaseModel):
@@ -252,12 +261,11 @@ class GraphState(BaseModel):
     ``Annotated[list, operator.add]`` appends); a plain field is last-value
     (most recent write wins).
 
-    ``extra="allow"`` is kept so a node may also write undeclared keys (they
-    land last-value in ``__pydantic_extra__``); declaring the field is preferred
-    so reducers and type/introspection apply.
+    Every writable key must be declared by the compiled definition. Assignment
+    is validated so a bad node result fails before it can enter run state.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
 # ---------------------------------------------------------------------------
@@ -276,10 +284,10 @@ class _NodeDef:
     """
 
     name: str
-    fn: Callable[[GraphState], Awaitable[Stage]]
+    fn: WorkflowNodeCallable
     implementation_id: str = ""
     description: str = ""
-    params: dict[str, dict] = field(default_factory=dict)
+    params: dict[str, NodeParameterSpec] = field(default_factory=dict)
 
 
 @dataclass
@@ -322,14 +330,3 @@ class _LlmEdge:
     from_node: str
     prompt: str
     mapping: dict[str, str]  # route_key → target_node
-
-
-def _as_list(val: Any) -> list:
-    """Normalize ``None`` / ``str`` / sequence into a list."""
-    if val is None:
-        return []
-    if isinstance(val, str):
-        return [val]
-    if isinstance(val, Sequence):
-        return list(val)
-    return [val]

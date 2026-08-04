@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from mote.contracts.events.inference import ModelCacheDegraded, ModelCacheHitRecord
+from mote.contracts.model.failover import EndpointDescriptor
 from mote.contracts.model.invocation import (
     CanonicalModelResponse,
     GenerateInput,
@@ -13,8 +14,13 @@ from mote.contracts.model.invocation import (
     ResponseMode,
 )
 from mote.contracts.model.operations import ModelOperation
+from mote.contracts.model.topology import RouteId
+from mote.contracts.ports.artifact.store import ArtifactResolver
 from mote.contracts.ports.inference.cache import InferenceCache
 from mote.contracts.ports.model.gateway import ModelGateway
+from mote.contracts.ports.model.recovery import ModelRecoveryInspection
+from mote.contracts.ports.model.request_transformer import ModelRequestTransformer
+from mote.contracts.ports.session.facts import SessionFactSink
 from mote.runtime.events.context import observe_event_sync
 from mote.runtime.inference.cache import ExactCacheIdentity, exact_cache_key
 
@@ -39,18 +45,35 @@ class ExactCachedModelGateway:
         self._ttl_seconds = ttl_seconds
         self._sensitive_data_allowed = sensitive_data_allowed
 
-    def supports_route(self, route_id):
+    def supports_route(self, route_id: RouteId) -> bool:
         return self._gateway.supports_route(route_id)
 
-    def route_profile(self, route_id):
+    def route_profile(self, route_id: RouteId) -> EndpointDescriptor | None:
         return self._gateway.route_profile(route_id)
 
-    def route_profiles(self, route_id):
+    def route_profiles(self, route_id: RouteId) -> tuple[EndpointDescriptor, ...]:
         return self._gateway.route_profiles(route_id)
 
-    async def execute(self, invocation: ModelInvocation, **kwargs) -> ResolvedModelResponse:
-        if not self._cacheable(invocation, stream=kwargs.get("stream", False)):
-            return await self._gateway.execute(invocation, **kwargs)
+    def inspect_recovery(self, model_call_id: str) -> ModelRecoveryInspection:
+        return self._gateway.inspect_recovery(model_call_id)
+
+    async def execute(
+        self,
+        invocation: ModelInvocation,
+        *,
+        request_transformer: ModelRequestTransformer | None = None,
+        stream: bool = False,
+        session_fact_sink: SessionFactSink | None = None,
+        artifact_resolver: ArtifactResolver | None = None,
+    ) -> ResolvedModelResponse:
+        if not self._cacheable(invocation, stream=stream):
+            return await self._gateway.execute(
+                invocation,
+                request_transformer=request_transformer,
+                stream=stream,
+                session_fact_sink=session_fact_sink,
+                artifact_resolver=artifact_resolver,
+            )
         key = exact_cache_key(self._identity, invocation)
         now = datetime.now(timezone.utc)
         try:
@@ -68,7 +91,13 @@ class ExactCachedModelGateway:
                 )
             )
             return self._resolved_cache_hit(invocation, cached)
-        response = await self._gateway.execute(invocation, **kwargs)
+        response = await self._gateway.execute(
+            invocation,
+            request_transformer=request_transformer,
+            stream=stream,
+            session_fact_sink=session_fact_sink,
+            artifact_resolver=artifact_resolver,
+        )
         canonical = CanonicalModelResponse(
             output=response.output,
             usage=response.usage,
@@ -86,8 +115,22 @@ class ExactCachedModelGateway:
             observe_event_sync(ModelCacheDegraded(operation="put", cache_kind="exact", error_code=type(exc).__name__))
         return response
 
-    async def resume(self, invocation: ModelInvocation, **kwargs) -> ResolvedModelResponse:
-        return await self._gateway.resume(invocation, **kwargs)
+    async def resume(
+        self,
+        invocation: ModelInvocation,
+        *,
+        request_transformer: ModelRequestTransformer | None = None,
+        stream: bool = False,
+        session_fact_sink: SessionFactSink | None = None,
+        artifact_resolver: ArtifactResolver | None = None,
+    ) -> ResolvedModelResponse:
+        return await self._gateway.resume(
+            invocation,
+            request_transformer=request_transformer,
+            stream=stream,
+            session_fact_sink=session_fact_sink,
+            artifact_resolver=artifact_resolver,
+        )
 
     def _cacheable(self, invocation: ModelInvocation, *, stream: bool) -> bool:
         if stream or invocation.operation is not ModelOperation.GENERATE:
@@ -125,8 +168,7 @@ class ExactCachedModelGateway:
             provider="cache",
             transport="none",
             model_call_id=invocation.model_call_id,
-            successful_attempt_id="",
-            summary={"cache": "exact_hit", "provider_request_id": None},
+            successful_attempt_id=None,
         )
 
 

@@ -15,9 +15,9 @@ from mote.orchestration.automation.cron.task import (
 )
 
 
-def test_new_mints_8_hex_id():
+def test_new_mints_128_bit_hex_id():
     task = CronTask.new("* * * * *", "ping", 1000)
-    assert len(task.id) == 8
+    assert len(task.id) == 32
     int(task.id, 16)  # parses as hex
 
 
@@ -41,6 +41,7 @@ def test_to_dict_has_exact_canonical_shape():
         "revision": 0,
         "cron": "* * * * *",
         "prompt": "ping",
+        "prompt_artifact_ref": None,
         "created_at": 1000,
         "last_fired_at": None,
         "recurring": False,

@@ -8,6 +8,7 @@ import hmac
 import os
 import stat
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from secrets import token_bytes
 from typing import Mapping
@@ -28,7 +29,13 @@ from mote.product.models.secrets import (
     SecretIdentity,
 )
 from mote.runtime.models.auth.oauth.manager import OAuthManager
-from mote.runtime.process import FixedExecutableBinding, ProcessDisposition, run_verified_fixed_argv
+from mote.runtime.models.auth.oauth.storage.base import CredentialBorrow
+from mote.runtime.process import (
+    FixedExecutableBinding,
+    FixedProcessEnvironment,
+    ProcessDisposition,
+    run_verified_fixed_argv,
+)
 from mote.runtime.telemetry.logging import logger
 
 _EPOCH_KEY = token_bytes(32)
@@ -173,7 +180,11 @@ class ProductCredentialSourceCatalog:
                 slot_id=slot_id,
                 identity=identity,
                 epoch=self.describe((source_id,))[0].epoch,
-                manager=OAuthManager(source.config, provider=source.provider),
+                manager=OAuthManager(
+                    source.config,
+                    provider=source.provider,
+                    consumer_id=f"model-endpoint:{endpoint_id}:slot:{slot_id}",
+                ),
                 force_refresh=slot_id.endswith("oauth-refresh"),
             )
         if isinstance(source, _HelperSource):
@@ -190,7 +201,7 @@ class ProductCredentialSourceCatalog:
                 ),
                 source.argv[1:],
                 working_dir=str(self._oauth_root.parent),
-                env={},
+                env=FixedProcessEnvironment(),
                 timeout=_HELPER_TIMEOUT_SECONDS,
                 max_output_bytes=_HELPER_MAX_OUTPUT_BYTES,
             )
@@ -226,17 +237,36 @@ class _OAuthCredentialLease:
     def __init__(self, handle: "OAuthSecretHandle") -> None:
         self._handle = handle
         self._released = False
+        self._borrow: CredentialBorrow | None = None
 
     async def resolve(self) -> CredentialMaterial:
         if self._released:
             raise RuntimeError("credential lease is released")
-        token = await asyncio.to_thread(self._handle._resolve)
-        return CredentialMaterial(self._handle._endpoint_id, self._handle._slot_id, token)
+        if self._borrow is None:
+            if self._handle._force_refresh:
+                refreshed = await asyncio.to_thread(self._handle._manager.force_refresh)
+                if refreshed is None:
+                    raise RuntimeError("OAuth credential refresh failed")
+            self._borrow = await asyncio.to_thread(
+                self._handle._manager.acquire_valid_borrow,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+            )
+        borrow = self._borrow
+        if borrow is None:
+            raise RuntimeError("OAuth credential borrow was not established")
+        return CredentialMaterial(
+            self._handle._endpoint_id,
+            self._handle._slot_id,
+            borrow.token.access_token,
+        )
 
     async def refresh(self) -> CredentialMaterial:
         return await self.resolve()
 
     async def release(self) -> None:
+        if self._borrow is not None:
+            await asyncio.to_thread(self._handle._manager.release_borrow, self._borrow)
+            self._borrow = None
         self._released = True
 
 
@@ -273,14 +303,6 @@ class OAuthSecretHandle:
     @property
     def epoch(self) -> CredentialEpoch:
         return self._epoch
-
-    def _resolve(self) -> str:
-        if self._force_refresh:
-            token = self._manager.force_refresh()
-            if token is None:
-                raise RuntimeError("OAuth credential refresh failed")
-            return token.access_token
-        return self._manager.get_valid_token()
 
     async def acquire(self) -> _OAuthCredentialLease:
         if self._closed:

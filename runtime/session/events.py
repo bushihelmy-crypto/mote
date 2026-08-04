@@ -21,13 +21,15 @@ dict) so they round-trip losslessly through ``Message.load()`` on resume.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
-from mote.contracts.conversation import Message
+from mote.contracts.conversation import Message, decode_message, encode_message
 from mote.contracts.events.conversation import PROMPT_REJECTED, PromptRejectedEvent
+from mote.contracts.events.envelope import JsonValue, freeze_json, thaw_json
 from mote.contracts.events.file.facts import (
     FILE_EDIT_PLAN_STORED,
     FILE_HISTORY_IMPORTED,
@@ -83,22 +85,85 @@ from mote.contracts.runtime import (
     RuntimeProjectionAck,
     RuntimeProjectionIntent,
 )
-from mote.contracts.runtime.handoff import RuntimeHandoffIntent, RuntimeHandoffResolution
+from mote.contracts.runtime.handoff import (
+    RuntimeHandoffIntent,
+    RuntimeHandoffResolution,
+    RuntimeHandoffResolutionStatus,
+)
 from mote.contracts.tool import ToolsetManifest, parse_toolset_manifest
-
-
-def _dataclass_kwargs(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate that ``payload`` exactly matches fields owned by ``cls``."""
-    names = {f.name for f in fields(cls)}
-    if set(payload) != names:
-        raise ValueError(f"{cls.__name__} payload fields must be exactly {sorted(names)!r}")
-    return dict(payload)
 
 
 def _require_keys(payload: Dict[str, Any], names: set[str], owner: str) -> Dict[str, Any]:
     if set(payload) != names:
         raise ValueError(f"{owner} payload fields must be exactly {sorted(names)!r}")
     return payload
+
+
+def _require_str(payload: Dict[str, Any], name: str, owner: str) -> str:
+    value = payload[name]
+    if type(value) is not str:
+        raise TypeError(f"{owner}.{name} must be a string")
+    return value
+
+
+def _require_int(payload: Dict[str, Any], name: str, owner: str) -> int:
+    value = payload[name]
+    if type(value) is not int:
+        raise TypeError(f"{owner}.{name} must be an integer")
+    return value
+
+
+def _require_bool(payload: Dict[str, Any], name: str, owner: str) -> bool:
+    value = payload[name]
+    if type(value) is not bool:
+        raise TypeError(f"{owner}.{name} must be a boolean")
+    return value
+
+
+def _require_float(payload: Dict[str, Any], name: str, owner: str) -> float:
+    value = payload[name]
+    if type(value) not in (int, float) or type(value) is bool:
+        raise TypeError(f"{owner}.{name} must be a number")
+    return float(value)
+
+
+def _require_optional_str(payload: Dict[str, Any], name: str, owner: str) -> Optional[str]:
+    value = payload[name]
+    if value is not None and type(value) is not str:
+        raise TypeError(f"{owner}.{name} must be a string or null")
+    return value
+
+
+def _require_optional_object(payload: Dict[str, Any], name: str, owner: str) -> Optional[Dict[str, Any]]:
+    value = payload[name]
+    if value is None:
+        return None
+    return _require_object(payload, name, owner)
+
+
+def _require_str_list(payload: Dict[str, Any], name: str, owner: str) -> list[str]:
+    value = payload[name]
+    if type(value) is not list or any(type(item) is not str for item in value):
+        raise TypeError(f"{owner}.{name} must be a list of strings")
+    return value
+
+
+def _require_object(payload: Dict[str, Any], name: str, owner: str) -> Dict[str, Any]:
+    value = payload[name]
+    if type(value) is not dict or any(type(key) is not str for key in value):
+        raise TypeError(f"{owner}.{name} must be an object")
+    return value
+
+
+def _decode_options(value: object, *, owner: str) -> tuple[tuple[str, str], ...]:
+    if type(value) is not list:
+        raise TypeError(f"{owner} must be a list")
+    decoded: list[tuple[str, str]] = []
+    for item in value:
+        if type(item) is not list or len(item) != 2 or any(type(part) is not str for part in item):
+            raise TypeError(f"{owner} entries must be string pairs")
+        decoded.append((item[0], item[1]))
+    return tuple(decoded)
 
 
 _RUNTIME_CHECKPOINT_FIELDS = {
@@ -166,12 +231,12 @@ def _message_to_payload(message: Message) -> Dict[str, Any]:
     serializers as :meth:`Message.dump`), so we skip the ``dump``→``json.loads``
     string round-trip.
     """
-    return message.model_dump(mode="json", exclude_none=True, warnings=False)
+    return encode_message(message)
 
 
 def _payload_to_message(payload: Dict[str, Any]) -> Message:
     """Reconstruct one current Message payload."""
-    return Message.from_dict(payload)
+    return decode_message(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -217,15 +282,49 @@ class SessionMetaEvent:
     type = SESSION_META
 
     def payload(self) -> Dict[str, Any]:
-        payload = asdict(self)
-        payload["toolset_manifest"] = [identity.to_payload() for identity in self.toolset_manifest]
-        return payload
+        return {
+            "session_id": self.session_id,
+            "role_class": self.role_class,
+            "toolset_manifest": [identity.to_payload() for identity in self.toolset_manifest],
+            "schema_version": self.schema_version,
+            "parent_session_id": self.parent_session_id,
+            "created_at": self.created_at,
+            "working_dir": self.working_dir,
+            "original_working_dir": self.original_working_dir,
+            "project_root": self.project_root,
+            "model": self.model,
+        }
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "SessionMetaEvent":
-        values = _dataclass_kwargs(cls, payload)
-        values["toolset_manifest"] = parse_toolset_manifest(values["toolset_manifest"])
-        return cls(**values)
+        _require_keys(
+            payload,
+            {
+                "session_id",
+                "role_class",
+                "toolset_manifest",
+                "schema_version",
+                "parent_session_id",
+                "created_at",
+                "working_dir",
+                "original_working_dir",
+                "project_root",
+                "model",
+            },
+            cls.__name__,
+        )
+        return cls(
+            session_id=_require_str(payload, "session_id", cls.__name__),
+            role_class=_require_str(payload, "role_class", cls.__name__),
+            toolset_manifest=parse_toolset_manifest(payload["toolset_manifest"]),
+            schema_version=_require_int(payload, "schema_version", cls.__name__),
+            parent_session_id=_require_optional_str(payload, "parent_session_id", cls.__name__),
+            created_at=_require_str(payload, "created_at", cls.__name__),
+            working_dir=_require_str(payload, "working_dir", cls.__name__),
+            original_working_dir=_require_str(payload, "original_working_dir", cls.__name__),
+            project_root=_require_str(payload, "project_root", cls.__name__),
+            model=_require_optional_str(payload, "model", cls.__name__),
+        )
 
 
 @dataclass
@@ -272,13 +371,16 @@ class ContextCompactedFact:
             {"model_context", "source_message_ids", "summary", "strategy", "trigger"},
             cls.__name__,
         )
-        messages = [_payload_to_message(item) for item in payload["model_context"]]
+        raw_messages = payload["model_context"]
+        if type(raw_messages) is not list or any(type(item) is not dict for item in raw_messages):
+            raise TypeError(f"{cls.__name__}.model_context must be a list of objects")
+        messages = [_payload_to_message(item) for item in raw_messages]
         return cls(
             model_context_messages=messages,
-            source_message_ids=[str(message_id) for message_id in payload["source_message_ids"]],
-            summary=str(payload["summary"]),
-            strategy=str(payload["strategy"]),
-            trigger=str(payload["trigger"]),
+            source_message_ids=_require_str_list(payload, "source_message_ids", cls.__name__),
+            summary=_require_str(payload, "summary", cls.__name__),
+            strategy=_require_str(payload, "strategy", cls.__name__),
+            trigger=_require_str(payload, "trigger", cls.__name__),
         )
 
 
@@ -303,9 +405,9 @@ class HistoryEditedFact:
     def from_payload(cls, payload: Dict[str, Any]) -> "HistoryEditedFact":
         _require_keys(payload, {"removed_message_ids", "clear_all", "reason"}, cls.__name__)
         return cls(
-            removed_message_ids=[str(message_id) for message_id in payload["removed_message_ids"]],
-            clear_all=payload["clear_all"],
-            reason=str(payload["reason"]),
+            removed_message_ids=_require_str_list(payload, "removed_message_ids", cls.__name__),
+            clear_all=_require_bool(payload, "clear_all", cls.__name__),
+            reason=_require_str(payload, "reason", cls.__name__),
         )
 
 
@@ -316,21 +418,34 @@ class TurnContextEvent:
     turn_id: str
     working_dir: str = ""
     model: Optional[str] = None
-    token_state: Optional[Dict[str, Any]] = None
+    token_state: Optional[Mapping[str, JsonValue]] = None
 
     type = TURN_CONTEXT
+
+    def __post_init__(self) -> None:
+        if self.token_state is not None:
+            frozen = freeze_json(self.token_state, path="turn context token state")
+            if not isinstance(frozen, Mapping):
+                raise TypeError("turn context token state must be an object")
+            self.token_state = cast(Mapping[str, JsonValue], frozen)
 
     def payload(self) -> Dict[str, Any]:
         return {
             "turn_id": self.turn_id,
             "working_dir": self.working_dir,
             "model": self.model,
-            "token_state": self.token_state,
+            "token_state": (thaw_json(cast(JsonValue, self.token_state)) if self.token_state is not None else None),
         }
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "TurnContextEvent":
-        return cls(**_dataclass_kwargs(cls, payload))
+        _require_keys(payload, {"turn_id", "working_dir", "model", "token_state"}, cls.__name__)
+        return cls(
+            turn_id=_require_str(payload, "turn_id", cls.__name__),
+            working_dir=_require_str(payload, "working_dir", cls.__name__),
+            model=_require_optional_str(payload, "model", cls.__name__),
+            token_state=_require_optional_object(payload, "token_state", cls.__name__),
+        )
 
 
 @dataclass
@@ -347,7 +462,11 @@ class MetaUpdateEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "MetaUpdateEvent":
-        return cls(**_dataclass_kwargs(cls, payload))
+        _require_keys(payload, {"title", "last_prompt"}, cls.__name__)
+        return cls(
+            title=_require_optional_str(payload, "title", cls.__name__),
+            last_prompt=_require_optional_str(payload, "last_prompt", cls.__name__),
+        )
 
 
 @dataclass
@@ -392,7 +511,18 @@ class CheckpointEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "CheckpointEvent":
-        return cls(**_dataclass_kwargs(cls, payload))
+        _require_keys(
+            payload,
+            {"commit", "prompt_index", "prompt_preview", "working_dir", "after_commit"},
+            cls.__name__,
+        )
+        return cls(
+            commit=_require_str(payload, "commit", cls.__name__),
+            prompt_index=_require_int(payload, "prompt_index", cls.__name__),
+            prompt_preview=_require_str(payload, "prompt_preview", cls.__name__),
+            working_dir=_require_str(payload, "working_dir", cls.__name__),
+            after_commit=_require_str(payload, "after_commit", cls.__name__),
+        )
 
 
 @dataclass
@@ -407,18 +537,25 @@ class LLMCallEvent:
 
     request_id: str = ""
     model: Optional[str] = None
-    usage: Optional[Dict[str, Any]] = None
+    usage: Optional[Mapping[str, JsonValue]] = None
     cost_usd: float = 0.0
     latency_ms: float = 0.0
     summary: Optional[ModelCallSummary] = None
 
     type = LLM_CALL
 
+    def __post_init__(self) -> None:
+        if self.usage is not None:
+            frozen = freeze_json(self.usage, path="llm call usage")
+            if not isinstance(frozen, Mapping):
+                raise TypeError("llm call usage must be an object")
+            self.usage = cast(Mapping[str, JsonValue], frozen)
+
     def payload(self) -> Dict[str, Any]:
         payload = {
             "request_id": self.request_id,
             "model": self.model,
-            "usage": self.usage,
+            "usage": thaw_json(cast(JsonValue, self.usage)) if self.usage is not None else None,
             "cost_usd": self.cost_usd,
             "latency_ms": self.latency_ms,
             "summary": (self.summary.model_dump(mode="json") if self.summary is not None else None),
@@ -427,22 +564,40 @@ class LLMCallEvent:
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "LLMCallEvent":
-        values = _dataclass_kwargs(cls, payload)
-        summary = values.get("summary")
-        if isinstance(summary, dict):
-            values["summary"] = ModelCallSummary.model_validate(summary)
-        return cls(**values)
+        _require_keys(
+            payload,
+            {"request_id", "model", "usage", "cost_usd", "latency_ms", "summary"},
+            cls.__name__,
+        )
+        raw_summary = payload["summary"]
+        if raw_summary is not None and type(raw_summary) is not dict:
+            raise TypeError(f"{cls.__name__}.summary must be an object or null")
+        return cls(
+            request_id=_require_str(payload, "request_id", cls.__name__),
+            model=_require_optional_str(payload, "model", cls.__name__),
+            usage=_require_optional_object(payload, "usage", cls.__name__),
+            cost_usd=_require_float(payload, "cost_usd", cls.__name__),
+            latency_ms=_require_float(payload, "latency_ms", cls.__name__),
+            summary=ModelCallSummary.model_validate(raw_summary, strict=True) if raw_summary is not None else None,
+        )
 
 
 @dataclass
 class RoutingDecisionFact:
     """Recoverable semantic routing state transition and audit record."""
 
-    decision: Dict[str, Any]
-    state: Dict[str, Any]
+    decision: Mapping[str, JsonValue]
+    state: Mapping[str, JsonValue]
     route_schema_version: int = 2
 
     type = ROUTING_DECISION_FACT
+
+    def __post_init__(self) -> None:
+        for name in ("decision", "state"):
+            frozen = freeze_json(getattr(self, name), path=f"routing fact {name}")
+            if not isinstance(frozen, Mapping):
+                raise TypeError(f"routing fact {name} must be an object")
+            setattr(self, name, cast(Mapping[str, JsonValue], frozen))
 
     def payload(self) -> Dict[str, Any]:
         return {
@@ -455,9 +610,9 @@ class RoutingDecisionFact:
     def from_payload(cls, payload: Dict[str, Any]) -> "RoutingDecisionFact":
         _require_keys(payload, {"decision", "state", "route_schema_version"}, cls.__name__)
         return cls(
-            decision=dict(payload["decision"]),
-            state=dict(payload["state"]),
-            route_schema_version=int(payload["route_schema_version"]),
+            decision=dict(_require_object(payload, "decision", cls.__name__)),
+            state=dict(_require_object(payload, "state", cls.__name__)),
+            route_schema_version=_require_int(payload, "route_schema_version", cls.__name__),
         )
 
 
@@ -582,18 +737,18 @@ class RuntimeCommitEvent:
             )
         return cls(
             fact=RuntimeCommitFact(
-                commit_id=str(payload["commit_id"]),
+                commit_id=_require_str(payload, "commit_id", cls.__name__),
                 checkpoint=_decode_runtime_checkpoint(checkpoint, owner=f"{cls.__name__}.checkpoint"),
                 projections=tuple(
                     RuntimeProjectionIntent(
-                        intent_id=str(item["intent_id"]),
-                        projector=str(item["projector"]),
-                        schema_version=int(item["schema_version"]),
-                        options=tuple((str(option[0]), str(option[1])) for option in item["options"]),
+                        intent_id=_require_str(item, "intent_id", f"{cls.__name__}.projection"),
+                        projector=_require_str(item, "projector", f"{cls.__name__}.projection"),
+                        schema_version=_require_int(item, "schema_version", f"{cls.__name__}.projection"),
+                        options=_decode_options(item["options"], owner=f"{cls.__name__}.projection.options"),
                     )
                     for item in payload["projections"]
                 ),
-                reason=str(payload["reason"]),
+                reason=_require_str(payload, "reason", cls.__name__),
             )
         )
 
@@ -624,11 +779,11 @@ class RuntimeProjectionAcknowledgedEvent:
         )
         return cls(
             ack=RuntimeProjectionAck(
-                commit_id=str(payload["commit_id"]),
-                intent_id=str(payload["intent_id"]),
-                status=str(payload["status"]),
-                error=str(payload["error"]),
-                attempts=int(payload["attempts"]),
+                commit_id=_require_str(payload, "commit_id", cls.__name__),
+                intent_id=_require_str(payload, "intent_id", cls.__name__),
+                status=RuntimeHandoffResolutionStatus(payload["status"]),
+                error=_require_str(payload, "error", cls.__name__),
+                attempts=_require_int(payload, "attempts", cls.__name__),
             )
         )
 
@@ -725,23 +880,23 @@ class RuntimeOperationPreparedEvent:
             )
         return cls(
             intent=RuntimeOperationIntent(
-                operation_id=str(payload["operation_id"]),
-                runtime_id=str(payload["runtime_id"]),
-                kind=str(payload["kind"]),
-                alias=str(payload["alias"]),
-                epoch=int(payload["epoch"]),
-                base_revision=int(payload["base_revision"]),
-                target_revision=int(payload["target_revision"]),
-                codec=str(payload["codec"]),
-                schema_version=int(payload["schema_version"]),
-                payload=str(payload["operation_payload"]),
+                operation_id=_require_str(payload, "operation_id", cls.__name__),
+                runtime_id=_require_str(payload, "runtime_id", cls.__name__),
+                kind=_require_str(payload, "kind", cls.__name__),
+                alias=_require_str(payload, "alias", cls.__name__),
+                epoch=_require_int(payload, "epoch", cls.__name__),
+                base_revision=_require_int(payload, "base_revision", cls.__name__),
+                target_revision=_require_int(payload, "target_revision", cls.__name__),
+                codec=_require_str(payload, "codec", cls.__name__),
+                schema_version=_require_int(payload, "schema_version", cls.__name__),
+                payload=_require_str(payload, "operation_payload", cls.__name__),
                 base_checkpoint=_decode_runtime_checkpoint(checkpoint, owner=f"{cls.__name__}.base_checkpoint"),
                 projections=tuple(
                     RuntimeProjectionIntent(
-                        intent_id=str(item["intent_id"]),
-                        projector=str(item["projector"]),
-                        schema_version=int(item["schema_version"]),
-                        options=tuple((str(option[0]), str(option[1])) for option in item["options"]),
+                        intent_id=_require_str(item, "intent_id", f"{cls.__name__}.projection"),
+                        projector=_require_str(item, "projector", f"{cls.__name__}.projection"),
+                        schema_version=_require_int(item, "schema_version", f"{cls.__name__}.projection"),
+                        options=_decode_options(item["options"], owner=f"{cls.__name__}.projection.options"),
                     )
                     for item in payload["projections"]
                 ),
@@ -757,17 +912,62 @@ class RuntimeOperationCompletedEvent:
     type = RUNTIME_OPERATION_COMPLETED
 
     def payload(self) -> Dict[str, Any]:
+        receipt = self.receipt
         return {
             "operation_id": self.operation_id,
-            "receipt": asdict(self.receipt) if self.receipt is not None else None,
+            "receipt": (
+                {
+                    "operation_id": receipt.operation_id,
+                    "fingerprint": receipt.fingerprint,
+                    "runtime_id": receipt.runtime_id,
+                    "kind": receipt.kind,
+                    "alias": receipt.alias,
+                    "epoch": receipt.epoch,
+                    "revision": receipt.revision,
+                    "changed": receipt.changed,
+                    "commit_id": receipt.commit_id,
+                }
+                if receipt is not None
+                else None
+            ),
         }
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeOperationCompletedEvent":
         _require_keys(payload, {"operation_id", "receipt"}, cls.__name__)
         raw_receipt = payload["receipt"]
-        receipt = RuntimeOperationReceipt(**raw_receipt) if isinstance(raw_receipt, dict) else None
-        return cls(operation_id=str(payload["operation_id"]), receipt=receipt)
+        if raw_receipt is not None and type(raw_receipt) is not dict:
+            raise TypeError(f"{cls.__name__}.receipt must be an object or null")
+        if raw_receipt is not None:
+            _require_keys(
+                raw_receipt,
+                {
+                    "operation_id",
+                    "fingerprint",
+                    "runtime_id",
+                    "kind",
+                    "alias",
+                    "epoch",
+                    "revision",
+                    "changed",
+                    "commit_id",
+                },
+                f"{cls.__name__}.receipt",
+            )
+            receipt = RuntimeOperationReceipt(
+                operation_id=_require_str(raw_receipt, "operation_id", f"{cls.__name__}.receipt"),
+                fingerprint=_require_str(raw_receipt, "fingerprint", f"{cls.__name__}.receipt"),
+                runtime_id=_require_str(raw_receipt, "runtime_id", f"{cls.__name__}.receipt"),
+                kind=_require_str(raw_receipt, "kind", f"{cls.__name__}.receipt"),
+                alias=_require_str(raw_receipt, "alias", f"{cls.__name__}.receipt"),
+                epoch=_require_int(raw_receipt, "epoch", f"{cls.__name__}.receipt"),
+                revision=_require_int(raw_receipt, "revision", f"{cls.__name__}.receipt"),
+                changed=_require_bool(raw_receipt, "changed", f"{cls.__name__}.receipt"),
+                commit_id=_require_str(raw_receipt, "commit_id", f"{cls.__name__}.receipt"),
+            )
+        else:
+            receipt = None
+        return cls(operation_id=_require_str(payload, "operation_id", cls.__name__), receipt=receipt)
 
 
 @dataclass
@@ -782,7 +982,7 @@ class RuntimeOperationAbortedEvent:
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeOperationAbortedEvent":
         _require_keys(payload, {"operation_id"}, cls.__name__)
-        return cls(operation_id=str(payload["operation_id"]))
+        return cls(operation_id=_require_str(payload, "operation_id", cls.__name__))
 
 
 @dataclass
@@ -841,18 +1041,18 @@ class RuntimeHandoffPreparedEvent:
         )
         return cls(
             intent=RuntimeHandoffIntent(
-                handoff_id=str(payload["handoff_id"]),
-                runtime_id=str(payload["runtime_id"]),
-                kind=str(payload["kind"]),
-                alias=str(payload["alias"]),
-                epoch=int(payload["epoch"]),
-                base_revision=int(payload["base_revision"]),
-                target_revision=int(payload["target_revision"]),
-                owner_id=str(payload["owner_id"]),
-                fencing_token=int(payload["fencing_token"]),
-                mode=str(payload["mode"]),
-                message=str(payload["message"]),
-                selection=tuple(str(item) for item in payload["selection"]),
+                handoff_id=_require_str(payload, "handoff_id", cls.__name__),
+                runtime_id=_require_str(payload, "runtime_id", cls.__name__),
+                kind=_require_str(payload, "kind", cls.__name__),
+                alias=_require_str(payload, "alias", cls.__name__),
+                epoch=_require_int(payload, "epoch", cls.__name__),
+                base_revision=_require_int(payload, "base_revision", cls.__name__),
+                target_revision=_require_int(payload, "target_revision", cls.__name__),
+                owner_id=_require_str(payload, "owner_id", cls.__name__),
+                fencing_token=_require_int(payload, "fencing_token", cls.__name__),
+                mode=_require_str(payload, "mode", cls.__name__),
+                message=_require_str(payload, "message", cls.__name__),
+                selection=tuple(_require_str_list(payload, "selection", cls.__name__)),
                 base_checkpoint=checkpoint,
             )
         )
@@ -872,7 +1072,7 @@ class RuntimeHandoffActivatedEvent:
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "RuntimeHandoffActivatedEvent":
         _require_keys(payload, {"handoff_id"}, cls.__name__)
-        return cls(handoff_id=str(payload["handoff_id"]))
+        return cls(handoff_id=_require_str(payload, "handoff_id", cls.__name__))
 
 
 @dataclass
@@ -917,13 +1117,13 @@ class RuntimeHandoffResolvedEvent:
         checkpoint_payload = payload["checkpoint"]
         return cls(
             resolution=RuntimeHandoffResolution(
-                handoff_id=str(payload["handoff_id"]),
-                status=str(payload["status"]),
-                runtime_id=str(payload["runtime_id"]),
-                kind=str(payload["kind"]),
-                alias=str(payload["alias"]),
-                epoch=int(payload["epoch"]),
-                revision=int(payload["revision"]),
+                handoff_id=_require_str(payload, "handoff_id", cls.__name__),
+                status=RuntimeHandoffResolutionStatus(payload["status"]),
+                runtime_id=_require_str(payload, "runtime_id", cls.__name__),
+                kind=_require_str(payload, "kind", cls.__name__),
+                alias=_require_str(payload, "alias", cls.__name__),
+                epoch=_require_int(payload, "epoch", cls.__name__),
+                revision=_require_int(payload, "revision", cls.__name__),
                 checkpoint=(
                     RuntimeCheckpointEvent.from_payload(checkpoint_payload).checkpoint
                     if isinstance(checkpoint_payload, dict)

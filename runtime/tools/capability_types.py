@@ -32,13 +32,15 @@ exactly the capability-isolation seam we keep on purpose — so it stays runtime
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, AsyncContextManager, Optional, Protocol, TypeAlias, TypedDict
 
+from mote.contracts.events.envelope import JsonValue
 from mote.contracts.ports.task.operations import BackgroundTaskService
 from mote.contracts.service import HostedServicePayload, HostedServiceResult, ServiceExecutionSemantics
 from mote.contracts.task.models import TaskId
 
 if TYPE_CHECKING:
+    from mote.contracts.artifact import ArtifactRef
     from mote.contracts.browser import BrowserProfileCommitReceipt, BrowserProfileSnapshot, BrowserStorageState
     from mote.contracts.file import (
         EditCommitOutcome,
@@ -48,11 +50,14 @@ if TYPE_CHECKING:
         MutationResult,
         PdfView,
         ReadRequest,
+        SearchOutputMode,
         SearchResult,
     )
     from mote.contracts.interaction import ApprovalChoice, ApprovalRequest, AskUserQuestionAnswers, AskUserQuestionItem
     from mote.contracts.interaction.handoff import HandoffOutcome
-    from mote.contracts.ports.artifact.store import ArtifactStore, ReliableArtifactPublisher
+    from mote.contracts.output import CommittedOutput
+    from mote.contracts.output.graph import GraphOutputContractSpec
+    from mote.contracts.ports.artifact.store import ReliableArtifactPublisher
     from mote.contracts.ports.file.operations import GeneratedTargetReservationPort
     from mote.contracts.ports.skill.registry import SkillCatalog
     from mote.runtime.config.device import DeviceConfig
@@ -94,16 +99,60 @@ GetBgPool: TypeAlias = Callable[[], BackgroundTaskService]
 # File read-tracking / resource visibility
 # ---------------------------------------------------------------------------
 
-CaptureFileSnapshot: TypeAlias = Callable[..., "tuple[FileSnapshot, bytes]"]
+
+class CaptureFileSnapshot(Protocol):
+    def __call__(
+        self,
+        full_path: str,
+        *,
+        encoding: str | None = None,
+        fallback_encoding: str | None = None,
+    ) -> "tuple[FileSnapshot, bytes]": ...
+
+
 ObserveFileSnapshot: TypeAlias = Callable[["FileSnapshot"], None]
 ReadFileView: TypeAlias = Callable[
     [str, "ReadRequest"],
     "FileByteView | FileTextView | PdfView",
 ]
-SearchFiles: TypeAlias = Callable[..., "SearchResult"]
+
+
+class SearchFiles(Protocol):
+    def __call__(
+        self,
+        *,
+        root: str,
+        content: str = "",
+        files: str = "",
+        type_name: str = "",
+        output_mode: "SearchOutputMode",
+        case_insensitive: bool = False,
+        before_context: int = 0,
+        after_context: int = 0,
+        multiline: bool = False,
+        encoding: str | None = None,
+        fallback_encoding: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        cursor: str | None = None,
+        timeout: float = 20.0,
+    ) -> "SearchResult": ...
+
+
 PlanFileEdit: TypeAlias = Callable[["EditPlanRequest"], "Awaitable[EditPlan]"]
-CommitEditPlan: TypeAlias = Callable[..., "Awaitable[EditCommitOutcome]"]
-CommitGeneratedFiles: TypeAlias = Callable[..., "Awaitable[MutationResult]"]
+CommitEditPlan: TypeAlias = Callable[[str], "Awaitable[EditCommitOutcome]"]
+
+
+class CommitGeneratedFiles(Protocol):
+    def __call__(
+        self,
+        files: dict[str, bytes],
+        *,
+        source: str,
+        transaction_id: str | None = None,
+    ) -> "Awaitable[MutationResult]": ...
+
+
 TryReserveGeneratedTargets: TypeAlias = Callable[
     [tuple[str, ...]],
     "GeneratedTargetReservationPort | None",
@@ -147,8 +196,12 @@ GetSecret: TypeAlias = Callable[[str], Optional[str]]
 # ---------------------------------------------------------------------------
 
 GetRuntimeHost: TypeAlias = Callable[[], "RuntimeHost"]
-HandoffRuntime: TypeAlias = Callable[..., "Awaitable[HandoffOutcome]"]
-GetArtifactStore: TypeAlias = Callable[[], "ArtifactStore"]
+
+
+class HandoffRuntime(Protocol):
+    def __call__(self, runtime: str, *, message: str = "") -> "Awaitable[HandoffOutcome]": ...
+
+
 GetArtifactPublisher: TypeAlias = Callable[[], "ReliableArtifactPublisher"]
 
 # ---------------------------------------------------------------------------
@@ -158,7 +211,10 @@ GetArtifactPublisher: TypeAlias = Callable[[], "ReliableArtifactPublisher"]
 # called with no args (indefinite wait) or one (bounded wait).
 # ---------------------------------------------------------------------------
 
-WaitInterruptible: TypeAlias = Callable[..., Awaitable[float]]
+
+class WaitInterruptible(Protocol):
+    def __call__(self, duration: float | None = None) -> Awaitable[float]: ...
+
 
 # ---------------------------------------------------------------------------
 # Skills / resources
@@ -168,10 +224,24 @@ WaitInterruptible: TypeAlias = Callable[..., Awaitable[float]]
 
 GetSkillPool: TypeAlias = Callable[[], "Optional[SkillCatalog]"]
 
-RunSkillFork: TypeAlias = Callable[..., Awaitable[str]]
-RegisterResource: TypeAlias = Callable[..., None]
+
+class RunSkillFork(Protocol):
+    def __call__(
+        self,
+        *,
+        instructions: str,
+        arguments: str = "",
+        allowed_tools: list[str] | None = None,
+        model: str = "",
+        effort: str = "",
+    ) -> Awaitable[str]: ...
+
+
+class RegisterResource(Protocol):
+    def __call__(self, *, id: str, kind: str, content: str) -> None: ...
+
+
 RegisterTaskResult: TypeAlias = Callable[[TaskId, str], None]
-RetireTaskResult: TypeAlias = Callable[[str], None]
 
 # ---------------------------------------------------------------------------
 # OS-level sandbox runtime (command-execution tools)
@@ -193,8 +263,27 @@ DispatchTool: TypeAlias = Callable[[str, Optional[dict]], "Awaitable[ToolResult]
 ListToolNames: TypeAlias = Callable[[], list[str]]
 ListGraphToolNames: TypeAlias = Callable[[], list[str]]
 ListGraphExcludedToolNames: TypeAlias = Callable[[], list[str]]
-CommitGraphOutput: TypeAlias = Callable[..., Awaitable[Any]]
-ResumeGraphOutput: TypeAlias = Callable[..., Awaitable[Any]]
+
+
+class CommitGraphOutput(Protocol):
+    def __call__(
+        self,
+        *,
+        output: JsonValue,
+        contract_spec: "GraphOutputContractSpec",
+        run_id: str,
+    ) -> "Awaitable[CommittedOutput[JsonValue]]": ...
+
+
+class ResumeGraphOutput(Protocol):
+    def __call__(
+        self,
+        *,
+        contract_spec: "GraphOutputContractSpec",
+        run_id: str,
+    ) -> "Awaitable[CommittedOutput[JsonValue] | None]": ...
+
+
 HasGraphOutputRestore: TypeAlias = Callable[[str], bool]
 
 # ---------------------------------------------------------------------------
@@ -216,7 +305,11 @@ DescribeDeferredTools: TypeAlias = Callable[[list[str]], dict[str, str]]
 # site's kwargs are checked against the real Role method at the dict literal.
 # ---------------------------------------------------------------------------
 
-DescribeImage: TypeAlias = Callable[..., "Awaitable[str]"]
+
+class DescribeImage(Protocol):
+    def __call__(self, __artifact: "ArtifactRef", *, prompt: str = "") -> "Awaitable[str]": ...
+
+
 InvokeService: TypeAlias = Callable[
     [HostedServicePayload, str, ServiceExecutionSemantics],
     Awaitable[HostedServiceResult],
@@ -266,7 +359,6 @@ class CapabilityMap(TypedDict):
     get_browser_client_certs: GetBrowserClientCerts
     get_secret: GetSecret
     get_runtime_host: GetRuntimeHost
-    get_artifact_store: GetArtifactStore
     get_artifact_publisher: GetArtifactPublisher
     handoff_runtime: HandoffRuntime
     wait_interruptible: WaitInterruptible
@@ -274,7 +366,6 @@ class CapabilityMap(TypedDict):
     run_skill_fork: RunSkillFork
     register_resource: RegisterResource
     register_task_result: RegisterTaskResult
-    retire_task_result: RetireTaskResult
     get_sandbox_runtime: GetSandboxRuntime
     get_device_config: GetDeviceConfig
     dispatch_tool: DispatchTool

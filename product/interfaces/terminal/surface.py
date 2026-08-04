@@ -455,7 +455,7 @@ class TerminalSurface(BaseSurface):
         # prints a dim ``✻`` boundary in place — no screen wipe, no recap rebuild.
         self._end_stream()
         self._console.print()
-        self._console.print(conversation_compacted_text(SimpleNamespace(message_count=message_count)))
+        self._console.print(conversation_compacted_text(SimpleNamespace(message_count=message_count)))  # type: ignore[arg-type]
 
     def clear_transcript(self) -> None:
         # ``/clear`` — end any open stream, then wipe the scrollback for a fresh screen.
@@ -495,7 +495,7 @@ class TerminalSurface(BaseSurface):
         """
         if not truncation.content_truncated:
             return
-        self._console.print(self._indent(_fold_note(truncation), spaces))
+        self._console.print(self._indent(_fold_note(truncation), spaces))  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------
     # Incremental-Markdown live streaming

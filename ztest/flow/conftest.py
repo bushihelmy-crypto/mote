@@ -46,8 +46,11 @@ from mote.contracts.tool.catalog import (
 from mote.kernel.commands.contracts import ExecutedCommand, HistoryProjection
 from mote.kernel.execution import PROCEED, BudgetVerdict, ExecutionContext, ExecutionEngine
 from mote.kernel.execution.request import InferenceRequest
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.durable.inference_checkpoint import InferenceCheckpoint
+from mote.runtime.models.session_projection import ModelSessionProjectionStore
 from mote.runtime.persistence.execution_transaction import RuntimeExecutionTransaction
+from mote.runtime.session.workspace import SessionWorkspace
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -59,6 +62,18 @@ class _Result:
 
     def __init__(self, content: str = ""):
         self.content = content
+
+
+class _NoModelCallRecovery:
+    def inspect_recovery(self, model_call_id: str):
+        from mote.contracts.ports.model.recovery import ModelRecoveryDisposition, ModelRecoveryInspection
+
+        return ModelRecoveryInspection(model_call_id, ModelRecoveryDisposition.ABSENT)
+
+
+class _NoArtifactResolver:
+    async def resolve(self, ref, policy):
+        raise AssertionError("flow fake does not externalize Model output")
 
 
 class FakeThinkEngine:
@@ -279,7 +294,7 @@ class FakeMemory:
 
 
 class FakeLLM:
-    """Duck-typed LLMClient — only ``aask`` is exercised by the loop."""
+    """Narrow fake whose ``aask`` behavior is exercised by the loop."""
 
     def __init__(self, reply: str = "llm-question"):
         self.reply = reply
@@ -482,7 +497,7 @@ class FlowBundle:
 
 
 @pytest.fixture
-def make_engine():
+def make_engine(tmp_path):
     """Factory: build a fully wired :class:`ExecutionEngine` and its fakes.
 
     Pass keyword overrides for any collaborator or for ``ExecutionContext`` fields
@@ -501,7 +516,6 @@ def make_engine():
         bg_pool: Optional[FakeBgPool] = None,
         turn_context_bus=None,
         get_cwd: Optional[Callable[[], str]] = None,
-        durable_runner=None,
         output_engine=None,
         graph_builder=None,
         drain_writes=None,
@@ -527,6 +541,7 @@ def make_engine():
         )
         provider.tool_snapshot = ToolBindingSnapshot(
             "fake-snapshot",
+            "fake-application-generation",
             MaterializedToolCatalog(ToolCatalogIdentity("fake", "1"), 1, definitions, "fake"),
             "fake-target",
             "fake-capabilities",
@@ -555,9 +570,12 @@ def make_engine():
         if graph_builder is not None:
             engine_kwargs["graph_builder"] = graph_builder
         checkpoint = InferenceCheckpoint(
-            journal_runner=durable_runner,
-            memory=memory,
+            projections=ModelSessionProjectionStore(
+                "flow-test", SessionWorkspace(tmp_path), approved_model_checkpoint_policy()
+            ),
+            model_calls=_NoModelCallRecovery(),
             inference_engine=inference_engine,
+            artifact_resolver=_NoArtifactResolver(),
         )
 
         async def default_drain():

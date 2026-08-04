@@ -15,6 +15,7 @@ only the helper functions + :class:`BGEChannelExtractor` reused by the Phase-3
 inference package are kept. ``joblib`` / ``sklearn`` stay top-level imports here
 but this module is only ever imported during the guarded engine load.
 """
+
 from __future__ import annotations
 
 import re
@@ -44,7 +45,8 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 _RE_CLAR = re.compile(
-    r"(?:能否|请\s*提供|需要(?:更多|具体).{0,8}信息" r"|could you (?:clarify|provide)|please (?:specify|provide)|clarify which)",
+    r"(?:能否|请\s*提供|需要(?:更多|具体).{0,8}信息"
+    r"|could you (?:clarify|provide)|please (?:specify|provide)|clarify which)",
     re.I,
 )
 _RE_REFUSAL = re.compile(
@@ -228,7 +230,10 @@ class BGEChannelExtractor:
     def _ensure_bge(self):
         if self._bge is None:
             if self.backend == "onnx":
-                self._bge = OnnxBGE(self.onnx_model_dir)
+                model_dir = self.onnx_model_dir
+                if model_dir is None:
+                    raise RuntimeError("ONNX model directory is unavailable")
+                self._bge = OnnxBGE(model_dir)
             else:
                 if SentenceTransformer is None:
                     raise RuntimeError("BGE routing requires the 'sentence-transformers' optional dependency.")
@@ -249,7 +254,10 @@ class BGEChannelExtractor:
         raw = bge.encode(texts, batch_size=3, show_progress_bar=False, convert_to_numpy=True).astype(
             np.float32
         )  # (3, 512)
-        reduced = self.pca.transform(raw)  # (3, k)
+        pca = self.pca
+        if pca is None:
+            raise RuntimeError("PCA is unavailable before fit")
+        reduced = pca.transform(raw)  # (3, k)
         if reduced.shape[1] < self.pca_dim:
             pad = np.zeros((reduced.shape[0], self.pca_dim - reduced.shape[1]), dtype=reduced.dtype)
             reduced = np.concatenate([reduced, pad], axis=1)
@@ -326,7 +334,10 @@ class BGEChannelExtractor:
         embs = bge.encode(
             flat_texts, batch_size=bge_batch_size, show_progress_bar=show_progress, convert_to_numpy=True
         )  # (3N, 512)
-        reduced = self.pca.transform(embs)  # (3N, k)
+        pca = self.pca
+        if pca is None:
+            raise RuntimeError("PCA is unavailable before fit")
+        reduced = pca.transform(embs)  # (3N, k)
         if reduced.shape[1] < self.pca_dim:
             pad = np.zeros((reduced.shape[0], self.pca_dim - reduced.shape[1]), dtype=reduced.dtype)
             reduced = np.concatenate([reduced, pad], axis=1)  # (3N, pca_dim)

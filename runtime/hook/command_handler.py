@@ -11,7 +11,12 @@ from mote.runtime.config.hook import HookCommandHandler
 from mote.runtime.hook.parser import parse_command_output
 from mote.runtime.hook.types import HookOutcome
 from mote.runtime.hook.wire import HookWireSerializer
-from mote.runtime.process import ProcessDisposition, run_fixed_argv
+from mote.runtime.process import (
+    FixedProcessEnvironment,
+    ProcessDisposition,
+    resolve_fixed_executable,
+    run_verified_fixed_argv,
+)
 
 DEFAULT_TIMEOUT = 60.0
 MAX_HOOK_OUTPUT_BYTES = 256 * 1024
@@ -57,10 +62,11 @@ async def run_command_handler(
         )
     except Exception as exc:
         raise HookCommandFailure("Hook command sandbox activation failed") from exc
-    result = await run_fixed_argv(
-        wrapped_argv,
+    result = await run_verified_fixed_argv(
+        resolve_fixed_executable(wrapped_argv[0]),
+        wrapped_argv[1:],
         working_dir=hook_input.identity.cwd or None,
-        env=wrapped_env,
+        env=FixedProcessEnvironment.compile(wrapped_env),
         timeout=effective_timeout,
         max_output_bytes=MAX_HOOK_OUTPUT_BYTES,
         stdin=payload.encode("utf-8"),

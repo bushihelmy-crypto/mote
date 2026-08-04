@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Zero-debt guardrail: no hard-coded CJK in the CLI display layer.
+"""Zero-debt guardrail: no hard-coded CJK in Product presentation adapters.
 
-The human display layer (``product/cli/view`` + ``product/cli/consumers``) must route every
+The human display layer (``product/presentation`` + ``product/interfaces``) must route every
 human string through :func:`mote.product.i18n.t`, so a locale switch reaches all
 of it. This test walks the AST of every module there and fails on a CJK
 character inside a *real* string literal — a value that gets assigned, passed,
@@ -13,6 +13,7 @@ This is the long-lived enforcement that keeps the "0 negative-space debt"
 property true: a future hard-coded ``"读取 N 行"`` fails CI instead of silently
 shipping an un-switchable string.
 """
+
 from __future__ import annotations
 
 import ast
@@ -34,7 +35,7 @@ _CJK = (
 )
 _CJK_SET = frozenset(chr(c) for c in _CJK)
 
-_SCAN_DIRS = ("product/cli/view", "product/cli/consumers")
+_SCAN_DIRS = ("product/presentation", "product/interfaces")
 
 
 def _has_cjk(text: str) -> bool:
@@ -43,10 +44,10 @@ def _has_cjk(text: str) -> bool:
 
 def _display_modules() -> List[Path]:
     root = MOTE_PACKAGE_DIR
-    # PACKAGE_DIR is the package dir itself; CLI is Product-owned.
+    # PACKAGE_DIR is the package dir itself; presentation is Product-owned.
     # Fall back to walking up from this test file if the layout differs so the
     # guardrail is robust to checkout naming.
-    if not (root / "product/cli").exists():
+    if not (root / "product/presentation").exists():
         root = Path(__file__).resolve().parents[2]
     files: List[Path] = []
     for rel in _SCAN_DIRS:

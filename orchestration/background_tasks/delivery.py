@@ -194,7 +194,7 @@ def _deliver_progress(
     notification = BackgroundTaskNotification(
         content=detail or f"[{event.stage}] {event.phase.value}",
         cause_by=CauseBy.RUN_COMMAND,
-        task_id=str(event.reference.task_id),
+        task_id=event.reference.task_id,
         attempt_id=event.reference.attempt_id,
         command_name=command_name,
         status=event.phase.value,

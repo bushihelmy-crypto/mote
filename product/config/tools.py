@@ -7,13 +7,7 @@ from __future__ import annotations
 from pydantic import Field
 
 from mote.contracts.config.base import ConfigModel as YamlModel
-from mote.contracts.config.tool import (
-    DurableConfig,
-    LoopGuardConfig,
-    RunJournalConfig,
-    ToolResultLimitConfig,
-    ToolSearchConfig,
-)
+from mote.contracts.config.tool import LoopGuardConfig, ToolEffectStoreConfig, ToolResultLimitConfig, ToolSearchConfig
 from mote.product.config.web_search import WebSearchConfig
 from mote.runtime.config.device import DeviceConfig
 
@@ -25,8 +19,7 @@ class ToolsConfig(YamlModel):
     knobs above (proxy / browser fingerprint) plus the two cross-cutting policies
     the :class:`~mote.runtime.tools.tool_executor.ToolExecutor` owns —
     :class:`ToolResultLimitConfig` (large-result persistence),
-    :class:`RunJournalConfig` (durable run-step journal), and
-    :class:`DurableConfig` (durable-execution backend for replay-safe steps).
+    :class:`ToolEffectStoreConfig` (durable Tool effect lifecycle), and
     Grouping them under ``tools`` keeps their single-owner discipline: the
     executor reads them from here, and the compaction spill reducer borrows
     ``result_limit`` off the built executor (never a second instance), so there
@@ -57,16 +50,7 @@ class ToolsConfig(YamlModel):
     # resume after a mid-call crash heals a dangling call from the recorded result
     # instead of re-running its side effect. ``enabled=False`` reproduces the
     # prior no-ledger behavior (every call simply runs).
-    run_journal: RunJournalConfig = Field(default_factory=RunJournalConfig)
-
-    # Durable-execution backend selector for the run's replay-safe steps (LLM
-    # think turn / LOCAL tool write / durable timer). Orthogonal to
-    # ``run_journal`` (EXTERNAL idempotency, never weakened): this memoizes a
-    # completed step's result so a resume skips it instead of re-paying, and
-    # ``backend="temporal"`` dispatches the three seams through the optional
-    # Temporal backend. ``enabled=False`` reproduces the prior no-memoization
-    # behavior; ``backend="jsonl"`` (default) is zero-dependency.
-    durable: DurableConfig = Field(default_factory=DurableConfig)
+    effect_store: ToolEffectStoreConfig = Field(default_factory=ToolEffectStoreConfig)
 
     # Tool Search master switch (deferred-tool discovery). Per-role
     # ``RoleSchema.deferred_tools`` declares WHICH tools are hidden-until-searched;

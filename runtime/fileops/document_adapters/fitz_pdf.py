@@ -23,7 +23,7 @@ def page_count(file_path: str) -> int:
 
 def extract_pages(file_path: str, page_numbers: tuple[int, ...]) -> tuple[str, ...]:
     with fitz.open(file_path) as document:
-        return tuple(document[page_number - 1].get_text("text") for page_number in page_numbers)
+        return tuple(document[page_number - 1].get_text("text") for page_number in page_numbers)  # type: ignore[attr-defined]
 
 
 def render_pages(
@@ -37,7 +37,7 @@ def render_pages(
     with fitz.open(file_path) as document:
         rendered = []
         for page_number in page_numbers:
-            pixmap = document[page_number - 1].get_pixmap(
+            pixmap = document[page_number - 1].get_pixmap(  # type: ignore[attr-defined]
                 matrix=matrix,
                 alpha=False,
             )

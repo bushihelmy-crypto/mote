@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import datetime, timezone
 
 import pytest
@@ -140,11 +141,23 @@ async def test_worker_thread_append_uses_owner_loop_and_supports_barrier(
     fabric, _, _ = _fabric(tmp_path, handler)
     await fabric.start()
 
-    result = await asyncio.to_thread(
-        fabric.append_from_thread,
-        _STREAM,
-        (_fact(1),),
-    )
+    result_box: list[object] = []
+    error_box: list[BaseException] = []
+
+    def invoke() -> None:
+        try:
+            result_box.append(fabric.append_from_thread(_STREAM, (_fact(1),)))
+        except BaseException as exc:  # noqa: BLE001 - assertion below
+            error_box.append(exc)
+
+    worker = threading.Thread(target=invoke, daemon=True)
+    worker.start()
+    deadline = asyncio.get_running_loop().time() + 5
+    while worker.is_alive() and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+    assert not worker.is_alive()
+    assert not error_box
+    result = result_box[0]
     await fabric.wait_until(_SUBSCRIPTION, _STREAM, result.last_sequence)
 
     assert result.current_version == 1
@@ -169,12 +182,21 @@ async def test_thread_append_rejects_closed_fabric(tmp_path) -> None:
     await fabric.start()
     await fabric.aclose()
 
-    with pytest.raises(EventFabricUnavailable):
-        await asyncio.to_thread(
-            fabric.append_from_thread,
-            _STREAM,
-            (_fact(1),),
-        )
+    # Exercise the synchronous cross-thread entry point without creating an
+    # asyncio default-executor worker that can delay loop teardown.
+    outcome: list[BaseException] = []
+
+    def invoke() -> None:
+        try:
+            fabric.append_from_thread(_STREAM, (_fact(1),))
+        except BaseException as exc:  # noqa: BLE001 - assertion below
+            outcome.append(exc)
+
+    worker = threading.Thread(target=invoke, daemon=True)
+    worker.start()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert outcome and isinstance(outcome[0], EventFabricUnavailable)
 
 
 @pytest.mark.asyncio

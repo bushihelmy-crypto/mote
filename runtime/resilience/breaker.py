@@ -74,7 +74,7 @@ class CircuitBreaker:
         config: Optional[BreakerConfig] = None,
         *,
         key: str = "",
-        clock: Callable[[], float] = None,  # type: ignore[assignment]
+        clock: Callable[[], float] | None = None,
         on_transition: Optional[TransitionHook] = None,
     ) -> None:
         self.config = config or BreakerConfig()

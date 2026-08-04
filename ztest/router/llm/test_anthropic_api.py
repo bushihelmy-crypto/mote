@@ -16,10 +16,11 @@ import asyncio
 import pytest
 
 from mote.contracts.config.model.llm import LLMConfig, LLMType
+from mote.contracts.events.model import LLMStreamDeltaEvent
 from mote.contracts.model.transport import resolve_api_type
 from mote.product.models.bootstrap import builtin_provider_registry
 from mote.product.models.providers.anthropic import AnthropicLLM
-from mote.runtime.events import LLMStreamDeltaEvent, bind_telemetry
+from mote.runtime.events import bind_telemetry
 from mote.runtime.models.cost import CostTracker
 from mote.ztest.telemetry import InlineTelemetry
 

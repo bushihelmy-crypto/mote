@@ -107,7 +107,7 @@ async def increment(state: State) -> Stage:
 
 def definition():
     builder = WorkflowBuilder("adapter", state_schema=State)
-    builder.add_node("increment", increment)
+    builder.add_node("increment", increment, implementation_id="test.adapter.increment/v1")
     builder.add_edge(START, "increment")
     builder.add_edge("increment", END)
     return builder.build()
@@ -131,7 +131,7 @@ def durable_adapter(run, tmp_path, request_id="request"):
             ),
             WorkflowRunAccessGrant(AgentId("agent"), AgentId("agent")),
             TrustedWorkflowBlueprintSource("test.workflow", 1),
-            run.definition.digest,
+            run.executable.definition.digest,
             "{}",
         )
     )
@@ -237,11 +237,11 @@ async def test_process_restart_reactivates_trusted_blueprint_from_run_facts(tmp_
     created = first.control.create(
         CreateWorkflowRun(
             "restart-request",
-            workflow_definition.definition_id,
+            workflow_definition.definition.definition_id,
             provenance,
             WorkflowRunAccessGrant(AgentId("session"), AgentId("session")),
             source,
-            workflow_definition.digest,
+            workflow_definition.definition.digest,
             '{"value":4}',
         )
     )
@@ -298,11 +298,11 @@ async def test_process_restart_recompiles_declarative_spec_from_run_facts(tmp_pa
     created = first.control.create(
         CreateWorkflowRun(
             "declarative-request",
-            workflow_definition.definition_id,
+            workflow_definition.definition.definition_id,
             provenance,
             WorkflowRunAccessGrant(AgentId("session"), AgentId("session")),
             source,
-            workflow_definition.digest,
+            workflow_definition.definition.digest,
             '{"value":4}',
         )
     )
@@ -382,11 +382,11 @@ async def test_restart_resumes_checkpoint_without_rerunning_completed_node(tmp_p
     created = first.control.create(
         CreateWorkflowRun(
             "checkpoint-request",
-            workflow_definition.definition_id,
+            workflow_definition.definition.definition_id,
             provenance,
             WorkflowRunAccessGrant(AgentId("session"), AgentId("session")),
             source,
-            workflow_definition.digest,
+            workflow_definition.definition.digest,
             '{"value":""}',
         )
     )
@@ -452,11 +452,11 @@ async def test_restart_settles_cancelling_run_without_dispatching_nodes(tmp_path
     created = first.control.create(
         CreateWorkflowRun(
             "cancel-request",
-            workflow_definition.definition_id,
+            workflow_definition.definition.definition_id,
             provenance,
             WorkflowRunAccessGrant(AgentId("session"), AgentId("session")),
             source,
-            workflow_definition.digest,
+            workflow_definition.definition.digest,
             '{"value":0}',
         )
     )
@@ -486,15 +486,15 @@ def test_unknown_or_changed_trusted_blueprint_fails_closed(tmp_path):
     with pytest.raises(KeyError, match="not activated"):
         durability.resolve_definition_source(
             TrustedWorkflowBlueprintSource("missing", 1),
-            expected_definition_id=workflow_definition.definition_id,
-            expected_digest=workflow_definition.digest,
+            expected_definition_id=workflow_definition.definition.definition_id,
+            expected_digest=workflow_definition.definition.digest,
             workflow_nodes=nodes,
         )
     durability.register_trusted_blueprint("test.increment", 1, lambda: workflow_definition)
     with pytest.raises(ValueError, match="identity mismatch"):
         durability.resolve_definition_source(
             TrustedWorkflowBlueprintSource("test.increment", 1),
-            expected_definition_id=workflow_definition.definition_id,
+            expected_definition_id=workflow_definition.definition.definition_id,
             expected_digest="0" * 64,
             workflow_nodes=nodes,
         )
@@ -582,8 +582,8 @@ async def test_large_terminal_publication_recovers_from_checkpoint_without_rerun
 @pytest.mark.asyncio
 async def test_workflow_pause_requires_durable_run_resume_path(tmp_path):
     builder = WorkflowBuilder("pause", state_schema=State)
-    builder.add_node("increment", increment)
-    builder.add_node("again", increment)
+    builder.add_node("increment", increment, implementation_id="test.pause.increment/v1")
+    builder.add_node("again", increment, implementation_id="test.pause.again/v1")
     builder.add_edge(START, "increment")
     builder.add_llm_edges("increment", "continue?", {"yes": "again", "no": END})
     adapter, durability = durable_adapter(builder.build().start({"value": 1}), tmp_path)

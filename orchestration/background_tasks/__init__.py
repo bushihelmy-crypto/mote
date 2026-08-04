@@ -3,19 +3,19 @@
 Public API surface for the agent's background task subsystem. Import from
 ``mote.orchestration.background_tasks`` rather than the internal modules:
 
-    from mote.orchestration.background_tasks import BackgroundTaskPool, BgTaskResult, bg_tool
+    from mote.orchestration.background_tasks import BackgroundTaskPool, BgTaskResult
 """
 
 from __future__ import annotations
 
-from mote.orchestration.background_tasks.decorators import bg_tool, is_bg_tool, require_bg_complete
+from mote.orchestration.background_tasks.decorators import require_bg_complete
 from mote.orchestration.background_tasks.model import (
     BackgroundTaskNotification,
     BackgroundTaskStatus,
     BgTaskMode,
     BgTaskResult,
     PollFactory,
-    TaskMeta,
+    TaskSnapshot,
     TaskType,
     is_bg_notification,
 )
@@ -52,15 +52,13 @@ __all__ = [
     "BgTaskResult",
     "BgTaskMode",
     "PollFactory",
-    "TaskMeta",
+    "TaskSnapshot",
     "TaskType",
     "BackgroundTaskNotification",
     "is_bg_notification",
     "BackgroundTaskStatus",
     "BackgroundTaskPool",
     "auto_background",
-    "bg_tool",
-    "is_bg_tool",
     "require_bg_complete",
     "DiskTaskOutput",
     "TaskOutputStore",

@@ -18,6 +18,7 @@ from mote.runtime.agent.component_keys import (
     CONTEXT_VISIBILITY,
     DIAGNOSTICS_BUFFER,
     EXECUTOR,
+    FILE_OPERATIONS,
     HOOK_MANAGER,
     LSP_SERVICE,
     REPO_INDEX,
@@ -55,6 +56,7 @@ from mote.runtime.context.turn import (
     ToolsetInstructionsContextSource,
     TurnContextBus,
 )
+from mote.runtime.lsp.server import LspQueryError
 from mote.runtime.models.gateway import COMPRESSION_TASK
 from mote.runtime.resources import ResourceRegistry
 from mote.runtime.vcs import find_git_root
@@ -125,25 +127,26 @@ def _build_repo_index(ctx, inputs: ContextComponentInputs):
     return factory.build(root) if root is not None and factory is not None else None
 
 
-def _touched_files(role) -> list[str]:
-    return list(role.file_operations.observed_versions().keys())
+def _touched_files(file_operations) -> list[str]:
+    return list(file_operations.observed_versions().keys())
 
 
-def _glimpsed_files(role) -> list[str]:
-    return list(role.state._file_glimpsed_state.keys())
+def _glimpsed_files(state) -> list[str]:
+    return list(state._file_glimpsed_state.keys())
 
 
-def _read_state(role) -> dict:
-    return role.file_operations.observed_versions()
+def _read_state(file_operations) -> dict:
+    return file_operations.observed_versions()
 
 
 def _build_context_manager(ctx, inputs: ContextComponentInputs) -> ContextManager:
     role = ctx.role
+    get_file_operations = ctx.defer(FILE_OPERATIONS)
     executor = ctx.dep(EXECUTOR)
     registry = ctx.dep(RESOURCE_REGISTRY)
     get_session_manager = ctx.defer(SESSION_MANAGER)
     get_turn_context_bus = ctx.defer(TURN_CONTEXT_BUS)
-    rehydrator = FileRehydrator(lambda: _touched_files(role))
+    rehydrator = FileRehydrator(lambda: _touched_files(get_file_operations()))
 
     async def model_context_rebuilt(event: ModelContextRebuiltEvent) -> None:
         await get_turn_context_bus().model_context_rebuilt(event)
@@ -174,7 +177,8 @@ def _build_context_manager(ctx, inputs: ContextComponentInputs) -> ContextManage
 
 
 def _build_context_visibility(ctx) -> ContextVisibility:
-    return ContextVisibility(lambda: ctx.role.state.context.messages)
+    conversation = ctx.role.state.context
+    return ContextVisibility(lambda: conversation.messages)
 
 
 class _LspCodeQuery:
@@ -185,21 +189,27 @@ class _LspCodeQuery:
 
     async def document_symbols(self, path: str) -> list:
         service = self._get_lsp()
-        return [] if service is None else await service.document_symbols(path)
+        if service is None:
+            raise LspQueryError("LSP capability is not active")
+        return await service.document_symbols(path)
 
     async def definition(self, path: str, line: int, character: int) -> list:
         service = self._get_lsp()
-        return [] if service is None else await service.definition(path, line, character)
+        if service is None:
+            raise LspQueryError("LSP capability is not active")
+        return await service.definition(path, line, character)
 
     async def references(self, path: str, line: int, character: int) -> list:
         service = self._get_lsp()
-        return [] if service is None else await service.references(path, line, character)
+        if service is None:
+            raise LspQueryError("LSP capability is not active")
+        return await service.references(path, line, character)
 
 
 def _uses_native_tool_search(role) -> bool:
     if role.role_schema.command_protocol != "native" or not effective_deferred_tools(role):
         return False
-    profile = role.router.model_route().profile
+    profile = role._components.router.model_route().profile
     return profile.capabilities.supports_native_tool_search
 
 
@@ -232,6 +242,10 @@ def _credential_index_active(role, store) -> bool:
 
 def _build_turn_context_sources(ctx, inputs: ContextComponentInputs) -> list[EphemeralContextSource]:
     role = ctx.role
+    state = role.state
+    get_file_operations = ctx.defer(FILE_OPERATIONS)
+    mcp_config = role.config.mcp
+    skills_config = role.config.context.skills
     get_executor = ctx.defer(EXECUTOR)
     get_context_manager = ctx.defer(CONTEXT_MANAGER)
     get_skill_manager = ctx.defer(SKILL_MANAGER)
@@ -239,12 +253,12 @@ def _build_turn_context_sources(ctx, inputs: ContextComponentInputs) -> list[Eph
         ToolCatalogContextSource(
             get_executor=get_executor,
             get_channel=ctx.defer(COMMAND_CHANNEL),
-            mcp_enabled=lambda: role.config.mcp.enabled,
+            mcp_enabled=lambda: mcp_config.enabled,
         ),
         ToolsetInstructionsContextSource(get_executor=get_executor),
-        GitContextSource(get_cwd=lambda: role.state.working_dir or None),
+        GitContextSource(get_cwd=lambda: state.working_dir or None),
         TeamContextSource(
-            get_session_id=lambda: role.state.session_id,
+            get_session_id=lambda: state.session_id,
             get_provider=resolve_control,
         ),
         TimestampContextSource(),
@@ -253,12 +267,12 @@ def _build_turn_context_sources(ctx, inputs: ContextComponentInputs) -> list[Eph
         CompactionNoticeContextSource(),
         SkillActivationContextSource(
             get_pool=lambda: get_skill_manager().pool,
-            get_touched_files=lambda: _touched_files(role),
+            get_touched_files=lambda: _touched_files(get_file_operations()),
         ),
         SkillListingContextSource(
             get_injector=lambda: get_skill_manager().injector,
-            max_tokens=role.config.context.skills.max_tokens,
-            is_enabled=lambda: role.config.context.skills.enabled,
+            max_tokens=skills_config.max_tokens,
+            is_enabled=lambda: skills_config.enabled,
         ),
         ChangedFilesContextSource(),
     ]
@@ -267,11 +281,11 @@ def _build_turn_context_sources(ctx, inputs: ContextComponentInputs) -> list[Eph
         sources.append(
             code_map_factory.build_turn_source(
                 CodeMapTurnSourceRequest(
-                    get_touched_files=lambda: _touched_files(role),
+                    get_touched_files=lambda: _touched_files(get_file_operations()),
                     lsp_query=_LspCodeQuery(ctx.defer(LSP_SERVICE)),
                     repo_index=ctx.dep(REPO_INDEX),
-                    get_read_state=lambda: _read_state(role),
-                    get_glimpsed_files=lambda: _glimpsed_files(role),
+                    get_read_state=lambda: _read_state(get_file_operations()),
+                    get_glimpsed_files=lambda: _glimpsed_files(state),
                     surface_callers=role.config.context.code_map.surface_callers,
                 )
             )

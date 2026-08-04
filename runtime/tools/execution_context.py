@@ -5,8 +5,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Iterator, Mapping
+from typing import Iterator
 
+from mote.contracts.tool.arguments import ToolArguments, freeze_tool_arguments
 from mote.contracts.tool.identity import ToolInvocationIdentity
 
 _tool_call_id: ContextVar[str | None] = ContextVar("mote_tool_call_id", default=None)
@@ -19,8 +20,11 @@ _authorized_invocation: ContextVar["AuthorizedToolInvocation | None"] = ContextV
 class AuthorizedToolInvocation:
     identity: ToolInvocationIdentity
     tool_name: str
-    arguments: Mapping[str, Any]
+    arguments: ToolArguments
     generation: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "arguments", freeze_tool_arguments(self.arguments))
 
 
 def current_tool_call_id() -> str | None:

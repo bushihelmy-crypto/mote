@@ -38,7 +38,7 @@ import statistics
 import string
 import textwrap
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
@@ -47,6 +47,8 @@ from typing import Annotated, Any
 
 from pydantic import Field, create_model
 
+from mote.contracts.events.envelope import JsonValue, freeze_json
+
 try:
     from asteval import Interpreter  # type: ignore[reportMissingImports] - optional Product backend
 except ImportError:  # Optional RunGraph compute backend; checked at activation.
@@ -54,7 +56,7 @@ except ImportError:  # Optional RunGraph compute backend; checked at activation.
 
 from mote.contracts.workflow.definition_source import DeclarativeWorkflowDefinitionSource
 from mote.contracts.workflow.execution import WorkflowNodeDispatchResult
-from mote.orchestration.workflows import NoOutput
+from mote.orchestration.workflows import NoOutput, Reducer
 from mote.orchestration.workflows.graph import WorkflowBuilder
 from mote.orchestration.workflows.types import END, START, GraphState, Stage
 from mote.product.workflows.run_graph.spec import (
@@ -84,6 +86,13 @@ _ELSE_KEY = "__else__"
 # skipped item is the identity element of "collect into a list" (its fold twin,
 # in ``_make_fold_node``, simply does not fold the failed value into the acc).
 _SKIP = object()
+
+
+@dataclass(frozen=True, slots=True)
+class RunGraphRouterInput:
+    """Immutable minimum state projection consumed by a conditional router."""
+
+    values: Mapping[str, JsonValue]
 
 
 # ---------------------------------------------------------------------------
@@ -246,18 +255,14 @@ _REDUCE_OPS: dict[str, Callable[[Any, Any], Any]] = {
     "merge": _reduce_merge,
 }
 
-# ``ChannelSpec.type`` (JSON-schema-ish literal) → python annotation. Advisory
-# only: ``GraphState`` does not validate on assignment (``extra="allow"``, no
-# ``validate_assignment``), so a channel's declared type documents intent and
-# feeds schema introspection without policing node writes at run time.
 _CHANNEL_PYTYPES: dict[str, Any] = {
     "string": str,
     "number": float,
     "integer": int,
     "boolean": bool,
-    "list": list,
-    "object": dict,
-    "any": Any,
+    "list": list[JsonValue],
+    "object": dict[str, JsonValue],
+    "any": JsonValue,
 }
 
 
@@ -268,14 +273,10 @@ def _build_state_schema(spec: GraphSpec) -> type[GraphState]:
     ``initial`` (so mutable initials are not shared across runs) and, unless it
     is a last-value channel, carrying its reducer in ``Annotated`` metadata for
     :func:`channels.derive_reducers`. Node results are *not* declared — they ride
-    ``extra="allow"``.
+    explicit fields, so unknown writes fail before state commit.
 
-    Declared **optional** inputs (``required=False``) are materialised with a
-    ``None`` default so an ``{"$input": x}`` reference to one the caller omitted
-    resolves to ``None`` instead of raising — honouring the ``required`` flag,
-    which is otherwise inert. **Required** inputs are deliberately left to ride
-    ``extra="allow"`` so a missing one still fails loudly (``GraphToolError:
-    input 'x' is not available``) at first reference.
+    Inputs and node-result slots are also declared. Required inputs use a
+    required field; optional inputs use ``None``.
     """
     fields: dict[str, Any] = {}
     for name, ch in spec.channels.items():
@@ -284,7 +285,7 @@ def _build_state_schema(spec: GraphSpec) -> type[GraphState]:
         if ch.reduce == "last":
             annotation: Any = pytype
         else:
-            annotation = Annotated[pytype, _REDUCE_OPS[ch.reduce]]
+            annotation = Annotated[pytype, Reducer(_REDUCE_OPS[ch.reduce])]
         # deepcopy per-instance via default_factory so a list/dict initial is
         # never shared between concurrent or resumed runs.
         fields[name] = (
@@ -292,13 +293,15 @@ def _build_state_schema(spec: GraphSpec) -> type[GraphState]:
             Field(default_factory=lambda v=ch.initial: deepcopy(v)),
         )
 
-    # Seed omitted optional inputs to None. Untyped (Any) to match how inputs
-    # otherwise ride extra="allow" — provided values are never coerced. Channel
-    # names never collide (spec._check enforces node/input/channel disjointness),
-    # but guard anyway so a channel default always wins.
+    for node in spec.nodes:
+        if node.writes is None and node.id not in fields:
+            fields[node.id] = (JsonValue, None)
+
     for name, field in spec.inputs.items():
-        if not field.required and name not in fields:
-            fields[name] = (Any, None)
+        if name in fields:
+            continue
+        annotation = _CHANNEL_PYTYPES[field.type]
+        fields[name] = (annotation, ... if field.required else None)
 
     if not fields:
         return GraphState
@@ -325,7 +328,7 @@ def _walk_path(base: Any, parts: list[str], *, where: str) -> Any:
 
 def resolve_binding(
     binding: Any,
-    state: GraphState,
+    state: GraphState | RunGraphRouterInput,
     env: dict[str, Any] | None = None,
     *,
     missing_ok: bool = False,
@@ -343,7 +346,9 @@ def resolve_binding(
     """
     inp = as_input_ref(binding)
     if inp is not None:
-        value = getattr(state, inp, _MISSING)
+        value = (
+            state.values.get(inp, _MISSING) if isinstance(state, RunGraphRouterInput) else getattr(state, inp, _MISSING)
+        )
         if value is _MISSING:
             if missing_ok:
                 return None
@@ -357,7 +362,11 @@ def resolve_binding(
         if env is not None and head in env:
             base = env[head]
         else:
-            base = getattr(state, head, _MISSING)
+            base = (
+                state.values.get(head, _MISSING)
+                if isinstance(state, RunGraphRouterInput)
+                else getattr(state, head, _MISSING)
+            )
             if base is _MISSING:
                 if missing_ok:
                     return None
@@ -406,7 +415,7 @@ _BINARY_OPS: dict[str, Callable[[Any, Any], bool]] = {
 }
 
 
-def eval_predicate(pred: Predicate, state: GraphState) -> bool:
+def eval_predicate(pred: Predicate, state: GraphState | RunGraphRouterInput) -> bool:
     left = resolve_binding(pred.left, state)
     if pred.op == "truthy":
         return bool(left)
@@ -424,8 +433,8 @@ def eval_predicate(pred: Predicate, state: GraphState) -> bool:
 def _unwrap(result: DispatchResult, node_id: str) -> Any:
     """Extract a dispatched tool's value, or fail the node on ``success=False``.
 
-    Prefers the canonical durable payload (so ``$ref`` can index into it) and falls back to
-    the text ``output``. A denied/failed call raises :class:`GraphToolError`
+    Uses the canonical durable payload when present; text-only tools use their
+    canonical output channel. A denied/failed call raises :class:`GraphToolError`
     (permanent → node FAILED, no retry).
     """
     if not result.success:
@@ -457,7 +466,7 @@ def _make_tool_node(node: NodeSpec, dispatch: DispatchFn) -> Callable:
             result = await dispatch(tool_name, kwargs)
             return {sink: _unwrap(result, node_id)}
 
-        return Stage(submit=submit(), name=node_id)
+        return Stage(submit=submit())
 
     return fn
 
@@ -528,7 +537,7 @@ def _make_map_node(node: NodeSpec, dispatch: DispatchFn) -> Callable:
                 results = kept
             return {sink: list(results)}
 
-        return Stage(submit=submit(), name=node_id)
+        return Stage(submit=submit())
 
     return fn
 
@@ -592,7 +601,7 @@ def _make_fold_node(node: NodeSpec, dispatch: DispatchFn) -> Callable:
                 acc = value if reduce_fn is None else reduce_fn(acc, value)
             return {sink: acc}
 
-        return Stage(submit=submit(), name=node_id)
+        return Stage(submit=submit())
 
     return fn
 
@@ -718,7 +727,7 @@ def _make_compute_node(node: NodeSpec) -> Callable:
                 executor.shutdown(wait=False, cancel_futures=True)
             return {sink: value}
 
-        return Stage(submit=submit(), name=node_id)
+        return Stage(submit=submit())
 
     return fn
 
@@ -855,16 +864,54 @@ def _validate_refs(spec: GraphSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_router(edges: list, else_key: str) -> Callable[[GraphState], str]:
+def _make_router(edges: list, else_key: str) -> Callable[[RunGraphRouterInput], str]:
     """Build a conditional router: first edge whose predicate holds, else *else_key*."""
 
-    def router(state: GraphState) -> str:
+    def router(state: RunGraphRouterInput) -> str:
         for idx, edge in enumerate(edges):
             if eval_predicate(edge.when, state):
                 return str(idx)
         return else_key
 
     return router
+
+
+def _binding_heads(binding: Any) -> set[str]:
+    input_ref = as_input_ref(binding)
+    if input_ref is not None:
+        return {input_ref}
+    node_ref = as_node_ref(binding)
+    if node_ref is not None:
+        return {node_ref.split(".", 1)[0]}
+    if isinstance(binding, dict):
+        heads: set[str] = set()
+        for value in binding.values():
+            heads.update(_binding_heads(value))
+        return heads
+    if isinstance(binding, list):
+        heads = set()
+        for value in binding:
+            heads.update(_binding_heads(value))
+        return heads
+    return set()
+
+
+def _router_projector(edges: list) -> Callable[[GraphState], RunGraphRouterInput]:
+    heads: set[str] = set()
+    for edge in edges:
+        heads.update(_binding_heads(edge.when.left))
+        heads.update(_binding_heads(edge.when.right))
+
+    def project(state: GraphState) -> RunGraphRouterInput:
+        values: dict[str, JsonValue] = {}
+        for head in heads:
+            value = getattr(state, head, _MISSING)
+            if value is _MISSING:
+                raise GraphToolError(f"conditional router field {head!r} is unavailable")
+            values[head] = freeze_json(value, path=f"conditional router.{head}")
+        return RunGraphRouterInput(values)
+
+    return project
 
 
 def _wire_edges(graph: WorkflowBuilder, spec: GraphSpec) -> None:
@@ -907,6 +954,7 @@ def _wire_edges(graph: WorkflowBuilder, spec: GraphSpec) -> None:
             src,
             _make_router(edges, _ELSE_KEY),
             mapping,
+            projector=_router_projector(edges),
             implementation_id=(
                 "mote.product.run-graph-router.v1.sha256-" f"{hashlib.sha256(edge_payload.encode()).hexdigest()}"
             ),

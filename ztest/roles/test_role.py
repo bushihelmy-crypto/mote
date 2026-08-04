@@ -19,6 +19,7 @@ from mote.contracts.output.policy import RunCompletionDecision
 from mote.contracts.service import ResolvedServiceResponse, ServiceExecutionSemantics, ServiceResponse
 from mote.kernel.output import text_output_contract
 from mote.product.agents import CodingAgentFactory, RootAgentRequest
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role, RoleSchema, RoleState
 from mote.runtime.agent.component_keys import (
     BACKGROUND_POOL,
@@ -52,7 +53,9 @@ from mote.ztest.model_fakes import bind_fake_runtime, offline_config
 
 from .conftest import FakeContextManager, FakeEnv, FakeLLM
 
-coding_agent_factory = CodingAgentFactory()
+coding_agent_factory = CodingAgentFactory(
+    model_checkpoint_policy=approved_model_checkpoint_policy(),
+)
 
 
 def build_test_role(*, name, role_schema, services, config=None):
@@ -589,11 +592,11 @@ class TestSkillsWiring:
         # tools deliberately omits "Skill"; the enabled subsystem still exposes
         # the bridge tool.
         r = self._role(context, global_on=True, tools=["Read"], skills=["foo"])
-        assert "Skill" in r._components.executor._tools
+        assert "Skill" in r.executor.tool_names()
 
     def test_executor_omits_skill_tool_when_switch_off(self, context):
         r = self._role(context, global_on=False, tools=["Read"], skills=["foo"])
-        assert "Skill" not in r._components.executor._tools
+        assert "Skill" not in r.executor.tool_names()
 
 
 # =============================================================================
@@ -621,11 +624,11 @@ class TestToolSearchWiring:
 
     def test_deferred_tools_autobinds_search_tool(self, context):
         r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
-        assert "SearchTools" in r._components.executor._tools
+        assert "SearchTools" in r.executor.tool_names()
 
     def test_no_deferral_binds_neither(self, context):
         r = self._role(context, tools=["Read", "WebBrowser"], deferred=[])
-        assert "SearchTools" not in r._components.executor._tools
+        assert "SearchTools" not in r.executor.tool_names()
         # No index source is added to the turn-context roster.
         assert r.turn_context_source("deferred_tool_index") is None
 
@@ -744,14 +747,14 @@ class TestToolSearchWiring:
         # the machinery exactly as before (SearchTools bound).
         r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
         assert r.config.tools.tool_search.enabled is True
-        assert "SearchTools" in r._components.executor._tools
+        assert "SearchTools" in r.executor.tool_names()
 
     def test_master_switch_off_unbinds_search_tool(self, context):
         # enabled=False forces the effective deferred set EMPTY → SearchTools is
         # NOT bound even though deferred_tools is declared (plain no-deferral).
         r = self._role(context, tools=["Read", "WebBrowser"], deferred=["WebBrowser"])
         r.config.tools.tool_search.enabled = False
-        assert "SearchTools" not in r._components.executor._tools
+        assert "SearchTools" not in r.executor.tool_names()
 
     def test_master_switch_off_shows_all_tools_on_native_wire(self, context):
         # With the switch off, the corpus tool is fully visible on this Native channel.
@@ -789,7 +792,7 @@ class TestToolSearchWiring:
         config.tools.tool_search.enabled = True
         schema = RoleSchema(name="X", tools=["Read", "DeviceUse"], deferred_tools=["DeviceUse"])
         r = build_test_role(name="X", role_schema=schema, services=EngineServices(context=context), config=config)
-        assert "DeviceUse" in r._components.executor._tools  # bound
+        assert "DeviceUse" in r.executor.tool_names()  # bound
         assert "DeviceUse" in r.list_deferred_tools()  # searchable in the menu
 
 
@@ -1405,7 +1408,6 @@ class TestCapabilities:
             "record_file_glimpsed",
             "is_resource_visible",
             "get_runtime_host",
-            "get_artifact_store",
             "get_artifact_publisher",
             "handoff_runtime",
             "get_browser_stealth",
@@ -1904,7 +1906,7 @@ class TestFullResolutionSmoke:
             ),
             # OS-level sandbox: permissions.runtime enabled makes
             # _sandbox_available true (build_runtime is side-effect-free).
-            permissions=PermissionConfig(runtime=SandboxRuntimeConfig(enabled=True)),
+            permissions=PermissionConfig(runtime=SandboxRuntimeConfig()),
             # file-watch: enabled + the hook layer above (its FileChanged
             # consumer) makes _build_file_watch_service return a real service.
             file_watch=FileWatchConfig(enabled=True),
@@ -1957,7 +1959,7 @@ class TestFullResolutionSmoke:
 
 
 # =============================================================================
-# Tool-execution-scope config wiring (tools.result_limit / tools.run_journal
+# Tool-execution-scope config wiring (tools.result_limit / tools.effect_store
 # reach the executor; disabling the ledger yields no ledger)
 # =============================================================================
 class TestToolExecConfigWiring:
@@ -1975,14 +1977,14 @@ class TestToolExecConfigWiring:
         )
         # Override before the (lazy) executor is built.
         role.config.tools.result_limit.default_max_result_size_chars = 12345
-        role.config.tools.run_journal.enabled = True
+        role.config.tools.effect_store.enabled = True
 
         ex = role.executor
         # The executor exposes the two configs it owns; both are the very
         # instances configured under ``tools`` (identity, not just value).
         assert ex.limit_config is role.config.tools.result_limit
         assert ex.limit_config.default_max_result_size_chars == 12345
-        assert ex.journal_config is role.config.tools.run_journal
+        assert ex.effect_store_config is role.config.tools.effect_store
         assert ex.journal is not None
 
     def test_ledger_disabled_yields_no_ledger(self, context):
@@ -1991,8 +1993,8 @@ class TestToolExecConfigWiring:
             wiring=AgentWiring.for_context(context),
             role_schema=RoleSchema(tools=["Read"]),
         )
-        role.config.tools.run_journal.enabled = False
-        assert role.executor.journal_config.enabled is False
+        role.config.tools.effect_store.enabled = False
+        assert role.executor.effect_store_config.enabled is False
 
     def test_spill_reducer_borrows_the_executor_result_limit(self, context):
         # Zero-drift proof: the compaction spill reducer does not build its own

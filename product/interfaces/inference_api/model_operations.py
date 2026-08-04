@@ -154,7 +154,7 @@ def _response(output) -> dict[str, JsonValue]:
     if isinstance(output, ImageGenerationOutput):
         return {
             "data": [
-                *[item for item in output.provider_items],
+                *[dict(item) for item in output.provider_items],
                 *[{"artifact": cast(JsonValue, asdict(artifact))} for artifact in output.artifacts],
             ]
         }

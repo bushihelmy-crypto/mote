@@ -2,18 +2,18 @@
 # -*- coding: utf-8 -*-
 """Unit tests for :mod:`mote.tasks.decorators`.
 
-Covers the ``bg_tool`` marker + ``is_bg_tool`` predicate and the
-``require_bg_complete`` gate (no-wait fast path, wait-until-empty path, and the
+Covers the ``require_bg_complete`` gate (no-wait fast path, wait-until-empty path, and the
 ``None``-pool path). ``ThoughtReporter`` is patched so the gate never touches
 the network.
 """
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
 
-from mote.orchestration.background_tasks import bg_tool, is_bg_tool, require_bg_complete
+from mote.orchestration.background_tasks import require_bg_complete
 
 from .conftest import gated, wait_started
 
@@ -35,23 +35,6 @@ def patch_reporter(monkeypatch):
 
     monkeypatch.setattr("mote.orchestration.background_tasks.decorators.ThoughtReporter", FakeReporter)
     return reports
-
-
-class TestBgToolMarker:
-    def test_bg_tool_sets_marker(self):
-        @bg_tool
-        async def f():
-            return 1
-
-        assert is_bg_tool(f) is True
-        assert f._bg_tool is True
-
-    def test_is_bg_tool_false_for_plain(self):
-        async def g():
-            return 1
-
-        assert is_bg_tool(g) is False
-        assert is_bg_tool(object()) is False
 
 
 class TestRequireBgComplete:

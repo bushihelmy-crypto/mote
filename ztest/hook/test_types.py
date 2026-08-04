@@ -1,18 +1,42 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """Tests for typed hook wire shape and fold precedence."""
+
 from __future__ import annotations
 
-from mote.contracts.hook import HookIdentity, PreToolUseInvocation, PreToolUsePayload, StopInvocation, StopPayload
+from mote.contracts.hook import (
+    HookIdentity,
+    HookStop,
+    PreToolUseInvocation,
+    PreToolUsePayload,
+    StopInvocation,
+    StopPayload,
+)
+from mote.contracts.tool.identity import (
+    ToolAttemptOrdinal,
+    ToolInvocationId,
+    ToolInvocationIdentity,
+    tool_arguments_digest,
+)
 from mote.runtime.hook.types import EMPTY, HookOutcome, fold
 from mote.runtime.hook.wire import HookWireSerializer
 
 
 def test_to_json_dict_carries_envelope_and_payload():
+    arguments = {"command": "ls"}
+    tool_identity = ToolInvocationIdentity(
+        ToolInvocationId("hook-wire"),
+        ToolAttemptOrdinal(1),
+        "hook-wire-definition",
+        1,
+        tool_arguments_digest(arguments),
+        "hook-wire-owner",
+        "hook-wire-run",
+    )
     hi = PreToolUseInvocation(
         identity=HookIdentity("sid", "/tmp/proj", "/tmp/rollout.jsonl"),
         permission_mode="default",
-        payload=PreToolUsePayload("Bash", {"command": "ls"}),
+        payload=PreToolUsePayload(identity=tool_identity, tool_name="Bash", tool_input=arguments),
     )
     wire = HookWireSerializer().to_json_dict(hi)
     # Both snake_case and camelCase identity keys present (codex compatible).
@@ -35,7 +59,7 @@ def test_to_json_dict_omits_permission_mode_when_none():
 def test_fold_empty_is_empty():
     out = fold([])
     assert out.behavior is None
-    assert out.additional_context == []
+    assert out.additional_context == ()
     assert out is not EMPTY  # fresh instance
 
 
@@ -59,14 +83,13 @@ def test_fold_accumulates_context_and_takes_last_system_message():
             HookOutcome(additional_context=["b", "c"], system_message="second"),
         ]
     )
-    assert out.additional_context == ["a", "b", "c"]
+    assert out.additional_context == ("a", "b", "c")
     assert out.system_message == "second"
 
 
 def test_fold_stop_is_sticky():
-    out = fold([HookOutcome(stop=True, stop_reason="halt"), HookOutcome()])
-    assert out.stop is True
-    assert out.stop_reason == "halt"
+    out = fold([HookOutcome(stop=HookStop("halt")), HookOutcome()])
+    assert out.stop == HookStop("halt")
 
 
 def test_fold_takes_last_updated_args():
@@ -88,6 +111,6 @@ def test_fold_updated_response_defaults_none_and_ignores_unset():
 
 def test_is_blocking():
     assert HookOutcome(behavior="deny").is_blocking is True
-    assert HookOutcome(stop=True).is_blocking is True
+    assert HookOutcome(stop=HookStop()).is_blocking is True
     assert HookOutcome(behavior="allow").is_blocking is False
     assert HookOutcome().is_blocking is False

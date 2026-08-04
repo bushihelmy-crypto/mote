@@ -31,6 +31,10 @@ from mote.runtime.lsp.registry import DiagnosticRegistry, parse_diagnostic
 from mote.runtime.telemetry.logging import logger
 
 
+class LspQueryError(RuntimeError):
+    """Typed failure for a malformed, unavailable, or timed-out LSP query."""
+
+
 class LspServerInstance:
     """A single managed language server."""
 
@@ -152,10 +156,10 @@ class LspServerInstance:
         :meth:`did_save`'s guards so a query never breaks a turn.
         """
         if not self.alive or self._endpoint is None:
-            return []
+            raise LspQueryError("LSP server is not active")
         uri = self._ensure_open(path)
         if uri is None:
-            return []
+            raise LspQueryError("LSP document could not be opened")
         try:
             result = await self._endpoint.request(
                 "textDocument/documentSymbol",
@@ -164,8 +168,10 @@ class LspServerInstance:
             )
         except Exception as exc:  # noqa: BLE001 — best-effort query
             logger.debug(f"LspServer: documentSymbol for {path} failed: {exc}")
-            return []
-        return result if isinstance(result, list) else []
+            raise LspQueryError("LSP documentSymbol request failed") from exc
+        if not isinstance(result, list):
+            raise LspQueryError("LSP documentSymbol response is malformed")
+        return result
 
     async def definition(self, path: str, line: int, character: int) -> list:
         """Definition sites for the symbol at ``(line, character)`` in *path*.
@@ -175,10 +181,10 @@ class LspServerInstance:
         this normalizes to a list.
         """
         if not self.alive or self._endpoint is None:
-            return []
+            raise LspQueryError("LSP server is not active")
         uri = self._ensure_open(path)
         if uri is None:
-            return []
+            raise LspQueryError("LSP document could not be opened")
         try:
             result = await self._endpoint.request(
                 "textDocument/definition",
@@ -190,12 +196,12 @@ class LspServerInstance:
             )
         except Exception as exc:  # noqa: BLE001 — best-effort query
             logger.debug(f"LspServer: definition for {path} failed: {exc}")
-            return []
+            raise LspQueryError("LSP definition request failed") from exc
         if isinstance(result, list):
             return result
         if isinstance(result, dict):
             return [result]
-        return []
+        raise LspQueryError("LSP definition response is malformed")
 
     async def references(self, path: str, line: int, character: int) -> list:
         """Reference (call) sites for the symbol at ``(line, character)`` in *path*.
@@ -206,10 +212,10 @@ class LspServerInstance:
         reply normalizes to ``[]``.
         """
         if not self.alive or self._endpoint is None:
-            return []
+            raise LspQueryError("LSP server is not active")
         uri = self._ensure_open(path)
         if uri is None:
-            return []
+            raise LspQueryError("LSP document could not be opened")
         try:
             result = await self._endpoint.request(
                 "textDocument/references",
@@ -222,8 +228,10 @@ class LspServerInstance:
             )
         except Exception as exc:  # noqa: BLE001 — best-effort query
             logger.debug(f"LspServer: references for {path} failed: {exc}")
-            return []
-        return result if isinstance(result, list) else []
+            raise LspQueryError("LSP references request failed") from exc
+        if not isinstance(result, list):
+            raise LspQueryError("LSP references response is malformed")
+        return result
 
     @staticmethod
     def _read_text(path: str) -> Optional[str]:

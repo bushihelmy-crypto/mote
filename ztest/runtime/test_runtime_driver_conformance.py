@@ -1,4 +1,5 @@
 """The shared live Runtime contract instantiated for every persistent driver."""
+
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -6,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from mote.contracts.surface import CanvasElement, CanvasOperation
+from mote.contracts.surface import CanvasOperation, CanvasRectangle
 from mote.runtime.interactive.browser import driver as browser_runtime_module
 from mote.runtime.interactive.browser.driver import BrowserRuntimeDriver
 from mote.runtime.interactive.canvas.driver import CanvasRuntimeDriver
@@ -61,7 +62,7 @@ def runtime_driver_case(
                 [
                     CanvasOperation(
                         op="upsert",
-                        element=CanvasElement(id="conformance", kind="rect", x=1, y=1),
+                        element=CanvasRectangle(id="conformance", x=1, y=1),
                     )
                 ]
             )

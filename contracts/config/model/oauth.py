@@ -42,7 +42,6 @@ class StoreBackend(str, Enum):
 
     FILE = "file"
     KEYRING = "keyring"
-    FALLBACK = "fallback"
 
 
 class OAuthProviderConfig(YamlModel):
@@ -99,8 +98,8 @@ class OAuthProviderConfig(YamlModel):
 
     # Storage / behavior
     store_backend: StoreBackend = Field(
-        default=StoreBackend.FALLBACK,
-        description="Where to persist tokens: file | keyring | fallback.",
+        default=StoreBackend.FILE,
+        description="Authoritative credential backend: file or keyring.",
     )
     storage_root: Optional[Path] = Field(default=None, exclude=True)
     headers_extra: Dict[str, str] = Field(

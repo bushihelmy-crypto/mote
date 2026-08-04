@@ -40,27 +40,39 @@ def fold(outcomes: Iterable[HookOutcome]) -> HookOutcome:
     ``updated_args`` / ``updated_response`` each take the last handler that
     supplied one.
     """
-    result = HookOutcome()
+    behavior = None
+    updated_args = None
+    updated_response = None
+    additional_context: list[str] = []
+    system_message = ""
+    stop = None
+    authorization_facts = []
     best_rank = 0
     for outcome in outcomes:
         rank = _behavior_rank(outcome.behavior)
         if rank > best_rank:
             best_rank = rank
-            result.behavior = outcome.behavior
+            behavior = outcome.behavior
         if outcome.updated_args is not None:
-            result.updated_args = outcome.updated_args
+            updated_args = outcome.updated_args
         if outcome.updated_response is not None:
-            result.updated_response = outcome.updated_response
+            updated_response = outcome.updated_response
         if outcome.additional_context:
-            result.additional_context.extend(outcome.additional_context)
+            additional_context.extend(outcome.additional_context)
         if outcome.system_message:
-            result.system_message = outcome.system_message
-        if outcome.stop:
-            result.stop = True
-            if outcome.stop_reason:
-                result.stop_reason = outcome.stop_reason
-        result.authorization_facts.extend(outcome.authorization_facts)
-    return result
+            system_message = outcome.system_message
+        if outcome.stop is not None:
+            stop = outcome.stop
+        authorization_facts.extend(outcome.authorization_facts)
+    return HookOutcome(
+        behavior=behavior,
+        updated_args=updated_args,
+        updated_response=updated_response,
+        additional_context=tuple(additional_context),
+        system_message=system_message,
+        stop=stop,
+        authorization_facts=tuple(authorization_facts),
+    )
 
 
 __all__ = [

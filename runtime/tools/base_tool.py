@@ -75,6 +75,7 @@ class BaseTool(ABC):
 
     # --- Identity ---
     name: ClassVar[str] = ""  # Primary tool name
+    definition_version: ClassVar[str] = "1"
     aliases: ClassVar[list[str]] = []  # Alternative names (LLM can use any)
     # Recall-only search vocabulary for the tool-search MATCH corpus — words a
     # model might reasonably use to *look for* this tool that its one-line summary

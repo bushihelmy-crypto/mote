@@ -428,12 +428,6 @@ PUBLIC_SYMBOL_CLASSIFICATIONS = (
         "artifact-store capability declaration",
     ),
     PublicSymbolClassification(
-        "mote.runtime.durable.make_durable_backend",
-        PublicSymbolRole.EXTERNAL_ADAPTER,
-        "runtime",
-        "configured durable backend adapter boundary",
-    ),
-    PublicSymbolClassification(
         "mote.runtime.events.EventFabric",
         PublicSymbolRole.PRODUCTION_CAPABILITY,
         "runtime",

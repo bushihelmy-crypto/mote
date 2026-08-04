@@ -47,6 +47,10 @@ class Executor:
         self._catalog = Catalog(self.tool)
         self.calls = []
 
+    @property
+    def tool_binding_generation(self):
+        return 3
+
     def canonical_tool_specs(self, *, include_hidden):
         return [
             {
@@ -75,7 +79,7 @@ def target():
 @pytest.mark.asyncio
 async def test_snapshot_dispatch_is_revision_pinned():
     executor = Executor()
-    manager = RuntimeToolSnapshotManager(executor)
+    manager = RuntimeToolSnapshotManager(executor, composition_generation_id="application-generation-1")
     snapshot = manager.materialize(target(), include_hidden=False)
     result = await manager.dispatch(
         ToolDispatchRequest(
@@ -94,7 +98,7 @@ async def test_snapshot_dispatch_is_revision_pinned():
 @pytest.mark.asyncio
 async def test_replaced_capability_does_not_rebind_old_snapshot_by_name():
     executor = Executor()
-    manager = RuntimeToolSnapshotManager(executor)
+    manager = RuntimeToolSnapshotManager(executor, composition_generation_id="application-generation-1")
     snapshot = manager.materialize(target(), include_hidden=False)
     executor._catalog.tool = binding()
 
@@ -114,7 +118,7 @@ async def test_replaced_capability_does_not_rebind_old_snapshot_by_name():
 @pytest.mark.asyncio
 async def test_released_snapshot_cannot_dispatch():
     executor = Executor()
-    manager = RuntimeToolSnapshotManager(executor)
+    manager = RuntimeToolSnapshotManager(executor, composition_generation_id="application-generation-1")
     snapshot = manager.materialize(target(), include_hidden=False)
     assert manager.release(snapshot) is True
 

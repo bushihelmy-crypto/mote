@@ -1,8 +1,9 @@
 """XmlCommandChannel — text protocol with XML command blocks."""
+
 from __future__ import annotations
 
 import re
-from typing import AsyncGenerator, Optional
+from typing import Optional
 
 from mote.contracts.conversation import AIMessage, CauseBy, UserMessage
 from mote.contracts.model.inference import InferenceResult
@@ -68,11 +69,9 @@ class XmlCommandChannel(CommandChannel):
         has_end_marker = bool(_END_MARKER.search(content))
         if error_msg and not has_end_marker:
             return ModelTurn(content=content, actions=actions)
-        ordinary_commands = [cmd for cmd in command_list or [] if str(cmd["command_name"]).lower() != "end"]
-        actions.extend(
-            ToolCallAction(name=cmd["command_name"], arguments=cmd.get("args") or {}) for cmd in ordinary_commands
-        )
-        if has_end_marker or len(ordinary_commands) != len(command_list or []):
+        ordinary_commands = [cmd for cmd in command_list if cmd.command_name.lower() != "end"]
+        actions.extend(ToolCallAction(name=cmd.command_name, arguments=cmd.args) for cmd in ordinary_commands)
+        if has_end_marker or len(ordinary_commands) != len(command_list):
             actions.append(
                 FinalCandidateAction(
                     raw=_END_MARKER.sub("", content).strip(),
@@ -80,19 +79,6 @@ class XmlCommandChannel(CommandChannel):
                 )
             )
         return ModelTurn(content=content, actions=actions)
-
-    async def iter_commands(self, result: InferenceResult, valid_names: set[str]) -> AsyncGenerator[dict, None]:
-        command_rsp = result.content
-        if not command_rsp:
-            return
-        try:
-            command_list, error_msg = await parse_commands2(command_rsp, valid_names)
-        except Exception:  # noqa: BLE001 — parsing is represented as no command
-            return
-        if error_msg:
-            return
-        for cmd in command_list or []:
-            yield {"id": None, **cmd, "status": "running", "error_msg": ""}
 
     def react_result(self, outputs: str) -> str:
         # XML's <end></end>-era contract: ask the orchestrator to mark the task

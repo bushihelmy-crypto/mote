@@ -6,9 +6,9 @@ Cancels the entire DAG. All in-flight nodes receive asyncio cancellation.
 from __future__ import annotations
 
 from mote.contracts.async_work.command import LocalCancelDisposition
+from mote.contracts.task.models import TaskId
 from mote.contracts.tool.errors import ToolError
 from mote.orchestration.background_tasks.status import BackgroundTaskStatus
-from mote.product.agents.background_tasks import AgentBackgroundTasks
 from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.capability_types import GetBgPool
 
@@ -39,9 +39,8 @@ class CancelTasks(BaseTool):
             reason: Optional reason for cancellation (shown in notifications).
         """
         pool = self.get_bg_pool()
-        if not isinstance(pool, AgentBackgroundTasks):
-            raise ToolError("Local background-task capability is unavailable")
-        meta = pool.get_task_info(task_id)
+        canonical_task_id = TaskId(task_id)
+        meta = pool.get_task_info(canonical_task_id)
         if meta is None:
             raise ToolError(_MSG_UNKNOWN_TASK.format(task_id=task_id))
 
@@ -51,13 +50,13 @@ class CancelTasks(BaseTool):
         ):
             return _MSG_CANCEL_DONE.format(task_id=task_id, status=meta.status)
 
-        receipt = pool.cancel_current(task_id, reason or "user requested")
+        receipt = pool.cancel_current(canonical_task_id, reason or "user requested")
         if receipt.disposition is not LocalCancelDisposition.CANCEL_REQUESTED:
             return _MSG_CANCEL_DONE.format(task_id=task_id, status="finished")
 
         # Cancelling is a consume: the model acted on the task, so retire its
         # re-projected result/marker and let the meta be reaped.
-        pool.mark_retrieved(task_id)
+        pool.mark_retrieved(canonical_task_id)
 
         cancel_reason = reason or "user requested"
 

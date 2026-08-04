@@ -4,23 +4,23 @@ Given a :class:`SandboxConfig` and a way to read the Role's cwd, decides whether
 a write to a path is inside the allowed boundary. This is a *path-checking*
 sandbox (not OS-level): the engine consults it before a file-mutating tool runs.
 
-Modes:
-  * ``full``            — no boundary, every write allowed.
-  * ``read-only``       — no writes allowed at all.
-  * ``workspace-write`` — writes confined to the cwd + configured writable roots
-                          (+ any roots the user granted this session).
+Profiles:
+  * ``workspace-governed`` / ``networked-governed`` — writes confined to the
+    cwd + configured writable roots (+ session grants).
+  * ``isolated-compute`` — no filesystem writes.
 
 A violation is not a hard failure: the engine escalates it to the user, and a
 "session" grant calls :meth:`add_session_root` so subsequent writes under that
 directory pass without re-prompting (Codex's escalation-with-persistence flow).
 """
+
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from mote.runtime.tools.permission.config import SandboxConfig
+from mote.runtime.tools.permission.config import SandboxConfig, SandboxProfile
 
 
 @dataclass
@@ -65,16 +65,13 @@ class SandboxGuard:
 
     def check_write(self, path: str) -> SandboxVerdict:
         """Decide whether writing ``path`` is within the sandbox boundary."""
-        mode = self._config.mode
-        if mode == "full":
-            return SandboxVerdict(True)
         if not path:
             return SandboxVerdict(
                 False,
                 reason="a filesystem write has no concrete permission target",
             )
 
-        if mode == "read-only":
+        if self._config.profile is SandboxProfile.ISOLATED_COMPUTE:
             return SandboxVerdict(
                 False,
                 reason=f"writing '{path}' is blocked in a read-only sandbox",

@@ -349,9 +349,7 @@ class ApprovalScreen(ModalScreen[ApprovalDecision]):
         ("escape", "decide('reject')", "Cancel"),
     ]
 
-    # Button colour per outcome (keeps the success/primary/error/warning cue the
-    # hardcoded buttons carried, now that labels come localized from the shared
-    # renderer). Any unknown outcome falls back to a neutral default button.
+    # Button colour per closed outcome catalog.
     _OUTCOME_VARIANT: dict[str, ButtonVariant] = {
         "accept": "success",
         "always_allow": "primary",
@@ -382,7 +380,7 @@ class ApprovalScreen(ModalScreen[ApprovalDecision]):
                     yield Button(
                         f"{PROMPT_SYMBOL} {i}. {label} ({shortcut})",
                         id=outcome,
-                        variant=self._OUTCOME_VARIANT.get(outcome, "default"),
+                        variant=self._OUTCOME_VARIANT[outcome],
                     )
             yield Label(t(K.HINT_SELECT_SINGLE_CANCEL), classes="a-foot")
 

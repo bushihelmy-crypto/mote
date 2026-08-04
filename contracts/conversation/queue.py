@@ -11,8 +11,9 @@ from enum import Enum
 from json import JSONDecodeError
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SerializeAsAny
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from mote.contracts.conversation.codec import dump_message, load_message
 from mote.contracts.conversation.messages import Message
 
 
@@ -28,7 +29,7 @@ class QueuedMessage(BaseModel):
     """Priority envelope for a message stored in MessageQueue."""
 
     priority: MessagePriority = MessagePriority.NEXT
-    message: SerializeAsAny[Message]
+    message: Message
 
 
 class MessageQueue(BaseModel):
@@ -69,12 +70,12 @@ class MessageQueue(BaseModel):
             self._new_msg_event.clear()
         return [item.message for item in drain]
 
-    def push(self, msg: Message, priority: MessagePriority = MessagePriority.NEXT):
+    def push(self, msg: Message, priority: MessagePriority = MessagePriority.NEXT) -> None:
         """Push a message with the given priority (default NEXT)."""
         self._items.append(QueuedMessage(priority=priority, message=msg))
         self._new_msg_event.set()
 
-    def empty(self):
+    def empty(self) -> bool:
         """Return true if the queue is empty."""
         return len(self._items) == 0
 
@@ -94,24 +95,28 @@ class MessageQueue(BaseModel):
         if self.empty():
             return "[]"
         return json.dumps(
-            [{"priority": int(item.priority), "message": item.message.dump()} for item in self._items],
+            [{"priority": int(item.priority), "message": dump_message(item.message)} for item in self._items],
             ensure_ascii=False,
         )
 
     @staticmethod
-    def load(data) -> "MessageQueue":
+    def load(data: str) -> "MessageQueue":
         """Convert the json string to the ``MessageQueue`` object."""
         queue = MessageQueue()
         try:
-            lst = json.loads(data)
-            for i in lst:
-                if isinstance(i, dict) and "message" in i:
-                    msg = Message.load(i["message"])
-                    queue.push(msg, priority=i.get("priority", MessagePriority.NEXT))
-                else:
-                    queue.push(Message.load(i))
-        except JSONDecodeError:
-            pass
+            value = json.loads(data)
+        except JSONDecodeError as exc:
+            raise ValueError("message queue is not valid JSON") from exc
+        if type(value) is not list:
+            raise ValueError("message queue must be an array")
+        for item in value:
+            if type(item) is not dict or set(item) != {"priority", "message"}:
+                raise ValueError("message queue item has an invalid shape")
+            message = item["message"]
+            priority = item["priority"]
+            if type(message) is not str or type(priority) is not int:
+                raise ValueError("message queue item primitives are invalid")
+            queue.push(load_message(message), priority=MessagePriority(priority))
 
         return queue
 

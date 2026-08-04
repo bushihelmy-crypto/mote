@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Any, List, Optional
+from typing import List, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -202,84 +202,6 @@ class Mailbox:
         await self._data_event.wait()
 
     # ------------------------------------------------------------------
-    # Persistence helpers (used by ResidencyStore)
-    # ------------------------------------------------------------------
-    def dump(self) -> dict[str, Any]:
-        """Serialize pending items to the canonical Mailbox v1 envelope."""
-        return {
-            "schema": "mote.agent-mailbox/v1",
-            "schema_version": 1,
-            "owner_agent_id": self.owner_agent_id,
-            "next_sequence": self._next_sequence,
-            "items": [
-                {
-                    "sequence": item.sequence,
-                    "delivery_id": item.delivery_id,
-                    "message": item.message.dump(),
-                    "trigger_turn": item.trigger_turn,
-                }
-                for item in self._items
-            ],
-        }
-
-    @staticmethod
-    def load(data: object, *, expected_owner_agent_id: str) -> "Mailbox":
-        """Strictly rebuild a mailbox from the canonical v1 envelope."""
-        if type(data) is not dict or set(data) != {
-            "schema",
-            "schema_version",
-            "owner_agent_id",
-            "next_sequence",
-            "items",
-        }:
-            raise ValueError("mailbox envelope fields are not canonical")
-        assert isinstance(data, dict)
-        if data["schema"] != "mote.agent-mailbox/v1" or type(data["schema_version"]) is not int:
-            raise ValueError("mailbox schema is unsupported")
-        if data["schema_version"] != 1:
-            raise ValueError("mailbox schema version is unsupported")
-        owner = data["owner_agent_id"]
-        if type(owner) is not str or not owner or owner != expected_owner_agent_id:
-            raise ValueError("mailbox owner identity mismatch")
-        next_sequence = data["next_sequence"]
-        if type(next_sequence) is not int or next_sequence < 1:
-            raise ValueError("mailbox next_sequence is invalid")
-        items = data["items"]
-        if type(items) is not list:
-            raise ValueError("mailbox items must be a list")
-        mailbox = Mailbox(owner)
-        seen_sequences: set[int] = set()
-        seen_deliveries: set[str] = set()
-        previous_sequence = 0
-        for entry in items:
-            if type(entry) is not dict or set(entry) != {
-                "sequence",
-                "delivery_id",
-                "message",
-                "trigger_turn",
-            }:
-                raise ValueError("mailbox item fields are not canonical")
-            sequence = entry["sequence"]
-            delivery_id = entry["delivery_id"]
-            if type(sequence) is not int or sequence < 1 or sequence >= next_sequence:
-                raise ValueError("mailbox item sequence is invalid")
-            if sequence in seen_sequences or sequence <= previous_sequence:
-                raise ValueError("mailbox item sequences must be unique and ordered")
-            if type(delivery_id) is not str or not delivery_id or delivery_id in seen_deliveries:
-                raise ValueError("mailbox delivery identity is invalid or duplicated")
-            if type(entry["trigger_turn"]) is not bool:
-                raise ValueError("mailbox trigger_turn must be a boolean")
-            msg = Message.load(entry["message"])
-            if msg is None or str(msg.id) != delivery_id:
-                raise ValueError("mailbox message delivery identity mismatch")
-            mailbox._items.append(_MailboxItem(sequence, delivery_id, msg, entry["trigger_turn"]))
-            seen_sequences.add(sequence)
-            seen_deliveries.add(delivery_id)
-            previous_sequence = sequence
-        mailbox._next_sequence = next_sequence
-        if mailbox._items:
-            mailbox._data_event.set()
-        return mailbox
 
 
 __all__ = [

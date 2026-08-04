@@ -38,7 +38,7 @@ from mote.contracts.interaction import (
 )
 from mote.contracts.interaction.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus, HumanHandoffOutcome
 from mote.contracts.surface import LiveSurfaceSession
-from mote.product.interaction.ports import DriverControlBinding
+from mote.product.interaction.ports import DriverControlBinding, DriverControlDisposition, DriverControlReceipt
 from mote.product.interfaces.agui import wire as agui
 from mote.product.presentation.events.events import ApprovalDecision
 from mote.product.presentation.projection.approval import approval_action, approval_preview, approval_risk
@@ -312,13 +312,13 @@ class AguiPort:
     # ------------------------------------------------------------------
     # Control affordances (server owns the run task; these stay inert)
     # ------------------------------------------------------------------
-    def signal_interrupt(self, ctx: object = None) -> None:
+    def signal_interrupt(self, ctx: object = None) -> DriverControlReceipt:
         """Cancel the in-flight turn. Phase 2/3: no-op (server owns the run task)."""
-        return None
+        return DriverControlReceipt(DriverControlDisposition.IGNORED)
 
-    def submit_steer(self, ctx: object, text: str) -> None:
+    def submit_steer(self, ctx: object, text: str) -> DriverControlReceipt:
         """Turn-level steering. No-op (no mid-stream steer control yet)."""
-        return None
+        return DriverControlReceipt(DriverControlDisposition.IGNORED)
 
     async def aclose(self) -> None:
         """Mark closed so a late prompt short-circuits to its safe default.

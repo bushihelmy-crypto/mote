@@ -15,7 +15,7 @@ from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from mote.contracts.content.identity import ContentIdentity
+from mote.contracts.content.identity import ContentDigest, ContentIdentity
 from mote.contracts.file.codec import path_to_dict, snapshot_from_dict, snapshot_to_dict
 from mote.contracts.file.errors import ReadCursorError
 from mote.contracts.file.identity import FileSnapshot, PathToken
@@ -235,13 +235,11 @@ class DurableCursorRegistry:
         now = self._clock()
         with closing(self._connect()) as connection:
             timeline = self._timeline_row(connection)
-            rows = connection.execute(
-                """
+            rows = connection.execute("""
                 SELECT lease_id, epoch, expires_at_ns, hard_expires_at_ns,
                        released_at_ns
                 FROM cursor_leases
-                """
-            ).fetchall()
+                """).fetchall()
             active_ids = tuple(
                 row[0] for row in rows if row[1] == timeline[0] and row[2] > now and row[3] > now and row[4] is None
             )
@@ -948,7 +946,7 @@ class DurableCursorRegistry:
                     "pinned artifact digest resolves to conflicting sizes",
                     digest=validated.digest,
                 )
-        return tuple(ContentIdentity(digest, size) for digest, size in sorted(sizes.items()))
+        return tuple(ContentIdentity(ContentDigest(digest), size) for digest, size in sorted(sizes.items()))
 
     @staticmethod
     def _validate_ref(ref: ContentIdentity) -> ContentIdentity:

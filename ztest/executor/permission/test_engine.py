@@ -7,6 +7,7 @@ Covers the 11-step decision pipeline: bypass-immune deny/ask, mode shortcuts
 interactive ``ask`` resolution (yes / always / no, plus the no-channel
 fail-closed path).
 """
+
 from __future__ import annotations
 
 import os
@@ -59,7 +60,7 @@ def sandboxed_engine(cwd, *, mode="bypass", reply=None, writable_roots=None):
             return choice
 
     guard = SandboxGuard(
-        SandboxConfig(mode="workspace-write", writable_roots=writable_roots or []),
+        SandboxConfig(writable_roots=writable_roots or []),
         get_cwd=lambda: cwd,
     )
     return PermissionEngine(mode=mode, store=store, ask_user=ask_user, sandbox=guard)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -16,6 +17,17 @@ def _store(tmp_path):
     return AgentDeliveryStore(tmp_path / "delivery.json", leases=leases, subject="delivery:root"), lease
 
 
+def _bind(store, record, generation, lease, *, turn_request_id="turn-1"):
+    digest = hashlib.sha256(record.payload_digest.encode()).hexdigest()
+    return store.bind_to_turn(
+        (record.delivery_id,),
+        turn_request_id=turn_request_id,
+        target_generation=generation,
+        expected_payload_digest=digest,
+        lease=lease,
+    )[0]
+
+
 def test_accept_is_durable_and_idempotent_per_target(tmp_path):
     store, lease = _store(tmp_path)
     message = UserMessage(id="message-1", content="hello")
@@ -28,20 +40,20 @@ def test_accept_is_durable_and_idempotent_per_target(tmp_path):
     assert {record.delivery_id for record in reopened.pending()} == {first.delivery_id, other_target.delivery_id}
 
 
-def test_claim_rebinds_incarnation_and_stale_ack_fails(tmp_path):
+def test_turn_binding_is_stable_and_stale_ack_fails(tmp_path):
     store, lease = _store(tmp_path)
     accepted = store.accept("agent", UserMessage(id="m", content="x"), "trigger_turn", lease=lease)
-    first_claim = store.claim(accepted.delivery_id, 4, lease=lease)
-    second_claim = store.claim(accepted.delivery_id, 5, lease=lease)
-    assert first_claim.target_generation == 4
-    assert second_claim.target_generation == 5
+    bound = _bind(store, accepted, 4, lease)
+    assert bound.target_generation == 4
+    with pytest.raises(RuntimeError, match="another turn"):
+        _bind(store, accepted, 5, lease, turn_request_id="turn-2")
     try:
-        store.ack(accepted.delivery_id, 4, lease=lease)
+        store.ack(accepted.delivery_id, 3, lease=lease)
     except RuntimeError:
         pass
     else:
         raise AssertionError("stale incarnation ack must fail")
-    assert store.ack(accepted.delivery_id, 5, lease=lease).state is AgentDeliveryState.ACKED
+    assert store.ack(accepted.delivery_id, 4, lease=lease).state is AgentDeliveryState.ACKED
 
 
 def test_terminal_target_dead_letters_each_unsettled_delivery(tmp_path):
@@ -85,5 +97,5 @@ def test_stale_delivery_owner_cannot_mutate_after_takeover(tmp_path):
     now[0] = 12.0
     current = leases.acquire("delivery:root", "current", 30)
     with pytest.raises(Exception):
-        store.claim(accepted.delivery_id, 1, lease=old)
-    assert store.claim(accepted.delivery_id, 1, lease=current).state is AgentDeliveryState.CLAIMED
+        _bind(store, accepted, 1, old)
+    assert _bind(store, accepted, 1, current).state is AgentDeliveryState.BOUND_TO_TURN

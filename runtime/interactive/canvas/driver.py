@@ -23,9 +23,9 @@ from mote.contracts.runtime import (
 )
 from mote.contracts.surface import (
     CanvasDocument,
-    CanvasElement,
     CanvasExportRepresentation,
     CanvasOperation,
+    CanvasRectangle,
     CanvasStyle,
     SurfaceDescriptor,
     SurfaceFrame,
@@ -69,6 +69,7 @@ class CanvasRuntimeDriver:
             raise RuntimeError("canvas runtime is already started")
         if checkpoint is not None:
             self._document = CANVAS_CHECKPOINT_CODEC.decode(checkpoint)
+            self._surface_sequence = self._document.revision
         self._started = True
         self._closed = False
         return DriverStartResult(restored=checkpoint is not None)
@@ -183,9 +184,11 @@ class CanvasRuntimeDriver:
             return
         if event.kind == "canvas.replace":
             document = CanvasDocument.model_validate_json(event.data)
+            if document.revision != self._document.revision + 1:
+                raise RuntimeError("canvas replacement document revision is stale")
             if document != self._document:
                 self._document = document.model_copy(deep=True)
-                self._surface_sequence += 1
+                self._surface_sequence = document.revision
                 self._notify_surface_observers()
             return
         if event.kind == "canvas.drag":
@@ -194,9 +197,8 @@ class CanvasRuntimeDriver:
             y0 = min(max(float(drag["y0"]), 0.0), 1.0) * self._document.height
             x1 = min(max(float(drag["x1"]), 0.0), 1.0) * self._document.width
             y1 = min(max(float(drag["y1"]), 0.0), 1.0) * self._document.height
-            element = CanvasElement(
+            element = CanvasRectangle(
                 id=f"human-{uuid4().hex[:10]}",
-                kind="rect",
                 x=min(x0, x1),
                 y=min(y0, y1),
                 width=max(abs(x1 - x0), 4.0),

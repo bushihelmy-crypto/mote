@@ -24,17 +24,10 @@ import pytest
 from pydantic import BaseModel
 
 import mote.runtime.telemetry.reporting as report_mod
+from mote.contracts.events.model import LLMStreamCommittedEvent, LLMStreamDeltaEvent, LLMStreamDiscardedEvent
+from mote.contracts.events.telemetry import ResourceReportEvent
 from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
-from mote.runtime.events import (
-    AllTelemetryBinding,
-    LLMStreamCommittedEvent,
-    LLMStreamDeltaEvent,
-    LLMStreamDiscardedEvent,
-    ResourceReportEvent,
-    TelemetryManifest,
-    TelemetryRuntime,
-    bind_telemetry,
-)
+from mote.runtime.events import AllTelemetryBinding, TelemetryManifest, TelemetryRuntime, bind_telemetry
 from mote.runtime.telemetry.reporting import (
     CURRENT_ROLE,
     END_MARKER_NAME,

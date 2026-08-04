@@ -12,14 +12,15 @@ a Role explicitly opts in by setting a ``PermissionConfig``.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 # Single source of truth for the approval-mode Literal (pure-data, no executor dep).
 from mote.contracts.authorization import PermissionMode
 from mote.contracts.config.base import ConfigModel
-from mote.runtime.sandbox.config import SandboxRuntimeConfig
+from mote.runtime.sandbox.config import SandboxProfile, SandboxRuntimeConfig
+
 
 # Sandbox axis — ORTHOGONAL to the approval mode above. The mode decides whether
 # to ask the user; the sandbox decides the filesystem/network boundary a tool
@@ -27,12 +28,6 @@ from mote.runtime.sandbox.config import SandboxRuntimeConfig
 #   read-only       -> no filesystem writes at all
 #   workspace-write -> writes confined to the cwd + writable_roots
 #   full            -> no boundary (enforcement disabled)
-SandboxMode = Literal["read-only", "workspace-write", "full"]
-# Network policy is carried for completeness but NOT enforced in phase 2 (true
-# network isolation needs OS-level sandboxing); treated as advisory metadata.
-NetworkPolicy = Literal["restricted", "enabled"]
-
-
 class SandboxConfig(ConfigModel):
     """Filesystem/network execution boundary, nested under PermissionConfig.
 
@@ -42,24 +37,20 @@ class SandboxConfig(ConfigModel):
     than hard-failed (Codex's ``RequireEscalated`` flow).
     """
 
-    mode: SandboxMode = Field(
-        default="workspace-write",
-        description="Filesystem boundary: read-only | workspace-write | full.",
+    profile: SandboxProfile = Field(
+        default=SandboxProfile.WORKSPACE_GOVERNED,
+        description="Closed execution profile selected by Product composition.",
     )
     writable_roots: list[str] = Field(
         default_factory=list,
         description="Extra absolute (or cwd-relative) roots writable beyond the cwd.",
-    )
-    network: NetworkPolicy = Field(
-        default="restricted",
-        description="Advisory network policy (not enforced in phase 2).",
     )
     allowed_domains: list[str] = Field(
         default_factory=list,
         description=(
             "Domain allowlist forwarded to the OS-level runtime's network proxy "
             "(glob: '*.x' / '**.x' / exact). Only meaningful when an OS-level "
-            "SandboxRuntimeConfig is enabled; ignored by the logical guard."
+            "SandboxRuntimeConfig enforces the networked-governed profile."
         ),
     )
 
@@ -103,3 +94,9 @@ class PermissionConfig(ConfigModel):
             "None disables OS-level isolation, leaving only the logical boundary."
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_sandbox_profile(self) -> "PermissionConfig":
+        if self.sandbox is not None and self.runtime is not None and self.sandbox.profile is not self.runtime.profile:
+            raise ValueError("logical and OS sandbox profiles must match")
+        return self

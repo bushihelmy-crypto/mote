@@ -1,0 +1,12 @@
+{
+  "base_revision": "94731e866f2d47782a41e038a444719b625f28f8",
+  "kind": "source_baseline",
+  "manifest_identity": "sha256:cd01820408badac0f6a27796b2e036f3603d03e001c0950ba7d1a85c4f6c89ba",
+  "schema": "post-closure-governance-v1",
+  "source_sets": {
+    "agents": "sha256:9e0d09b328517efb85faca557bcd9036827e5f00036eab9e0d6b0869fcdbacda",
+    "production": "sha256:bda3b81c4a41c4005e0211176092a348b90eb5ceab7ab91daf8f014d35f549c2",
+    "requirements": "sha256:3bf6cd5e312c4998074cae196e0cc3dd3f50c85c57ffbd10792271265d9a6aa9",
+    "tests": "sha256:e73edd98b72bdb3d7da91b40809c522b4ba48d477d901f6a843ce3749583cfe8"
+  }
+}

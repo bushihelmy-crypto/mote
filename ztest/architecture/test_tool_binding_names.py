@@ -37,7 +37,7 @@ def test_old_bound_tool_symbol_has_no_import_or_alias() -> None:
 
 def test_snapshot_invocation_executes_retained_binding_not_live_name_lookup() -> None:
     source = (ROOT / "runtime/tools/snapshots.py").read_text(encoding="utf-8")
-    bound_invoke = source[source.index("    def _bound_invoke") :]
-    assert "run_pinned_command(" in bound_invoke
-    assert "run_command(" not in bound_invoke
-    assert "_catalog.get(name) is not pinned_tool" not in bound_invoke
+    dispatch = source[source.index("    async def dispatch") : source.index("    def release")]
+    assert "run_pinned_command(" in dispatch
+    assert "run_command(" not in dispatch
+    assert "_catalog.get(" not in dispatch

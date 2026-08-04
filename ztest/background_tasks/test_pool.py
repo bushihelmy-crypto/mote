@@ -17,6 +17,7 @@ import asyncio
 import pytest
 
 from mote.contracts.conversation import MessagePriority
+from mote.contracts.session.identity import SessionId
 from mote.contracts.task.models import AttemptId
 from mote.orchestration.background_tasks import (
     BackgroundTaskNotification,
@@ -166,7 +167,10 @@ class TestCompletionPaths:
         from mote.contracts.conversation import MessageQueue
         from mote.orchestration.background_tasks import TaskOutputStore
 
-        store = TaskOutputStore(base_dir=tmp_path)
+        store = TaskOutputStore(
+            base_dir=tmp_path,
+            session_id=SessionId("background-task-test"),
+        )
         pool = BackgroundTaskPool(MessageQueue(), output_store=store, session_id="s1")
         huge = "y" * (DEFAULT_MAX_RESULT_SIZE_CHARS + 1000)
         tid = pool.submit(lambda: echo(huge), "huge")
@@ -284,7 +288,10 @@ class TestProgressTaskTermination:
 
         return BackgroundTaskPool(
             msg_buffer,
-            output_store=TaskOutputStore(tmp_path, session_id="background-task-test"),
+            output_store=TaskOutputStore(
+                tmp_path,
+                session_id=SessionId("background-task-test"),
+            ),
             session_id="background-task-test",
         )
 
@@ -463,7 +470,7 @@ class TestCapCancel:
         tid = pool.submit(lambda: started_gated(started, release), "huge", timeout=None)
         await wait_started(started)
         assert pool.cancel_for_cap(tid) is True
-        assert pool.get_task_info(tid)._output_capped is True
+        assert pool.get_task_info(tid).output_capped is True
         await pool.wait_all()
         meta = pool.get_task_info(tid)
         assert meta.status == BackgroundTaskStatus.CANCELLED
@@ -560,7 +567,10 @@ class TestProgressTelemetryVisibility:
 
         pool = BackgroundTaskPool(
             msg_buffer,
-            output_store=TaskOutputStore(base_dir=tmp_path, session_id="session"),
+            output_store=TaskOutputStore(
+                base_dir=tmp_path,
+                session_id=SessionId("session"),
+            ),
         )
 
         async def reporter():

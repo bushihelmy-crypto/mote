@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 
-from mote.contracts.config.tool import DurableConfig, RunJournalConfig, ToolResultLimitConfig
+from mote.contracts.config.tool import ToolEffectStoreConfig, ToolResultLimitConfig
 from mote.contracts.ports.tool.deferred import DeferredResultKind, DeferredToolSettlement
 from mote.contracts.tool.errors import ToolError
 from mote.contracts.tool.execution import ToolExecutionKind
@@ -205,8 +205,7 @@ def make_executor(
     session_id: str = "sess",
     role: FakeRole | None = None,
     limit_config: ToolResultLimitConfig | None = None,
-    journal_config: RunJournalConfig | None = None,
-    durable_config: DurableConfig | None = None,
+    effect_store_config: ToolEffectStoreConfig | None = None,
     recovery_strategies: dict | None = None,
     workspace_store=None,
     telemetry=None,
@@ -229,8 +228,7 @@ def make_executor(
         tools=declared,
         role=role,
         limit_config=limit_config,
-        journal_config=journal_config,
-        durable_config=durable_config,
+        effect_store_config=effect_store_config,
         recovery_strategies=recovery_strategies,
         telemetry=telemetry,
         tool_call_policy=tool_call_policy,

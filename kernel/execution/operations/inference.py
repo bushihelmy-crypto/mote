@@ -57,7 +57,7 @@ class InferenceService(Generic[OutputT]):
     async def infer(self) -> bool:
         if not self._is_active():
             return False
-        if self._checkpoint.reinstate():
+        if await self._checkpoint.reinstate():
             return True
         async with span("inference"):
             resumed = self._checkpoint.resume()
@@ -102,6 +102,7 @@ class InferenceService(Generic[OutputT]):
                     self._checkpoint.begin_call(checkpoint_state)
                 else:
                     self._checkpoint.refresh(checkpoint_state)
+                self._checkpoint.mark_wire_started()
                 await self._inference_engine.start(
                     request.req,
                     request.system_prompt,

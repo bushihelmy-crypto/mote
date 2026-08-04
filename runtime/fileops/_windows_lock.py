@@ -28,21 +28,21 @@ def try_os_lock(fd: int, mode: LockMode) -> bool:
     if mode == LockMode.EXCLUSIVE:
         flags |= _LOCKFILE_EXCLUSIVE_LOCK
     overlapped = _OVERLAPPED()
-    handle = msvcrt.get_osfhandle(fd)
-    result = ctypes.windll.kernel32.LockFileEx(handle, flags, 0, 1, 0, ctypes.byref(overlapped))
+    handle = msvcrt.get_osfhandle(fd)  # type: ignore[reportAttributeAccessIssue]  # Windows-only stdlib surface
+    result = ctypes.windll.kernel32.LockFileEx(handle, flags, 0, 1, 0, ctypes.byref(overlapped))  # type: ignore[reportAttributeAccessIssue]
     if result:
         return True
-    error = ctypes.get_last_error()
+    error = ctypes.get_last_error()  # type: ignore[reportAttributeAccessIssue]
     if error == _ERROR_LOCK_VIOLATION:
         return False
-    raise ctypes.WinError(error)
+    raise ctypes.WinError(error)  # type: ignore[reportAttributeAccessIssue]
 
 
 def unlock_os(fd: int) -> None:
     overlapped = _OVERLAPPED()
-    handle = msvcrt.get_osfhandle(fd)
-    if not ctypes.windll.kernel32.UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped)):
-        raise ctypes.WinError(ctypes.get_last_error())
+    handle = msvcrt.get_osfhandle(fd)  # type: ignore[reportAttributeAccessIssue]
+    if not ctypes.windll.kernel32.UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped)):  # type: ignore[reportAttributeAccessIssue]
+        raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[reportAttributeAccessIssue]
 
 
 __all__ = ["try_os_lock", "unlock_os"]

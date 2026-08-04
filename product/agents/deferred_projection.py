@@ -14,7 +14,12 @@ from mote.contracts.ports.task.operations import BackgroundTaskService
 from mote.contracts.ports.tool.deferred import DeferredResultKind, DeferredResultProjector, DeferredToolSettlement
 from mote.contracts.ports.workflow.execution import WorkflowNodeExecutionPort
 from mote.contracts.workflow import WorkflowRunReference
-from mote.orchestration.background_tasks.model import BgTaskMode, BgTaskResult
+from mote.orchestration.background_tasks.model import (
+    BackgroundBgTaskResult,
+    BgTaskResult,
+    ForegroundBgTaskResult,
+    HybridBgTaskResult,
+)
 from mote.orchestration.workflows.deferred import WorkflowDeferredResult, WorkflowExecutionMode
 from mote.product.agents.background_tasks import AgentBackgroundTasks
 from mote.product.workflows.agent_context import bind_agent_workflows, reset_agent_workflows
@@ -49,7 +54,7 @@ class ProductDeferredResultProjector:
             self._workflow_token = None
 
     def classify(self, value: object) -> DeferredResultKind | None:
-        if isinstance(value, BgTaskResult):
+        if isinstance(value, (ForegroundBgTaskResult, BackgroundBgTaskResult, HybridBgTaskResult)):
             return DeferredResultKind.BACKGROUND_TASK
         if isinstance(value, WorkflowDeferredResult):
             return DeferredResultKind.WORKFLOW
@@ -64,9 +69,9 @@ class ProductDeferredResultProjector:
         kind = self.classify(value)
         submission = None
         if kind is DeferredResultKind.BACKGROUND_TASK:
-            assert isinstance(value, BgTaskResult)
+            assert isinstance(value, (ForegroundBgTaskResult, BackgroundBgTaskResult, HybridBgTaskResult))
             task_id = None
-            if value.poll_factory is not None:
+            if isinstance(value, (BackgroundBgTaskResult, HybridBgTaskResult)):
                 task_id = self._service.submit(
                     value.poll_factory,
                     value.command_name or tool_name,
@@ -74,8 +79,8 @@ class ProductDeferredResultProjector:
                 )
                 submission = LocalBackgroundTaskSubmission(LocalBackgroundTaskReference(task_id.reference))
             output = self._output(
-                value.mode is BgTaskMode.BACKGROUND,
-                value.result,
+                isinstance(value, BackgroundBgTaskResult),
+                None if isinstance(value, BackgroundBgTaskResult) else value.result,
                 value.command_name or tool_name,
                 task_id,
             )
@@ -98,8 +103,7 @@ class ProductDeferredResultProjector:
                 workflow_reference,
             )
             if value.mode is WorkflowExecutionMode.BACKGROUND:
-                graph = value.graph_meta.graph_ref if value.graph_meta is not None else None
-                summary = graph.stage_summary if graph is not None else ""
+                summary = value.graph_meta.stage_summary if value.graph_meta is not None else ""
                 if summary:
                     output = f"{output}\nstage-summary:\n{summary}"
         else:

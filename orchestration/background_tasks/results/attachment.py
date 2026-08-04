@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as _escape_xml
 
 from mote.contracts.foundation.errors.report import ErrorReport, render_error_block
+from mote.contracts.task.models import TaskId
 from mote.orchestration.background_tasks.constants import DELTA_MAX_BYTES, DELTA_SUMMARY_MAX_CHARS
 from mote.orchestration.background_tasks.results.formatting import format_elapsed
 from mote.orchestration.background_tasks.status import TERMINAL_STATUSES as _TERMINAL_STATUSES
@@ -34,13 +35,13 @@ if TYPE_CHECKING:
 class TaskAttachment:
     """Single attachment describing a background task's current state."""
 
-    task_id: str
+    task_id: TaskId
     status: str  # BackgroundTaskStatus value
     command_name: str
     description: str  # e.g. "generate videos is running (elapsed: 45.2s)"
     delta_summary: str | None  # incremental output summary, None = no new output
     # Structured failure record (ErrorReport.as_dict form) for a FAILED task,
-    # carried from the pool's TaskMeta. None when the task did not fail or
+    # carried from the pool's immutable TaskSnapshot. None when the task did not fail or
     # carries no structured error.
     error: ErrorReport | None = None
 
@@ -50,7 +51,7 @@ class GenerateResult:
     """Return value of ``TaskAttachmentGenerator.generate()``."""
 
     attachments: list[TaskAttachment] = field(default_factory=list)
-    evicted_task_ids: list[str] = field(default_factory=list)
+    evicted_task_ids: list[TaskId] = field(default_factory=list)
 
 
 # ------------------------------------------------------------------
@@ -71,10 +72,10 @@ class TaskAttachmentGenerator:
     ) -> None:
         self._pool = pool
         self._store = store
-        self._offsets: dict[str, int] = {}
-        self._notified: set[str] = set()
+        self._offsets: dict[TaskId, int] = {}
+        self._notified: set[TaskId] = set()
 
-    def mark_notified(self, task_id: str) -> None:
+    def mark_notified(self, task_id: TaskId) -> None:
         """Externally mark a task as having been consumed."""
         self._notified.add(task_id)
 
@@ -88,7 +89,7 @@ class TaskAttachmentGenerator:
           clean up resources.
         """
         attachments: list[TaskAttachment] = []
-        evicted_task_ids: list[str] = []
+        evicted_task_ids: list[TaskId] = []
 
         for meta in self._pool.list_tasks():
             tid = meta.task_id

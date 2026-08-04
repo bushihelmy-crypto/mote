@@ -8,6 +8,7 @@ a clear error instead of a stack overflow), opt-in ``available`` gating with
 ``None`` never cached, ``peek`` never building, and unknown-name / duplicate-spec
 errors.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -298,6 +299,15 @@ def test_unknown_component_raises():
         g.get(nope)
     with pytest.raises(UnknownComponentError):
         g.peek(nope)
+
+
+def test_same_diagnostic_name_cannot_forge_registered_key():
+    registered = _key("x")
+    forged = _key("x")
+    g = _graph([ComponentSpec(registered, lambda ctx: 1)])
+
+    with pytest.raises(UnknownComponentError):
+        g.get(forged)
 
 
 def test_duplicate_spec_raises():

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import shutil
 import signal
 import stat
 from collections.abc import Mapping, Sequence
@@ -66,16 +67,50 @@ class FixedExecutableBinding:
     inode: int
 
 
+@dataclass(frozen=True, slots=True)
+class FixedProcessEnvironment:
+    """Immutable environment snapshot compiled by a trusted composition owner."""
+
+    entries: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        keys: set[str] = set()
+        for key, value in self.entries:
+            if not key or "=" in key or "\x00" in key or "\x00" in value or key in keys:
+                raise ValueError("fixed process environment is malformed")
+            keys.add(key)
+
+    @classmethod
+    def compile(cls, values: Mapping[str, str]) -> "FixedProcessEnvironment":
+        return cls(tuple(sorted(values.items())))
+
+    def materialize(self) -> dict[str, str]:
+        return dict(self.entries)
+
+
+def resolve_fixed_executable(command: str) -> FixedExecutableBinding:
+    """Resolve a trusted executable name to a filesystem identity binding."""
+    if not command:
+        raise ValueError("fixed executable command must be non-empty")
+    resolved = shutil.which(command)
+    path = os.path.realpath(resolved) if resolved is not None else None
+    if path is None:
+        raise FileNotFoundError(command)
+    metadata = os.stat(path, follow_symlinks=True)
+    return FixedExecutableBinding(path, metadata.st_dev, metadata.st_ino)
+
+
 async def run_verified_fixed_argv(
     executable: FixedExecutableBinding,
     arguments: Sequence[str],
     *,
     working_dir: str | None = None,
-    env: Mapping[str, str] | None = None,
+    env: FixedProcessEnvironment | None = None,
     timeout: float | None = None,
     max_output_bytes: int | None = None,
+    stdin: bytes | None = None,
 ) -> ProcessResult:
-    """Execute the exact filesystem object admitted by Product policy."""
+    """Execute the exact filesystem object admitted by a fixed binding."""
 
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(executable.path, flags)
@@ -92,41 +127,15 @@ async def run_verified_fixed_argv(
             argv,
             shell_command=None,
             working_dir=working_dir,
-            env=dict(env) if env is not None else None,
+            env=env.materialize() if env is not None else None,
             timeout=timeout,
             max_output_bytes=max_output_bytes,
             strict_decode=True,
             pass_fds=(descriptor,),
+            stdin=stdin,
         )
     finally:
         os.close(descriptor)
-
-
-async def run_fixed_argv(
-    argv: Sequence[str],
-    *,
-    working_dir: str | None = None,
-    env: Mapping[str, str] | None = None,
-    timeout: float | None = None,
-    max_output_bytes: int | None = None,
-    stdin: bytes | None = None,
-) -> ProcessResult:
-    """Run a trusted internal argv without shell parsing or expansion."""
-    sealed_argv = tuple(argv)
-    if not sealed_argv or any(not isinstance(item, str) or not item for item in sealed_argv):
-        raise ValueError("fixed argv must contain one or more non-empty strings")
-    if max_output_bytes is not None and max_output_bytes < 1:
-        raise ValueError("max_output_bytes must be positive")
-    return await _spawn_and_collect(
-        sealed_argv,
-        shell_command=None,
-        working_dir=working_dir,
-        env=dict(env) if env is not None else None,
-        timeout=timeout,
-        max_output_bytes=max_output_bytes,
-        strict_decode=True,
-        stdin=stdin,
-    )
 
 
 async def run_authorized_shell(
@@ -324,8 +333,9 @@ __all__ = [
     "ProcessDisposition",
     "ProcessResult",
     "UserCommandSandbox",
-    "run_authorized_shell",
-    "run_fixed_argv",
-    "run_verified_fixed_argv",
     "FixedExecutableBinding",
+    "FixedProcessEnvironment",
+    "resolve_fixed_executable",
+    "run_authorized_shell",
+    "run_verified_fixed_argv",
 ]

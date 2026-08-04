@@ -60,7 +60,11 @@ from mote.runtime.models.gateway import LLMRouter
 from mote.runtime.output.graph_service import GraphOutputService
 
 if TYPE_CHECKING:
-    from mote.contracts.ports.artifact.store import ArtifactLookupIndex, ArtifactResolver, ReliableArtifactPublisher
+    from mote.contracts.ports.artifact.store import (
+        ArtifactRepositoryService,
+        ArtifactResolver,
+        ReliableArtifactPublisher,
+    )
     from mote.contracts.ports.conversation.prompt_policy import PromptPolicy
     from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicy
     from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolResultPolicy
@@ -187,7 +191,7 @@ class RoleComponentAccessors(Generic[OutputT]):
         return self._graph.get(FILE_OPERATIONS)
 
     @property
-    def artifact_store(self) -> "ArtifactLookupIndex":
+    def artifact_store(self) -> "ArtifactRepositoryService":
         return self._graph.get(ARTIFACT_STORE)
 
     @property
@@ -268,6 +272,9 @@ class RoleComponentAccessors(Generic[OutputT]):
 
     def peek_event_fabric(self):
         return self._graph.peek(EVENT_FABRIC)
+
+    def peek_session_log(self):
+        return self._graph.peek(SESSION_LOG)
 
     def peek_executor(self):
         return self._graph.peek(EXECUTOR)

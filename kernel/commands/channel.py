@@ -1,13 +1,14 @@
 """Command-channel contract and shared media helpers."""
+
 from __future__ import annotations
 
 import hashlib
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
-from typing import Any, AsyncGenerator, Optional
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Optional
 
-from mote.contracts.conversation import CauseBy, UserMessage
+from mote.contracts.conversation import CauseBy, Message, UserMessage, encode_message
 from mote.contracts.conversation.fields import IMAGES, PDFS
 from mote.contracts.model.inference import InferenceResult
 from mote.contracts.model.turn import ModelTurn, TextAction
@@ -125,26 +126,10 @@ class CommandChannel(ABC):
     def tool_specs(self, catalog, output_contract=None) -> Optional[list[dict]]:
         """Native tool specs to pass to the LLM, or None for the text channel."""
 
-    @abstractmethod
-    async def iter_commands(self, result: InferenceResult, valid_names: set[str]) -> AsyncGenerator[dict, None]:
-        """Yield unified-IR commands from a completed InferenceEngine output.
-
-        Each item: ``{command_name, args, id, status, error_msg}``. ``id`` is the
-        provider tool-call id for native mode (used to pair tool results), or
-        None for XML. Unknown command names (not in valid_names) are filtered
-        out. Both channels block on the think task being done before reading.
-        """
-        raise NotImplementedError
-        yield  # pragma: no cover — makes this an async generator for typing
-
     @staticmethod
-    def history_projection(messages: list[Any]) -> HistoryProjection:
-        payload = [
-            message.model_dump(mode="json") if hasattr(message, "model_dump") else message for message in messages
-        ]
-        fingerprint = hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
-        ).hexdigest()
+    def history_projection(messages: Sequence[Message]) -> HistoryProjection:
+        payload = [encode_message(message) for message in messages]
+        fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return HistoryProjection(messages=tuple(messages), fingerprint=fingerprint)
 
     @abstractmethod

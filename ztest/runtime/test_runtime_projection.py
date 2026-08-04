@@ -19,8 +19,8 @@ from mote.contracts.runtime import (
 )
 from mote.contracts.surface import (
     CanvasDocument,
-    CanvasElement,
     CanvasExportRepresentation,
+    CanvasRectangle,
     NotebookCell,
     NotebookDocument,
 )
@@ -212,9 +212,8 @@ async def test_canvas_projector_rebuilds_svg_from_checkpoint(tmp_path):
     blobs = MemoryBlobs()
     document = CanvasDocument(
         elements=[
-            CanvasElement(
+            CanvasRectangle(
                 id="node-a",
-                kind="rect",
                 x=10,
                 y=20,
                 width=100,
@@ -264,7 +263,13 @@ async def test_canvas_projector_replays_requested_headless_export_set(tmp_path):
             )
 
     blobs = MemoryBlobs()
-    document = CanvasDocument(elements=[CanvasElement(id="node", kind="rect")])
+    document = CanvasDocument(
+        elements=[
+            CanvasRectangle(
+                id="node",
+            )
+        ]
+    )
     request = RuntimeProjectionRequest(
         commit_id="canvas-multi-export",
         checkpoint=_checkpoint(

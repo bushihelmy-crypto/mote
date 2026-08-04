@@ -8,12 +8,12 @@ from collections.abc import Iterable
 
 from mote.contracts.ports.agent.budget import AgentBudgetPort
 from mote.contracts.ports.session.run_lease import RunLeaseCoordinator
+from mote.contracts.ports.workflow.delivery import WorkflowAgentDeliveryCompositionPort
 from mote.contracts.ports.workflow.governance import WorkflowGovernanceCompositionPort
 from mote.contracts.runtime.application import ApplicationCompositionPort, ApplicationReloadPort
 from mote.runtime.code_map.scan_gate import CodeMapScanGate
 from mote.runtime.control.lifecycle import LifecyclePhase, LifecycleResource, LifecycleStack
 from mote.runtime.models.clients.context import Context
-from mote.runtime.session.workspace import WorkspaceCleanupGate
 
 ENGINE_CONTEXT_CLOSE_PHASE = LifecyclePhase.RELEASE_CONTAINER
 
@@ -31,11 +31,11 @@ class EngineServices:
         "context",
         "code_map_scan_gate",
         "run_lease_coordinator",
-        "workspace_cleanup_gate",
         "application_composition",
         "application_reloader",
         "agent_budget",
         "workflow_governance",
+        "workflow_delivery",
         "_owner_count",
         "_owner_lock",
         "_owned_close_started",
@@ -48,21 +48,21 @@ class EngineServices:
         context: Context,
         run_lease_coordinator: RunLeaseCoordinator | None = None,
         code_map_scan_gate: CodeMapScanGate | None = None,
-        workspace_cleanup_gate: WorkspaceCleanupGate | None = None,
         resources: Iterable[LifecycleResource] = (),
         application_composition: ApplicationCompositionPort | None = None,
         application_reloader: ApplicationReloadPort | None = None,
         agent_budget: AgentBudgetPort | None = None,
         workflow_governance: WorkflowGovernanceCompositionPort | None = None,
+        workflow_delivery: WorkflowAgentDeliveryCompositionPort | None = None,
     ) -> None:
         self.context = context
         self.application_composition = application_composition
         self.application_reloader = application_reloader
         self.agent_budget = agent_budget
         self.workflow_governance = workflow_governance
+        self.workflow_delivery = workflow_delivery
         self.run_lease_coordinator = run_lease_coordinator
         self.code_map_scan_gate = code_map_scan_gate or CodeMapScanGate()
-        self.workspace_cleanup_gate = workspace_cleanup_gate or WorkspaceCleanupGate()
         self._owner_count = 0
         self._owner_lock = threading.Lock()
         self._owned_close_started = False

@@ -1,17 +1,43 @@
 """Skill pool: loads and manages Skills from layered source directories."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
 from mote.product.extensions.sources import ExtensionKind, ExtensionSource, ExtensionSourcePolicy
 from mote.product.skills.audit import audit_skill_body
 from mote.product.skills.markdown import MarkdownMetaParser
-from mote.product.skills.skill_definition import SkillDefinition
+from mote.product.skills.skill_definition import (
+    ActivatedSkillSnapshot,
+    SkillContext,
+    SkillManifest,
+    SkillSourceEvidence,
+)
+from mote.runtime.context.token_budget import count_tokens
+from mote.runtime.context.tokenizer import DEFAULT_TEXT_TOKENIZER
 from mote.runtime.telemetry.logging import logger
 
 # Default skills directory relative to this package (the lowest-priority,
 # bundled layer).
 _BUILTIN_DIR = Path(__file__).parent / "yamls"
+_MANIFEST_KEYS = frozenset(
+    {
+        "name",
+        "description",
+        "globs",
+        "when_to_use",
+        "when-to-use",
+        "context",
+        "allowed_tools",
+        "allowed-tools",
+        "model",
+        "effort",
+        "argument_hint",
+        "argument-hint",
+        "disable_model_invocation",
+        "paths",
+    }
+)
 
 
 class SkillPool:
@@ -31,9 +57,12 @@ class SkillPool:
         source_dirs: Optional[list[Path]] = None,
         source_policy: ExtensionSourcePolicy,
     ):
-        self._skills: dict[str, SkillDefinition] = {}
+        self._skills: dict[str, ActivatedSkillSnapshot] = {}
         self._parser = MarkdownMetaParser()
         self._source_policy = source_policy
+        self._token_counter: Callable[[str], int] = lambda text: count_tokens(text, tokenizer=DEFAULT_TEXT_TOKENIZER)
+        self._tokenizer_identity = "mote.runtime.text-tokenizer/default-v1"
+        self._tool_binding_generation = 1
         # ``source_dirs`` (lowest-priority first) is the canonical input; the
         # ``builtin_dir`` kwarg is an accepted single-layer alternative.
         if source_dirs is not None:
@@ -113,30 +142,49 @@ class SkillPool:
         try:
             doc = self._parser.parse_text(source.content.decode("utf-8"), source_path=skill_md)
             meta = doc.metadata
-            skill = SkillDefinition(
+            unknown = set(meta) - _MANIFEST_KEYS
+            if unknown:
+                raise ValueError(f"unsupported Skill manifest fields: {sorted(unknown)}")
+            for snake, hyphen in (
+                ("when_to_use", "when-to-use"),
+                ("allowed_tools", "allowed-tools"),
+                ("argument_hint", "argument-hint"),
+            ):
+                if snake in meta and hyphen in meta:
+                    raise ValueError(f"duplicate Skill manifest field: {snake}/{hyphen}")
+            allowed_tools = meta.get("allowed_tools", meta.get("allowed-tools", []))
+            paths = meta.get("paths", [])
+            globs = meta.get("globs", [])
+            if not all(isinstance(value, list) for value in (allowed_tools, paths, globs)):
+                raise ValueError("Skill list declarations must be arrays")
+            patterns = tuple(dict.fromkeys((*paths, *globs)))
+            manifest = SkillManifest(
                 name=meta.get("name", skill_dir.name),
                 description=meta.get("description", ""),
-                globs=meta.get("globs", []),
-                instructions=doc.content,
-                source_path=skill_md,
-                metadata=meta,
-                # supported frontmatter (accepts both hyphenated and
-                # snake_case keys; all optional with safe defaults).
                 when_to_use=meta.get("when_to_use", meta.get("when-to-use", "")),
-                context=meta.get("context", "inline"),
-                allowed_tools=meta.get("allowed_tools", meta.get("allowed-tools", [])),
+                context=SkillContext(meta.get("context", "inline")),
+                allowed_tools=tuple(allowed_tools),
                 model=meta.get("model", ""),
                 effort=meta.get("effort", ""),
                 argument_hint=meta.get("argument_hint", meta.get("argument-hint", "")),
                 disable_model_invocation=meta.get("disable_model_invocation", False),
-                paths=meta.get("paths", []),
+                activation_patterns=patterns,
+            )
+            skill = ActivatedSkillSnapshot(
+                manifest=manifest,
+                source=SkillSourceEvidence(
+                    canonical_path=skill_md,
+                    content_digest=source.content_digest,
+                    trust_decision="approved",
+                    approval_generation=source.approval_generation,
+                ),
+                instructions=doc.content,
+                tool_binding_generation=self._tool_binding_generation,
+                tokenizer_identity=self._tokenizer_identity,
+                token_cost=self._token_counter(doc.content),
             )
         except Exception as exc:  # noqa: BLE001 — a malformed skill is skipped, not fatal
             logger.warning(f"Skipping malformed skill at {skill_md}: {exc}")
-            return
-
-        if not skill.is_valid():
-            logger.debug(f"Skipping skill at {skill_md}: invalid name/description")
             return
 
         # Supply-chain gate: the body is injected verbatim (inline) or run as a
@@ -152,11 +200,11 @@ class SkillPool:
 
         self._skills[skill.name] = skill
 
-    def get(self, name: str) -> Optional[SkillDefinition]:
+    def get(self, name: str) -> Optional[ActivatedSkillSnapshot]:
         """Return a loaded skill by name, or ``None`` if not loaded."""
         return self._skills.get(name)
 
-    def get_all(self) -> list[SkillDefinition]:
+    def get_all(self) -> list[ActivatedSkillSnapshot]:
         """Return all loaded Skills."""
         return list(self._skills.values())
 

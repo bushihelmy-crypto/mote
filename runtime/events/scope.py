@@ -30,25 +30,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator, NamedTuple, Tuple
+from typing import Iterator
 
-
-class ScopeRef(NamedTuple):
-    """One rung of the execution-lineage ladder.
-
-    ``kind`` names the orchestrator flavour (``"graph"`` | ``"node"`` |
-    ``"agent"`` | ``"task"``), ``id`` is a stable identity within its parent
-    (a node name, a graph call id), and ``label`` is the human-facing name a
-    renderer shows. A tuple of these — :data:`ScopePath` — is the full lineage.
-    """
-
-    kind: str
-    id: str
-    label: str
-
-
-#: The full execution lineage, outermost-first. ``()`` means top level.
-ScopePath = Tuple[ScopeRef, ...]
+from mote.contracts.events.scope import ScopePath, ScopeRef
 
 _scope: ContextVar[ScopePath] = ContextVar("mote_activity_scope", default=())
 

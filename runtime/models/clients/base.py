@@ -19,6 +19,7 @@ from mote.contracts.model.provider_errors import LLMEmptyResponseError
 from mote.kernel.inference.tokenization import count_message_tokens
 from mote.runtime.models.cost import Costs, CostTracker, TokenUsage
 from mote.runtime.models.media import build_data_url, pdfs_within_limits
+from mote.runtime.models.message_wire import canonical_messages_from_model_wire, message_to_model_wire
 from mote.runtime.models.ratelimit import RateLimitTracker
 from mote.runtime.telemetry.logging import logger
 
@@ -172,11 +173,14 @@ class BaseLLM(ABC):
 
     def format_msg(self, messages: Union[str, "Message", list[dict], list["Message"], list[str]]) -> list[dict]:
         """convert messages to list[dict]."""
-        if not isinstance(messages, list):
-            messages = [messages]
+        normalized: list[str | Message | dict]
+        if isinstance(messages, list):
+            normalized = [message for message in messages]
+        else:
+            normalized = [messages]
 
         processed_messages = []
-        for msg in messages:
+        for msg in normalized:
             if isinstance(msg, str):
                 processed_messages.append({"role": "user", "content": msg})
             elif isinstance(msg, dict):
@@ -188,7 +192,9 @@ class BaseLLM(ABC):
                 images = msg.metadata.get(IMAGES)
                 pdfs = msg.metadata.get(PDFS)
                 processed_msg = (
-                    self._user_msg(msg=msg.content, images=images, pdfs=pdfs) if (images or pdfs) else msg.to_dict()
+                    self._user_msg(msg=msg.content, images=images, pdfs=pdfs)
+                    if (images or pdfs)
+                    else message_to_model_wire(msg)
                 )
                 processed_messages.append(processed_msg)
             else:
@@ -516,7 +522,7 @@ class BaseLLM(ABC):
 
     def messages_to_dict(self, messages):
         """objects to [{"role": "user", "content": msg}] etc."""
-        return [i.to_dict() for i in messages]
+        return [message_to_model_wire(i) for i in messages]
 
     def with_model(self, model: str):
         """Set model and return self. For example, `with_model("gpt-3.5-turbo")`."""
@@ -537,6 +543,6 @@ class BaseLLM(ABC):
         # The heuristics is a huge overestimate for English text, e.g., and should be overwrittem with accurate token count function in inherited class
         # logger.warning("Base count_tokens is not accurate and should be overwritten.")
 
-        return count_message_tokens(messages, self.model)
+        return count_message_tokens(canonical_messages_from_model_wire(messages), self.model)
         # for non-OpenAI models
         # return sum([int(len(msg["content"]) * 0.5) for msg in messages])

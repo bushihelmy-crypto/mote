@@ -11,6 +11,7 @@ from pathlib import Path
 
 from mote.kernel.output import text_output_contract
 from mote.product.agents.factory import CodingAgentFactory
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.product.lsp.factory import ProductLspServiceFactory
 from mote.product.paths import default_runtime_paths
 from mote.runtime.agent.component_keys import LSP_SERVICE
@@ -44,6 +45,7 @@ def _wiring(context=None):
     return AgentWiring.for_context(
         context,
         dependencies=CodingAgentFactory(
+            model_checkpoint_policy=approved_model_checkpoint_policy(),
             paths=paths,
             lsp_service_factory=ProductLspServiceFactory(),
         ).dependencies(deps=None, output_contract=text_output_contract()),

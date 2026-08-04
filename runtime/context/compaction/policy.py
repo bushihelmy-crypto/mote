@@ -66,7 +66,7 @@ class DefaultCompactionPolicy:
                 instructions.extend(str(item) for item in outcome.additional_context)
                 if outcome.additional_context:
                     trace.append(CompactionPolicyTraceEntry("pre_compact_hook", "enrich"))
-                if outcome.stop or outcome.behavior == "deny":
+                if outcome.stop is not None or outcome.behavior == "deny":
                     trace.append(
                         CompactionPolicyTraceEntry(
                             "pre_compact_hook",

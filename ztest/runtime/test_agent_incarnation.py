@@ -13,6 +13,7 @@ from mote.orchestration.agents.control import AgentControl
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime, AgentStatus
 from mote.orchestration.agents.residency.store import ResidencyStore
 from mote.product.agents.factory import CodingAgentFactory
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role
 from mote.runtime.agent.incarnation import AgentIncarnationBlueprint, AgentIncarnationError, AgentIncarnationFactory
 from mote.runtime.control.leases import InMemoryLeaseCoordinator
@@ -23,7 +24,9 @@ from mote.runtime.tools.provider import NativeToolset
 
 def _role(*, version: str = "1", runtime_root=None) -> Role:
     toolsets = (NativeToolset("workspace", (), version=version),)
-    factory = CodingAgentFactory()
+    factory = CodingAgentFactory(
+        model_checkpoint_policy=approved_model_checkpoint_policy(),
+    )
     dependencies = factory.dependencies(
         deps={"tenant": "acme"}, output_contract=text_output_contract(), toolsets=toolsets
     )
@@ -37,9 +40,9 @@ def _role(*, version: str = "1", runtime_root=None) -> Role:
             user_config_root=runtime_root / "config",
             workspace_root=runtime_root / "workspace",
         )
-        dependencies = CodingAgentFactory(paths=paths).dependencies(
-            deps={"tenant": "acme"}, output_contract=text_output_contract(), toolsets=toolsets
-        )
+        dependencies = CodingAgentFactory(
+            model_checkpoint_policy=approved_model_checkpoint_policy(), paths=paths
+        ).dependencies(deps={"tenant": "acme"}, output_contract=text_output_contract(), toolsets=toolsets)
         wiring = AgentWiring.for_context(Context(), dependencies=dependencies)
     return Role(
         name="Worker",
@@ -129,6 +132,7 @@ async def test_control_owns_blueprint_for_registered_agent_lifetime(tmp_path) ->
         incarnation_factory=factory,
         residency_lease_coordinator=leases,
         lineage_path=tmp_path / "agent-lineage.json",
+        turn_queue_capacity=256,
     )
 
     control.add_agent(AgentRuntime(original), root=True)
@@ -156,6 +160,7 @@ async def test_residency_replacement_keeps_wiring_and_control(tmp_path) -> None:
         incarnation_factory=factory,
         residency_lease_coordinator=leases,
         lineage_path=tmp_path / "agent-lineage.json",
+        turn_queue_capacity=256,
     )
     control.add_agent(runtime, root=True)
     SessionLog(original.session_id, base_dir=str(tmp_path / "sessions")).commit_offline(
@@ -198,6 +203,7 @@ async def test_rehydrate_commit_failure_rolls_back_live_install_and_generation(t
         incarnation_factory=factory,
         residency_lease_coordinator=leases,
         lineage_path=tmp_path / "agent-lineage.json",
+        turn_queue_capacity=256,
     )
     control.add_agent(runtime, root=True)
     SessionLog(original.session_id, base_dir=str(tmp_path / "sessions")).commit_offline(
@@ -254,6 +260,7 @@ async def test_concurrent_rehydrate_constructs_and_commits_one_incarnation(tmp_p
         incarnation_factory=factory,
         residency_lease_coordinator=leases,
         lineage_path=tmp_path / "agent-lineage.json",
+        turn_queue_capacity=256,
     )
     control.add_agent(runtime, root=True)
     SessionLog(original.session_id, base_dir=str(tmp_path / "sessions")).commit_offline(

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+from typing_extensions import TypeForm
+
 from mote.contracts.foundation.errors.base import MoteError, NonRetryableError, RetryableError
 from mote.contracts.foundation.errors.codes import ErrorCode
 from mote.contracts.foundation.errors.report import ErrorReport
@@ -92,8 +94,16 @@ class GraphParamTypeError(GraphError, NonRetryableError):
 
     default_code: ClassVar[ErrorCode] = ErrorCode.GRAPH_PARAM_TYPE_ERROR
 
-    def __init__(self, node: str, param: str, expected: type, got: type, **kw):
-        msg = f"Node '{node}' param '{param}': expected {expected.__name__}, got {got.__name__}"
+    def __init__(
+        self,
+        node: str,
+        param: str,
+        expected: TypeForm[object],
+        got: type[object],
+        **kw,
+    ):
+        expected_name = expected.__name__ if isinstance(expected, type) else str(expected)
+        msg = f"Node '{node}' param '{param}': expected {expected_name}, got {got.__name__}"
         super().__init__(msg, **kw)
         self.node = node
         self.param = param
@@ -104,6 +114,6 @@ class GraphParamTypeError(GraphError, NonRetryableError):
         return {
             "node": self.node,
             "param": self.param,
-            "expected": self.expected.__name__,
+            "expected": self.expected.__name__ if isinstance(self.expected, type) else str(self.expected),
             "got": self.got.__name__,
         }

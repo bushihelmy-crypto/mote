@@ -72,7 +72,7 @@ def test_constructor_initializes_complete_lifecycle_state(tmp_path):
     )
 
     assert scheduler._durable == []
-    assert scheduler._last_mtime is None
+    assert scheduler._last_revision == -1
     assert scheduler._is_owner is False
     assert scheduler._fence is None
     assert scheduler._runner is not None
@@ -82,7 +82,7 @@ def test_cron_trigger_schema_rejects_boolean_version() -> None:
     with pytest.raises(ValueError, match="schema version"):
         CronTriggerIntent(
             schema_version=True,  # type: ignore[arg-type]
-            task_id=DurableCronTaskId("00000000"),
+            task_id=DurableCronTaskId("00000000000000000000000000000000"),
             task_revision=1,
             target="agent",
             content="run",
@@ -94,7 +94,7 @@ def test_cron_trigger_schema_rejects_boolean_version() -> None:
 
 def _recurring_task(created_at):
     return CronTask(
-        id="00000000",  # hashes to 0 → deterministic, zero jitter
+        id="00000000000000000000000000000000",  # deterministic zero-valued identity
         cron="* * * * *",
         prompt="ping",
         created_at=created_at,
@@ -134,7 +134,7 @@ def test_recurring_does_not_fire_before_due(tmp_path):
 def test_one_shot_fires_then_deleted(tmp_path):
     store = CronTaskStore(base_dir=str(tmp_path))
     task = CronTask(
-        id="00000000",
+        id="00000000000000000000000000000000",
         cron="0 12 * * *",
         prompt="lunch",
         created_at=_ms(2026, 6, 15, 10, 0, 0),
@@ -178,7 +178,7 @@ def test_is_recurring_task_aged():
 def test_missed_compensation(tmp_path):
     store = CronTaskStore(base_dir=str(tmp_path))
     task = CronTask(
-        id="00000000",
+        id="00000000000000000000000000000000",
         cron="0 9 * * *",
         prompt="morning",
         created_at=_ms(2026, 6, 14, 8, 0, 0),  # next-from-created = 6/14 9:00 (past)
@@ -217,14 +217,14 @@ def test_killed_gate_skips(tmp_path):
     assert fired == []
 
 
-def test_mtime_hot_reload(tmp_path):
+def test_revision_reconcile_reload(tmp_path):
     store = CronTaskStore(base_dir=str(tmp_path))
     # No file yet → empty load.
     clock = Clock(_ms(2026, 6, 15, 10, 1, 0))
     sched, fired = make_sched(store, clock)
     assert sched._durable == []
 
-    # External write appears; the next tick detects the mtime change and reloads.
+    # A canonical command advances the revision; the next tick adopts it.
     store.add(_recurring_task(_ms(2026, 6, 15, 10, 0, 30)), capacity_limit=50)
     sched._check()
     assert len(fired) == 1
@@ -233,7 +233,7 @@ def test_mtime_hot_reload(tmp_path):
 def test_session_only_fires_without_owner(tmp_path):
     store = CronTaskStore(base_dir=str(tmp_path))
     task = CronTask(
-        id="00000000",
+        id="00000000000000000000000000000000",
         cron="* * * * *",
         prompt="mem",
         created_at=_ms(2026, 6, 15, 10, 0, 30),

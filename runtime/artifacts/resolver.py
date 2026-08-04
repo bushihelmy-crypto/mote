@@ -1,14 +1,15 @@
 """Policy-bound, integrity-verifying Artifact resolution."""
+
 from __future__ import annotations
 
 from mote.contracts.artifact import ArtifactRef, ArtifactResolutionPolicy, ResolvedArtifact
-from mote.contracts.ports.artifact.store import ArtifactStore
+from mote.contracts.ports.artifact.store import ArtifactRepositoryService
 
 
 class StoreArtifactResolver:
     """Resolve through the logical index without exposing physical CAS paths."""
 
-    def __init__(self, store: ArtifactStore) -> None:
+    def __init__(self, store: ArtifactRepositoryService) -> None:
         self._store = store
 
     async def resolve(

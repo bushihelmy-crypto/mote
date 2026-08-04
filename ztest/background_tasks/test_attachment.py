@@ -19,7 +19,7 @@ from mote.orchestration.background_tasks import (
     BackgroundTaskStatus,
     TaskAttachment,
     TaskAttachmentGenerator,
-    TaskMeta,
+    TaskSnapshot,
     format_attachment_xml,
 )
 
@@ -108,7 +108,7 @@ class TestFormatXml:
 class TestGeneratePending:
     @pytest.mark.asyncio
     async def test_pending_attachment(self):
-        meta = TaskMeta(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.PENDING)
+        meta = TaskSnapshot(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.PENDING)
         gen = TaskAttachmentGenerator(FakePool([meta]))
         result = await gen.generate()
         assert len(result.attachments) == 1
@@ -121,7 +121,7 @@ class TestGeneratePending:
 class TestGenerateRunning:
     @pytest.mark.asyncio
     async def test_running_with_delta_then_advances_offset(self):
-        meta = TaskMeta(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.RUNNING)
+        meta = TaskSnapshot(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.RUNNING)
         store = FakeStore()
         store.deltas["bg_1"] = b"first-chunk"
         gen = TaskAttachmentGenerator(FakePool([meta]), store)
@@ -136,7 +136,7 @@ class TestGenerateRunning:
 
     @pytest.mark.asyncio
     async def test_running_without_store(self):
-        meta = TaskMeta(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.RUNNING)
+        meta = TaskSnapshot(task_id="bg_1", command_name="job", status=BackgroundTaskStatus.RUNNING)
         gen = TaskAttachmentGenerator(FakePool([meta]))
         r = await gen.generate()
         assert r.attachments[0].delta_summary is None
@@ -145,7 +145,7 @@ class TestGenerateRunning:
 class TestGenerateTerminal:
     @pytest.mark.asyncio
     async def test_first_time_terminal_emits_final_attachment(self):
-        meta = TaskMeta(
+        meta = TaskSnapshot(
             task_id="bg_1",
             command_name="job",
             status=BackgroundTaskStatus.SUCCESS,
@@ -172,7 +172,7 @@ class TestGenerateTerminal:
         from mote.contracts.foundation.errors.report import ErrorReport
 
         report = ErrorReport.from_exception(RuntimeError("kaboom"))
-        meta = TaskMeta(
+        meta = TaskSnapshot(
             task_id="bg_1",
             command_name="job",
             status=BackgroundTaskStatus.FAILED,
@@ -188,7 +188,7 @@ class TestGenerateTerminal:
 
     @pytest.mark.asyncio
     async def test_pool_notified_terminal_is_skipped_then_evicted(self):
-        meta = TaskMeta(
+        meta = TaskSnapshot(
             task_id="bg_1",
             command_name="job",
             status=BackgroundTaskStatus.SUCCESS,
@@ -208,7 +208,7 @@ class TestGenerateTerminal:
 
     @pytest.mark.asyncio
     async def test_mark_notified_then_evicts(self):
-        meta = TaskMeta(
+        meta = TaskSnapshot(
             task_id="bg_1",
             command_name="job",
             status=BackgroundTaskStatus.FAILED,

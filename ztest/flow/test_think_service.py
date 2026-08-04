@@ -7,6 +7,7 @@ Returns ``False`` immediately when the shared ``active`` signal is off (the
 ``prepare()`` the request, lazily ``resolve_llm()`` and hands everything to
 ``inference_engine.start()``, returning ``True``.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -42,27 +43,6 @@ async def test_think_prepares_and_starts(make_engine):
     assert call["target"] is b.provider.llm
     assert call["model_call_id"]
     assert call["resume"] is False
-
-
-async def test_interrupted_think_resumes_same_model_call_identity(make_engine):
-    class Runner:
-        def reinstate_candidate(self, _messages):
-            return None
-
-        def resume_candidate(self):
-            return "think:1", "durable-model-call"
-
-        def update_think(self, _step_id, state):
-            self.state = state
-
-    b = make_engine(active=True, durable_runner=Runner())
-
-    assert await b.engine._inference.infer() is True
-
-    call = b.inference_engine.start_calls[0]
-    assert call["model_call_id"] == "durable-model-call"
-    assert call["resume"] is True
-    assert b.engine._inference_checkpoint.step_id == "think:1"
 
 
 # ---------------------------------------------------------------------------

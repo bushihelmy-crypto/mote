@@ -1,13 +1,47 @@
 """Cross-boundary hook data contracts."""
 
-from mote.contracts.hook.invocation import *
-from mote.contracts.hook.invocation import __all__ as _invocation_all
-from mote.contracts.hook.models import HookAuthorizationFact, HookBehavior, HookEvent, HookOutcome
+from mote.contracts.hook.invocation import (
+    CompactPayload,
+    FileChangedInvocation,
+    FileChangedPayload,
+    HookIdentity,
+    HookInvocation,
+    PostCompactInvocation,
+    PostToolUseInvocation,
+    PostToolUsePayload,
+    PreCompactInvocation,
+    PreToolUseInvocation,
+    PreToolUsePayload,
+    SessionStartInvocation,
+    SessionStartPayload,
+    StopInvocation,
+    StopPayload,
+    UserPromptSubmitInvocation,
+    UserPromptSubmitPayload,
+)
+from mote.contracts.hook.models import HookAuthorizationFact, HookBehavior, HookEvent, HookOutcome, HookStop
 
 __all__ = [
     "HookAuthorizationFact",
     "HookBehavior",
     "HookEvent",
     "HookOutcome",
-    *_invocation_all,
+    "HookStop",
+    "CompactPayload",
+    "FileChangedInvocation",
+    "FileChangedPayload",
+    "HookIdentity",
+    "HookInvocation",
+    "PostCompactInvocation",
+    "PostToolUseInvocation",
+    "PostToolUsePayload",
+    "PreCompactInvocation",
+    "PreToolUseInvocation",
+    "PreToolUsePayload",
+    "SessionStartInvocation",
+    "SessionStartPayload",
+    "StopInvocation",
+    "StopPayload",
+    "UserPromptSubmitInvocation",
+    "UserPromptSubmitPayload",
 ]

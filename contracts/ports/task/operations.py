@@ -6,11 +6,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Protocol
 
+from mote.contracts.async_work.command import LocalCancelReceipt
+from mote.contracts.ports.async_work.local import LocalAsyncWorkCommandPort, LocalAsyncWorkObservationPort
 from mote.contracts.ports.conversation.message_activity import MessageActivity
 from mote.contracts.ports.conversation.message_sink import MessageSink
 from mote.contracts.session.identity import SessionId
 from mote.contracts.task.lifecycle import BackgroundTaskDrainReceipt, BackgroundTaskOwner, BackgroundTaskPinSnapshot
 from mote.contracts.task.models import TaskId, TaskResultRecord
+
+
+class BackgroundTaskSnapshot(Protocol):
+    task_id: TaskId
+    status: str
+    command_name: str
 
 
 class BackgroundMessageSink(MessageSink, MessageActivity, Protocol):
@@ -21,20 +29,21 @@ BackgroundWakeReason = Literal["task_done", "new_message", "timeout"]
 
 
 class BackgroundTaskService(Protocol):
-    def has_pending(self) -> bool: ...
-
     @property
-    def pending_count(self) -> int: ...
+    def session_id(self) -> SessionId: ...
+
+    def async_work_adapter(self) -> "LocalAsyncWorkAdapter": ...
+
+    def has_pending(self) -> bool: ...
 
     async def wait_any(self, timeout: float = ...) -> BackgroundWakeReason: ...
 
-    async def wait_for_completion(self, timeout: float | None = ...) -> bool: ...
-
-    def set_wake(self, wake: Callable[[], None] | None) -> None: ...
-
-    def close_admission(self, *, owner: BackgroundTaskOwner) -> BackgroundTaskPinSnapshot: ...
+    @property
+    def owner(self) -> BackgroundTaskOwner: ...
 
     def pin_snapshot(self, *, owner: BackgroundTaskOwner) -> BackgroundTaskPinSnapshot: ...
+
+    def close_admission(self, *, owner: BackgroundTaskOwner) -> BackgroundTaskPinSnapshot: ...
 
     async def drain(
         self,
@@ -43,10 +52,24 @@ class BackgroundTaskService(Protocol):
         timeout_seconds: float,
     ) -> BackgroundTaskDrainReceipt: ...
 
+    def get_task_info(self, task_id: TaskId) -> BackgroundTaskSnapshot | None: ...
+
+    def cancel_current(self, task_id: TaskId, reason: str) -> LocalCancelReceipt: ...
+
+    def mark_retrieved(self, task_id: TaskId) -> None: ...
+
     @property
-    def owner(self) -> BackgroundTaskOwner: ...
+    def pending_count(self) -> int: ...
+
+    async def wait_for_completion(self, timeout: float | None = ...) -> bool: ...
+
+    def set_wake(self, wake: Callable[[], None] | None) -> None: ...
 
     async def aclose(self) -> None: ...
+
+
+class LocalAsyncWorkAdapter(LocalAsyncWorkCommandPort, LocalAsyncWorkObservationPort, Protocol):
+    pass
 
 
 class TaskResultRegistry(Protocol):
@@ -84,6 +107,8 @@ __all__ = [
     "BackgroundTaskBuildContext",
     "BackgroundTaskService",
     "BackgroundTaskServiceFactory",
+    "BackgroundTaskSnapshot",
+    "LocalAsyncWorkAdapter",
     "BackgroundWakeReason",
     "TaskOutputLocationPort",
     "TaskResultRegistry",

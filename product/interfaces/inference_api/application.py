@@ -26,15 +26,6 @@ from mote.product.interfaces.inference_api.operations import (
     UnaryCompatibilityOwner,
 )
 
-_GATEWAY = web.AppKey("inference_gateway", object)
-_AUTHORIZER = web.AppKey("inference_authorizer", object)
-_ROUTE = web.AppKey("inference_route", object)
-_DURABLE_RESPONSES = web.AppKey("inference_durable_responses", object)
-_REALTIME_SESSIONS = web.AppKey("inference_realtime_sessions", object)
-_UNARY_OPERATIONS = web.AppKey("inference_unary_operations", object)
-_DURABLE_OPERATIONS = web.AppKey("inference_durable_operations", object)
-_ARTIFACT_OPERATIONS = web.AppKey("inference_artifact_operations", object)
-_ARTIFACT_READER = web.AppKey("inference_artifact_reader", object)
 _MAX_BODY = 16 * 1024 * 1024
 _MAX_MULTIPART_FIELDS = 32
 _MAX_MULTIPART_FIELD_BYTES = 16 * 1024
@@ -55,6 +46,16 @@ class DurableResponseOwner(Protocol):
 
 
 ArtifactReader = Callable[[ArtifactRef], Awaitable[ResolvedArtifact]]
+
+_GATEWAY = web.AppKey[ModelGateway]("inference_gateway")
+_AUTHORIZER = web.AppKey[InferenceApiAuthorizer]("inference_authorizer")
+_ROUTE = web.AppKey[RouteId]("inference_route")
+_DURABLE_RESPONSES = web.AppKey[DurableResponseOwner]("inference_durable_responses")
+_REALTIME_SESSIONS = web.AppKey[RealtimeSessionOwner]("inference_realtime_sessions")
+_UNARY_OPERATIONS = web.AppKey[UnaryCompatibilityOwner]("inference_unary_operations")
+_DURABLE_OPERATIONS = web.AppKey[DurableCompatibilityOwner]("inference_durable_operations")
+_ARTIFACT_OPERATIONS = web.AppKey[ArtifactCompatibilityOwner]("inference_artifact_operations")
+_ARTIFACT_READER = web.AppKey[ArtifactReader]("inference_artifact_reader")
 
 
 class _StaticBearerAuthorizer:
@@ -80,7 +81,7 @@ def _bearer(request: web.Request) -> str:
 
 
 async def _require(request: web.Request, scope: str) -> web.Response | None:
-    authorizer = cast(InferenceApiAuthorizer, request.app[_AUTHORIZER])
+    authorizer = request.app[_AUTHORIZER]
     if not await authorizer.authorize(_bearer(request), scope):
         return await _error("authentication_error", "unauthorized", 401)
     return None
@@ -90,8 +91,8 @@ async def _models(request: web.Request) -> web.Response:
     denied = await _require(request, "models.read")
     if denied is not None:
         return denied
-    gateway = cast(ModelGateway, request.app[_GATEWAY])
-    route = cast(RouteId, request.app[_ROUTE])
+    gateway = request.app[_GATEWAY]
+    route = request.app[_ROUTE]
     profiles = gateway.route_profiles(route)
     return web.json_response(
         {
@@ -126,12 +127,12 @@ async def _generate(request: web.Request) -> web.Response:
         call_id = str(body.get("request_id") or uuid4())
         invocation = ModelInvocation(
             model_call_id=call_id,
-            route_id=cast(RouteId, request.app[_ROUTE]),
+            route_id=request.app[_ROUTE],
             task="compatibility.chat.completions",
             operation=ModelOperation.GENERATE,
             input=GenerateInput(messages=messages),
         )
-        result = await cast(ModelGateway, request.app[_GATEWAY]).execute(invocation, stream=False)
+        result = await request.app[_GATEWAY].execute(invocation, stream=False)
     except (KeyError, ValueError, ValidationError) as exc:
         return await _error("invalid_request_error", str(exc), 400)
     try:
@@ -159,12 +160,12 @@ async def _responses(request: web.Request) -> web.Response:
         call_id = str(body.get("request_id") or uuid4())
         invocation = ModelInvocation(
             model_call_id=call_id,
-            route_id=cast(RouteId, request.app[_ROUTE]),
+            route_id=request.app[_ROUTE],
             task="compatibility.responses",
             operation=ModelOperation.GENERATE,
             input=GenerateInput(messages=messages, system_prompt=instructions),
         )
-        result = await cast(ModelGateway, request.app[_GATEWAY]).execute(invocation, stream=False)
+        result = await request.app[_GATEWAY].execute(invocation, stream=False)
     except (KeyError, ValueError, ValidationError) as exc:
         return await _error("invalid_request_error", str(exc), 400)
     output = result.output
@@ -226,7 +227,7 @@ async def _response_lifecycle(request: web.Request, operation: str) -> web.Respo
     denied = await _require(request, "responses.manage")
     if denied is not None:
         return denied
-    owner = cast(DurableResponseOwner | None, request.app.get(_DURABLE_RESPONSES))
+    owner = request.app.get(_DURABLE_RESPONSES)
     if owner is None:
         return await _error("service_unavailable", "durable response owner is not configured", 503)
     response_id = request.match_info["response_id"]
@@ -252,7 +253,7 @@ async def _response_input_items(request: web.Request) -> web.Response:
     denied = await _require(request, "responses.manage")
     if denied is not None:
         return denied
-    owner = cast(DurableResponseOwner | None, request.app.get(_DURABLE_RESPONSES))
+    owner = request.app.get(_DURABLE_RESPONSES)
     if owner is None:
         return await _error("service_unavailable", "durable response owner is not configured", 503)
     value = await owner.input_items(request.match_info["response_id"], dict(request.query))
@@ -265,7 +266,7 @@ async def _realtime(request: web.Request) -> web.StreamResponse:
     denied = await _require(request, "realtime.execute")
     if denied is not None:
         return denied
-    owner = cast(RealtimeSessionOwner | None, request.app.get(_REALTIME_SESSIONS))
+    owner = request.app.get(_REALTIME_SESSIONS)
     if owner is None:
         return await _error("service_unavailable", "realtime session owner is unavailable", 503)
     model = request.query.get("model", "")
@@ -349,7 +350,7 @@ async def _unary_operation(request: web.Request, operation: str) -> web.Response
     denied = await _require(request, "inference.execute")
     if denied is not None:
         return denied
-    owner = cast(UnaryCompatibilityOwner | None, request.app.get(_UNARY_OPERATIONS))
+    owner = request.app.get(_UNARY_OPERATIONS)
     if owner is None:
         return await _error("service_unavailable", f"{operation} owner is unavailable", 503)
     try:
@@ -384,7 +385,7 @@ async def _durable_operation(request: web.Request, operation: str) -> web.Respon
     denied = await _require(request, f"{operation}.execute")
     if denied is not None:
         return denied
-    owner = cast(DurableCompatibilityOwner | None, request.app.get(_DURABLE_OPERATIONS))
+    owner = request.app.get(_DURABLE_OPERATIONS)
     if owner is None:
         return await _error("service_unavailable", f"{operation} owner is unavailable", 503)
     try:
@@ -400,7 +401,7 @@ async def _list_durable_operation(request: web.Request, operation: str) -> web.R
     denied = await _require(request, f"{operation}.read")
     if denied is not None:
         return denied
-    owner = cast(DurableCompatibilityOwner | None, request.app.get(_DURABLE_OPERATIONS))
+    owner = request.app.get(_DURABLE_OPERATIONS)
     if owner is None:
         return await _error("service_unavailable", f"{operation} owner is unavailable", 503)
     return web.json_response(await owner.list(operation, dict(request.query)))
@@ -410,7 +411,7 @@ async def _files_upload(request: web.Request) -> web.Response:
     denied = await _require(request, "files.execute")
     if denied is not None:
         return denied
-    owner = cast(ArtifactCompatibilityOwner | None, request.app.get(_ARTIFACT_OPERATIONS))
+    owner = request.app.get(_ARTIFACT_OPERATIONS)
     if owner is None:
         return await _error("service_unavailable", "files owner is unavailable", 503)
     try:
@@ -516,7 +517,7 @@ async def _resource_operation(request: web.Request, operation: str) -> web.Respo
     denied = await _require(request, f"{operation}.execute")
     if denied is not None:
         return denied
-    owner = cast(DurableCompatibilityOwner | None, request.app.get(_DURABLE_OPERATIONS))
+    owner = request.app.get(_DURABLE_OPERATIONS)
     if owner is None:
         return await _error("service_unavailable", f"{operation} owner is unavailable", 503)
     resource_id = request.match_info["resource_id"]
@@ -570,8 +571,8 @@ async def _file_content(request: web.Request) -> web.Response:
     denied = await _require(request, "file.content.execute")
     if denied is not None:
         return denied
-    owner = cast(DurableCompatibilityOwner | None, request.app.get(_DURABLE_OPERATIONS))
-    reader = cast(ArtifactReader | None, request.app.get(_ARTIFACT_READER))
+    owner = request.app.get(_DURABLE_OPERATIONS)
+    reader = request.app.get(_ARTIFACT_READER)
     if owner is None or reader is None:
         return await _error("service_unavailable", "file content owner is unavailable", 503)
     try:
@@ -636,7 +637,7 @@ def build_inference_api(
     app[_AUTHORIZER] = authorizer
     app[_ROUTE] = route_id or DefaultRoute()
     if unary_operations is None:
-        unary_operations = ModelGatewayCompatibilityOwner(gateway, route_id=cast(RouteId, app[_ROUTE]))
+        unary_operations = ModelGatewayCompatibilityOwner(gateway, route_id=app[_ROUTE])
     if durable_responses is not None:
         app[_DURABLE_RESPONSES] = durable_responses
     if realtime_sessions is not None:

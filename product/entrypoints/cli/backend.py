@@ -37,6 +37,7 @@ from typing import List, Optional
 
 from mote.contracts.conversation import UserMessage
 from mote.contracts.conversation.fields import IMAGES
+from mote.contracts.ports.events.telemetry import TelemetryRuntimePort
 from mote.orchestration.agents.control import AgentControl
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime
 from mote.product.agents.catalog import AgentCatalog
@@ -46,14 +47,10 @@ from mote.product.interaction.human_channel import PortHumanChannel
 from mote.product.paths import RuntimePaths, default_runtime_paths
 from mote.product.session_hosting.composition import compose_resident_agent
 from mote.runtime.agent import Role
-from mote.runtime.events.telemetry import TelemetryRuntime
 from mote.runtime.models.cost.report import format_total_cost
 from mote.runtime.models.ratelimit import format_rate_limits
-from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.session.checkpoint import CheckpointEntry
-from mote.runtime.session.checkpoint import list_checkpoints as _list_checkpoints
 from mote.runtime.session.listing import SessionInfo
-from mote.runtime.session.log import SessionLog
 
 TextRole = Role[None, str]
 
@@ -77,21 +74,17 @@ def build_control(role: TextRole) -> tuple[AgentControl, AgentRuntime[str]]:
     Role, never the shared Engine Context, so concurrent sessions cannot
     overwrite each other's spawn authority.
     """
-    projection = role.wiring.dependencies.component_projection
-    if projection is None:
-        raise RuntimeError("resident Agent requires a component projection")
-    workspace_root = projection.session_workspace_root()
-    services = role.wiring.services
-    if services is None or services.agent_budget is None:
-        raise RuntimeError("resident Agent requires canonical budget governance")
+    hosting = role.resident_hosting_snapshot()
+    workspace_root = hosting.workspace_root
     return compose_resident_agent(
         role,
         residency_dir=workspace_root / ".agent_residency",
         sessions_dir=workspace_root / ".agent_sessions",
-        writer=role.context.disk_writer,
+        writer=hosting.writer,
         governance=role.config.agents,
-        budget=services.agent_budget,
-        workflow_governance=services.workflow_governance,
+        budget=hosting.budget,
+        workflow_governance=hosting.workflow_governance,
+        workflow_delivery=hosting.workflow_delivery,
     )
 
 
@@ -112,7 +105,7 @@ def role_session_id(role: TextRole) -> str:
     return role.session_id
 
 
-def role_telemetry(role: TextRole) -> TelemetryRuntime:
+def role_telemetry(role: TextRole) -> TelemetryRuntimePort:
     return role.telemetry
 
 
@@ -129,10 +122,7 @@ async def clear_messages(role: TextRole) -> int:
     projections and the live model context. History-derived signals then
     re-derive against the empty view.
     """
-    cm = role.context_manager
-    cleared = cm.count()
-    await cm.clear()
-    return cleared
+    return await role.clear_history()
 
 
 async def delete_react_units(role: TextRole, anchor_ids: Sequence[str]) -> int:
@@ -144,8 +134,7 @@ async def delete_react_units(role: TextRole, anchor_ids: Sequence[str]) -> int:
     projections. Returns the number of messages removed
     (``0`` when the role has no context manager or nothing matched).
     """
-    cm = role.context_manager
-    return await cm.delete_react_units(anchor_ids)
+    return await role.delete_history_units(anchor_ids)
 
 
 def list_checkpoints(role: TextRole) -> list[CheckpointEntry]:
@@ -156,12 +145,7 @@ def list_checkpoints(role: TextRole) -> list[CheckpointEntry]:
     empty list when the feature was inert (non-repo workspace) or nothing yet
     captured.
     """
-    log = SessionLog(
-        role.state.session_id,
-        base_dir=str(role._components.workspace_store.sessions_root),
-        writer=role.context.disk_writer,
-    )
-    return _list_checkpoints(log)
+    return list(role.checkpoint_entries())
 
 
 @dataclass
@@ -191,27 +175,10 @@ async def rewind_files(role: TextRole, index: int) -> RewindResult | None:
     :attr:`RewindResult.external`. Returns a :class:`RewindResult` on success, or
     ``None`` when the index is out of range or the restore failed.
     """
-    log = SessionLog(
-        role.state.session_id,
-        base_dir=str(role._components.workspace_store.sessions_root),
-        writer=role.context.disk_writer,
-    )
-    entries = await run_disk_io(_list_checkpoints, log)
-    if not (0 <= index < len(entries)):
+    settlement = await role.rewind_checkpoint(index)
+    if settlement is None:
         return None
-    target = entries[index]
-    work_dir = target.working_dir or role.state.project_root or role.state.working_dir
-    if not work_dir:
-        return None
-    parent = entries[-1].commit if entries else None
-    result = await run_disk_io(
-        role.file_operations.rewind,
-        working_dir=work_dir,
-        target_commit=target.commit,
-        parent_commit=parent,
-        prompt_index=len(entries),
-        after_commit=target.after_commit,
-    )
+    target, result = settlement
     return RewindResult(target=target, external=list(result.external_paths))
 
 
@@ -276,10 +243,7 @@ def usage_report(role: TextRole) -> str:
     (a bare fake in tests) degrades to a plain "unavailable" line rather than
     raising, keeping the command host-surface total.
     """
-    context = role.context
-    cost_block = format_total_cost(context.cost_manager)
-    limit_block = format_rate_limits(context.rate_limit_tracker)
-    return f"{cost_block}\n\n{limit_block}"
+    return role.usage_report()
 
 
 def resume_role(role: TextRole) -> bool:
@@ -289,12 +253,7 @@ def resume_role(role: TextRole) -> bool:
 
 def list_sessions(role: TextRole) -> list[SessionInfo]:
     """List resumable sessions for the role's session type."""
-    projection = role.wiring.dependencies.component_projection
-    if projection is None:
-        raise RuntimeError("resident Agent requires a component projection")
-    workspace_root = projection.session_workspace_root()
-    if workspace_root is None:
-        raise ValueError("Agent composition requires a session workspace root")
+    workspace_root = role.resident_hosting_snapshot().workspace_root
     return type(role).list_sessions(base_dir=str(workspace_root / ".agent_sessions"))
 
 

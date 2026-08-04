@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
-from mote.contracts.output import RunKind
+from mote.contracts.output import GraphOutputContractSpec, RunKind
 from mote.contracts.task.graph_errors import GraphError
 from mote.runtime.output.graph_service import GraphOutputService
 
@@ -25,8 +23,8 @@ class _Lease:
         return nullcontext()
 
 
-def _spec():
-    return SimpleNamespace(
+def _spec() -> GraphOutputContractSpec:
+    return GraphOutputContractSpec(
         namespace="test",
         name="graph-result",
         version="1",

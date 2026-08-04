@@ -6,6 +6,7 @@ A patch that touches several paths in one call is evaluated path-by-path and
 folded strictest-wins: any deny -> deny; else any ask/sandbox-escalation -> one
 consolidated prompt; else allow. ``check()`` (single-target) must be unchanged.
 """
+
 from __future__ import annotations
 
 import os
@@ -61,7 +62,7 @@ def sandboxed_engine(cwd, *, mode="bypass", reply=None):
             return choice
 
     guard = SandboxGuard(
-        SandboxConfig(mode="workspace-write", writable_roots=[]),
+        SandboxConfig(writable_roots=[]),
         get_cwd=lambda: cwd,
     )
     eng = PermissionEngine(mode=mode, store=store, ask_user=ask_user, sandbox=guard)

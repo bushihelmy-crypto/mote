@@ -1,4 +1,4 @@
-"""Strict v1 wire codec for durable Residency records."""
+"""Strict v2 codec for Residency state; ingress projections are excluded."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from mote.orchestration.agents.residency.model import (
     ResidencyRecord,
 )
 
-RESIDENCY_SCHEMA = "mote.agent-residency/v1"
+RESIDENCY_SCHEMA = "mote.agent-residency/v2"
 JsonObject: TypeAlias = dict[str, object]
 
 _ENVELOPE_FIELDS = {
@@ -24,7 +24,6 @@ _ENVELOPE_FIELDS = {
     "record_revision",
     "materialization_fence",
     "state_snapshot",
-    "mailbox_snapshot",
     "message_buffer_snapshot",
     "lifecycle",
     "install_fence",
@@ -65,7 +64,6 @@ def encode_residency_record(record: ResidencyRecord) -> bytes:
             "fencing_token": fence.fencing_token,
         },
         "state_snapshot": thaw_json(cast(JsonValue, record.state_snapshot)),
-        "mailbox_snapshot": thaw_json(cast(JsonValue, record.mailbox_snapshot)),
         "message_buffer_snapshot": thaw_json(record.message_buffer_snapshot),
         "lifecycle": record.lifecycle.value,
         "install_fence": (
@@ -105,7 +103,6 @@ def decode_residency_record(data: bytes, *, expected_agent_id: str) -> Residency
     )
     fence_raw = _mapping(envelope["materialization_fence"], _FENCE_FIELDS, "Residency materialization fence")
     state = _json_object(envelope["state_snapshot"], "state_snapshot")
-    mailbox = _json_object(envelope["mailbox_snapshot"], "mailbox_snapshot")
     messages = freeze_json(envelope["message_buffer_snapshot"], path="message_buffer_snapshot")
     lifecycle_raw = _string(envelope["lifecycle"], "lifecycle")
     try:
@@ -131,7 +128,6 @@ def decode_residency_record(data: bytes, *, expected_agent_id: str) -> Residency
             fencing_token=_integer(fence_raw["fencing_token"], "fencing_token"),
         ),
         state_snapshot=state,
-        mailbox_snapshot=mailbox,
         message_buffer_snapshot=messages,
         lifecycle=lifecycle,
         install_fence=install_fence,

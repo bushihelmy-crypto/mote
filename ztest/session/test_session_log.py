@@ -6,6 +6,7 @@ Covers: create writes the session_meta first line and creates the directory;
 create no-ops on an existing log (no double meta, no truncation); append is
 O_APPEND (earlier lines survive); iter_raw skips corrupt lines.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -34,7 +35,9 @@ def _events(log: SessionLog):
 def test_create_writes_meta_first_line(tmp_path):
     log = _log(tmp_path)
     assert not log.exists()
-    result = asyncio.run(log.append(SessionMetaEvent(session_id="sess1", working_dir="/w")))
+    result = asyncio.run(
+        log.append(SessionMetaEvent(session_id="sess1", role_class="test.Role", toolset_manifest=(), working_dir="/w"))
+    )
     assert result.current_version == 1
     assert log.exists()
     assert log.path.name == ROLLOUT_FILENAME
@@ -46,7 +49,7 @@ def test_create_writes_meta_first_line(tmp_path):
 
 def test_metadata_is_an_ordinary_fact_and_duplicate_append_is_visible(tmp_path):
     log = _log(tmp_path)
-    _append(log, SessionMetaEvent(session_id="sess1"))
+    _append(log, SessionMetaEvent(session_id="sess1", role_class="test.Role", toolset_manifest=()))
     _append(log, MessageEvent(message=UserMessage(content="hi")))
 
     events = _events(log)
@@ -60,16 +63,16 @@ def test_stream_requires_exactly_one_matching_metadata_fact(tmp_path):
     with pytest.raises(ValueError, match="first session fact"):
         _append(log, MessageEvent(message=UserMessage(content="orphan")))
     with pytest.raises(ValueError, match="identity"):
-        _append(log, SessionMetaEvent(session_id="another"))
+        _append(log, SessionMetaEvent(session_id="another", role_class="test.Role", toolset_manifest=()))
 
-    _append(log, SessionMetaEvent(session_id="sess1"))
+    _append(log, SessionMetaEvent(session_id="sess1", role_class="test.Role", toolset_manifest=()))
     with pytest.raises(ValueError, match="only be appended once"):
-        _append(log, SessionMetaEvent(session_id="sess1"))
+        _append(log, SessionMetaEvent(session_id="sess1", role_class="test.Role", toolset_manifest=()))
 
 
 def test_append_is_append_only(tmp_path):
     log = _log(tmp_path)
-    _append(log, SessionMetaEvent(session_id="sess1"))
+    _append(log, SessionMetaEvent(session_id="sess1", role_class="test.Role", toolset_manifest=()))
     _append(log, MessageEvent(message=UserMessage(content="first")))
     _append(log, MessageEvent(message=UserMessage(content="second")))
     events = _events(log)
@@ -80,7 +83,7 @@ def test_append_is_append_only(tmp_path):
 
 def test_verified_read_rejects_corrupt_lines(tmp_path):
     log = _log(tmp_path)
-    _append(log, SessionMetaEvent(session_id="sess1"))
+    _append(log, SessionMetaEvent(session_id="sess1", role_class="test.Role", toolset_manifest=()))
     with open(log.path, "a", encoding="utf-8") as f:
         f.write("this is not json\n")
 

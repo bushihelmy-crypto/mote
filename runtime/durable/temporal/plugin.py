@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 try:
     from temporalio.client import Client
@@ -12,11 +12,11 @@ except ImportError:  # optional durable backend
     Worker = None
 
 from mote.contracts.config.tool import TemporalConfig
-from mote.runtime.durable.temporal._backend import TemporalBackend
 from mote.runtime.durable.temporal._converter import data_converter
+from mote.runtime.durable.temporal.runtime import TemporalActivityRuntime
 
 
-async def connect_client(config: TemporalConfig, **kwargs) -> "Client":
+async def connect_client(config: TemporalConfig, **kwargs: Any) -> Any:
     """Connect a Temporal ``Client`` for *config* using mote's data converter.
 
     The pydantic data converter is applied unless the caller overrides it, so
@@ -34,12 +34,12 @@ async def connect_client(config: TemporalConfig, **kwargs) -> "Client":
 
 
 def build_worker(
-    client: "Client",
-    backend: TemporalBackend,
+    client: Any,
+    runtime: TemporalActivityRuntime,
     *,
     workflows: Optional[Sequence[type]] = None,
     **kwargs,
-) -> "Worker":
+) -> Any:
     """Build a ``Worker`` on *config*'s task queue registering *backend*'s activity.
 
     Registers the ONE generic ``run_step`` activity the backend exposes; the host
@@ -50,9 +50,9 @@ def build_worker(
         raise RuntimeError("Temporal backend requires the 'temporalio' extra")
     return Worker(
         client,
-        task_queue=backend.config.task_queue,
+        task_queue=runtime.config.task_queue,
         workflows=list(workflows or []),
-        activities=list(backend.temporal_activities),
+        activities=list(runtime.activities),
         **kwargs,
     )
 

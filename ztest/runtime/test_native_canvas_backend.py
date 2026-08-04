@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from mote.contracts.ports.surface.canvas_backend import CanvasBackendSession
-from mote.contracts.surface import CanvasDocument, CanvasElement
+from mote.contracts.surface import CanvasDocument, CanvasRectangle
 from mote.runtime.interactive.canvas.backends.native import NativeCanvasBackend
 
 
@@ -12,9 +12,8 @@ async def test_native_canvas_backend_exports_svg_without_window():
     session = await NativeCanvasBackend().open(
         CanvasDocument(
             elements=[
-                CanvasElement(
+                CanvasRectangle(
                     id="headless-box",
-                    kind="rect",
                     width=120,
                     height=80,
                 )

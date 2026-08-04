@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from mote.contracts.artifact import ArtifactContentRef, ContentLocator
-from mote.contracts.content import ContentIdentity
+from mote.contracts.content import ContentDigest, ContentIdentity
 
 _CHUNK_SIZE = 1_024 * 1_024
 
@@ -27,7 +27,9 @@ class ContentAddressedArtifactStore:
         if len(content) > self.hard_limit_bytes:
             raise ValueError("artifact content exceeds the repository hard limit")
         digest = hashlib.sha256(content).hexdigest()
-        ref = ArtifactContentRef(ContentIdentity(digest, len(content)), ContentLocator(f"sha256:{digest}"))
+        ref = ArtifactContentRef(
+            ContentIdentity(ContentDigest(digest), len(content)), ContentLocator(f"sha256:{digest}")
+        )
         path = self._path(ref)
         if path.exists():
             self.read_bytes(ref)
@@ -99,11 +101,11 @@ class ContentAddressedArtifactStore:
                 continue
             refs.append(
                 ArtifactContentRef(
-                    ContentIdentity(digest, path.stat().st_size),
+                    ContentIdentity(ContentDigest(digest), path.stat().st_size),
                     ContentLocator(f"sha256:{digest}"),
                 )
             )
-        return tuple(refs)
+        return tuple(sorted(refs, key=lambda item: str(item.identity.digest)))
 
     def reclaim(self, ref: ArtifactContentRef) -> bool:
         self._validate(ref)

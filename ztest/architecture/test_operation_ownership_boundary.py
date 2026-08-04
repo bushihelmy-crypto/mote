@@ -18,8 +18,6 @@ def test_effect_guarantee_separates_state_fence_from_external_safety() -> None:
     assert "IN_DOUBT" in source
 
 
-def test_selected_temporal_backend_never_falls_back_to_local_jsonl() -> None:
-    source = (ROOT / "runtime/durable/factory.py").read_text(encoding="utf-8")
-    temporal_branch = source[source.index('if config.backend == "temporal":') :]
-    assert "raise RuntimeError(" in temporal_branch
-    assert temporal_branch.index("raise RuntimeError(") < temporal_branch.index("return JsonlBackend")
+def test_generic_durable_backend_and_temporal_fallback_are_retired() -> None:
+    assert not (ROOT / "runtime/durable/factory.py").exists()
+    assert not (ROOT / "runtime/durable/backend.py").exists()

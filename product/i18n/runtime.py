@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""The active-locale runtime: catalog registry + ``t()`` lookup/fallback/format.
+"""The active-locale runtime over a fixed immutable Product catalog.
 
 The active locale lives in a :class:`~contextvars.ContextVar`, which is:
 
@@ -18,8 +18,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
+from types import MappingProxyType
+from typing import Any, Iterator, Mapping, Optional, Tuple
 
+from mote.product.i18n.catalog import en, zh
 from mote.product.i18n.detect import resolve_locale_code
 from mote.product.i18n.locale import Locale, available_locales, get_locale, negotiate
 from mote.product.i18n.message import format_message
@@ -29,15 +31,16 @@ DEFAULT_LOCALE = "zh"
 #: Ultimate catalog fallback so a missing translation still renders (complete).
 BASE_LOCALE = "en"
 
-# msg-id → pattern, keyed by locale code and populated through register_catalog.
-_CATALOGS: Dict[str, Dict[str, str]] = {}
+# Catalog identity is fixed by this Product generation. Runtime consumers can
+# select a locale but cannot mutate the published translation surface.
+_CATALOGS: Mapping[str, Mapping[str, str]] = MappingProxyType(
+    {
+        "en": MappingProxyType(dict(en.CATALOG)),
+        "zh": MappingProxyType(dict(zh.CATALOG)),
+    }
+)
 
 _active: ContextVar[Locale] = ContextVar("mote_active_locale")
-
-
-def register_catalog(code: str, mapping: Mapping[str, str]) -> None:
-    """Register (merge) a locale's ``{msg-id: pattern}`` catalog under *code*."""
-    _CATALOGS.setdefault(code, {}).update(mapping)
 
 
 def _default_locale() -> Locale:
@@ -104,7 +107,6 @@ def t(key: str, **params: Any) -> str:
 __all__ = [
     "DEFAULT_LOCALE",
     "BASE_LOCALE",
-    "register_catalog",
     "current_locale",
     "set_locale",
     "use_locale",

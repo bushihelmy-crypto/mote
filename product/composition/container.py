@@ -18,6 +18,7 @@ from mote.product.agents.factory import CodingAgentFactory
 from mote.product.config.adapters.hooks import load_global_hooks
 from mote.product.config.adapters.mcp import load_mcp_servers
 from mote.product.config.diagnostics import is_secret_path
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.product.config.schema import Config
 from mote.product.config.sources import discover_source_files
 from mote.product.extensions.sources import ApprovedExtensionSnapshot, ExtensionKind, ExtensionSourcePolicy
@@ -99,6 +100,7 @@ class _AgentComposition:
         hook_config = load_global_hooks(hook_sources)
         mcp_servers = tuple(load_mcp_servers(mcp_sources))
         return CodingAgentFactory(
+            model_checkpoint_policy=approved_model_checkpoint_policy(),
             toolsets_factory=self._toolsets,
             background_task_pool_builder=self._background_task_pool_builder,
             deferred_result_projector_factory=self._deferred_result_projector_factory,

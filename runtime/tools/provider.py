@@ -9,29 +9,30 @@ import json
 from abc import ABC
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AsyncExitStack
-from typing import Any, Generic, TypeAlias, TypeVar
+from typing import Generic, TypeAlias, TypeVar
 
+from mote.contracts.tool.arguments import ToolArguments
 from mote.contracts.tool.identity import ToolsetIdentity, ToolsetManifest
 from mote.contracts.tool.protocol import CommandProtocol, ToolsetProtocolError
 from mote.kernel.execution.run_context import RunContext
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, ToolDefinition, XmlToolDefinition
 from mote.runtime.tools.tool_binding import BoundApprovalPolicy
 
-DefinitionT = TypeVar("DefinitionT", XmlToolDefinition[Any], NativeToolDefinition[Any])
+DefinitionT = TypeVar("DefinitionT", XmlToolDefinition, NativeToolDefinition)
 AgentDepsT = TypeVar("AgentDepsT", contravariant=True)
 ToolFilter = Callable[[DefinitionT], bool]
 ToolDefinitionsPrepare: TypeAlias = Callable[[tuple[DefinitionT, ...]], Iterable[DefinitionT]]
 XmlApprovalPolicy: TypeAlias = Callable[
-    [RunContext[AgentDepsT], XmlToolDefinition[Any], Mapping[str, Any]],
+    [RunContext[AgentDepsT], XmlToolDefinition, ToolArguments],
     bool,
 ]
 NativeApprovalPolicy: TypeAlias = Callable[
-    [RunContext[AgentDepsT], NativeToolDefinition[Any], Mapping[str, Any]],
+    [RunContext[AgentDepsT], NativeToolDefinition, ToolArguments],
     bool,
 ]
 
 
-ToolsetPolicy: TypeAlias = Callable[[RunContext[AgentDepsT], ToolDefinition, Mapping[str, Any]], bool]
+ToolsetPolicy: TypeAlias = Callable[[RunContext[AgentDepsT], ToolDefinition, ToolArguments], bool]
 
 
 class ToolsetConflictError(ValueError):
@@ -234,7 +235,7 @@ class Toolset(DefinitionSource[DefinitionT], Generic[DefinitionT, AgentDepsT]):
         self._bound_context = context
 
 
-class XmlToolset(Toolset[XmlToolDefinition[Any], AgentDepsT], Generic[AgentDepsT]):
+class XmlToolset(Toolset[XmlToolDefinition, AgentDepsT], Generic[AgentDepsT]):
     """A composable source containing XML definitions only."""
 
     protocol = CommandProtocol.XML
@@ -246,7 +247,7 @@ class XmlToolset(Toolset[XmlToolDefinition[Any], AgentDepsT], Generic[AgentDepsT
     async def for_run_step(self, ctx: RunContext[AgentDepsT]) -> "XmlToolset[AgentDepsT]":
         return self
 
-    def filter(self, policy: ToolFilter[XmlToolDefinition[Any]]) -> "XmlToolset[AgentDepsT]":
+    def filter(self, policy: ToolFilter[XmlToolDefinition]) -> "XmlToolset[AgentDepsT]":
         return _XmlToolsetView(
             f"filter:{self.id}",
             self,
@@ -273,7 +274,7 @@ class XmlToolset(Toolset[XmlToolDefinition[Any], AgentDepsT], Generic[AgentDepsT
 
     def prepared(
         self,
-        prepare: ToolDefinitionsPrepare[XmlToolDefinition[Any]],
+        prepare: ToolDefinitionsPrepare[XmlToolDefinition],
     ) -> "XmlToolset[AgentDepsT]":
         """Return an immutable XML definition-preparation view."""
 
@@ -329,7 +330,7 @@ class XmlToolset(Toolset[XmlToolDefinition[Any], AgentDepsT], Generic[AgentDepsT
         )
 
 
-class NativeToolset(Toolset[NativeToolDefinition[Any], AgentDepsT], Generic[AgentDepsT]):
+class NativeToolset(Toolset[NativeToolDefinition, AgentDepsT], Generic[AgentDepsT]):
     """A composable source containing Native definitions only."""
 
     protocol = CommandProtocol.NATIVE
@@ -341,7 +342,7 @@ class NativeToolset(Toolset[NativeToolDefinition[Any], AgentDepsT], Generic[Agen
     async def for_run_step(self, ctx: RunContext[AgentDepsT]) -> "NativeToolset[AgentDepsT]":
         return self
 
-    def filter(self, policy: ToolFilter[NativeToolDefinition[Any]]) -> "NativeToolset[AgentDepsT]":
+    def filter(self, policy: ToolFilter[NativeToolDefinition]) -> "NativeToolset[AgentDepsT]":
         return _NativeToolsetView(
             f"filter:{self.id}",
             self,
@@ -368,7 +369,7 @@ class NativeToolset(Toolset[NativeToolDefinition[Any], AgentDepsT], Generic[Agen
 
     def prepared(
         self,
-        prepare: ToolDefinitionsPrepare[NativeToolDefinition[Any]],
+        prepare: ToolDefinitionsPrepare[NativeToolDefinition],
     ) -> "NativeToolset[AgentDepsT]":
         """Return an immutable Native definition-preparation view."""
 
@@ -425,12 +426,12 @@ class NativeToolset(Toolset[NativeToolDefinition[Any], AgentDepsT], Generic[Agen
 
 
 XmlTransform: TypeAlias = Callable[
-    [tuple[XmlToolDefinition[Any], ...]],
-    Iterable[XmlToolDefinition[Any]],
+    [tuple[XmlToolDefinition, ...]],
+    Iterable[XmlToolDefinition],
 ]
 NativeTransform: TypeAlias = Callable[
-    [tuple[NativeToolDefinition[Any], ...]],
-    Iterable[NativeToolDefinition[Any]],
+    [tuple[NativeToolDefinition, ...]],
+    Iterable[NativeToolDefinition],
 ]
 
 
@@ -472,7 +473,7 @@ class _XmlToolsetView(XmlToolset[AgentDepsT]):
         super()._bind_run_context(context)
         self._wrapped._bind_run_context(context)
 
-    def _view_definitions(self) -> Iterable[XmlToolDefinition[Any]]:
+    def _view_definitions(self) -> Iterable[XmlToolDefinition]:
         return tuple(self._transform(self._wrapped.definitions()))
 
     @property
@@ -562,7 +563,7 @@ class _NativeToolsetView(NativeToolset[AgentDepsT]):
         super()._bind_run_context(context)
         self._wrapped._bind_run_context(context)
 
-    def _view_definitions(self) -> Iterable[NativeToolDefinition[Any]]:
+    def _view_definitions(self) -> Iterable[NativeToolDefinition]:
         return tuple(self._transform(self._wrapped.definitions()))
 
     @property
@@ -628,7 +629,7 @@ class _CombinedXmlToolset(XmlToolset[AgentDepsT]):
             ),
         )
 
-    def _combined_definitions(self) -> Iterable[XmlToolDefinition[Any]]:
+    def _combined_definitions(self) -> Iterable[XmlToolDefinition]:
         for toolset in self._toolsets:
             yield from toolset.definitions()
 
@@ -687,7 +688,7 @@ class _CombinedNativeToolset(NativeToolset[AgentDepsT]):
             ),
         )
 
-    def _combined_definitions(self) -> Iterable[NativeToolDefinition[Any]]:
+    def _combined_definitions(self) -> Iterable[NativeToolDefinition]:
         for toolset in self._toolsets:
             yield from toolset.definitions()
 
@@ -732,10 +733,11 @@ class _CombinedNativeToolset(NativeToolset[AgentDepsT]):
         return None
 
 
-AnyToolset = XmlToolset[Any] | NativeToolset[Any]
+ContextFreeToolset: TypeAlias = XmlToolset[object] | NativeToolset[object]
+TypedToolset: TypeAlias = XmlToolset[AgentDepsT] | NativeToolset[AgentDepsT]
 
 
-def _combined_toolset_version(toolsets: Sequence[AnyToolset]) -> str:
+def _combined_toolset_version(toolsets: Sequence[TypedToolset[AgentDepsT]]) -> str:
     """Build a fixed-size deterministic version from ordered child identities."""
 
     canonical = json.dumps(
@@ -747,7 +749,7 @@ def _combined_toolset_version(toolsets: Sequence[AnyToolset]) -> str:
     return f"combined:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
-def toolset_manifest(toolsets: Sequence[AnyToolset]) -> ToolsetManifest:
+def toolset_manifest(toolsets: Sequence[TypedToolset[AgentDepsT]]) -> ToolsetManifest:
     """Return the ordered durable identity manifest for Agent dependencies."""
 
     identities = tuple(toolset.identity for toolset in toolsets)
@@ -799,9 +801,9 @@ def _validated_rename_mapping(mapping: Mapping[str, str]) -> dict[str, str]:
 
 def _renamed_xml_definitions(
     toolset_id: str,
-    originals: tuple[XmlToolDefinition[Any], ...],
+    originals: tuple[XmlToolDefinition, ...],
     mapping: Mapping[str, str],
-) -> Iterable[XmlToolDefinition[Any]]:
+) -> Iterable[XmlToolDefinition]:
     available = {definition.name for definition in originals}
     unknown = sorted(mapping.keys() - available)
     if unknown:
@@ -814,9 +816,9 @@ def _renamed_xml_definitions(
 
 def _renamed_native_definitions(
     toolset_id: str,
-    originals: tuple[NativeToolDefinition[Any], ...],
+    originals: tuple[NativeToolDefinition, ...],
     mapping: Mapping[str, str],
-) -> Iterable[NativeToolDefinition[Any]]:
+) -> Iterable[NativeToolDefinition]:
     available = {definition.name for definition in originals}
     unknown = sorted(mapping.keys() - available)
     if unknown:
@@ -873,13 +875,13 @@ def _validate_approval_policy(policy: object | None) -> None:
         )
 
 
-def _require_xml_definition(definition: ToolDefinition) -> XmlToolDefinition[Any]:
+def _require_xml_definition(definition: ToolDefinition) -> XmlToolDefinition:
     if not isinstance(definition, XmlToolDefinition):
         raise ToolsetProtocolError("XML approval policy received a Native definition")
     return definition
 
 
-def _require_native_definition(definition: ToolDefinition) -> NativeToolDefinition[Any]:
+def _require_native_definition(definition: ToolDefinition) -> NativeToolDefinition:
     if not isinstance(definition, NativeToolDefinition):
         raise ToolsetProtocolError("Native approval policy received an XML definition")
     return definition
@@ -893,7 +895,10 @@ def _validate_protocol_toolsets(protocol: CommandProtocol, toolsets: Sequence[ob
             raise ToolsetProtocolError(f"cannot compose {protocol.value} Toolset with {rendered} Toolset")
 
 
-def validate_toolset_protocols(protocol: str | CommandProtocol, toolsets: Sequence[AnyToolset]) -> None:
+def validate_toolset_protocols(
+    protocol: str | CommandProtocol,
+    toolsets: Sequence[TypedToolset[AgentDepsT]],
+) -> None:
     """Validate protocol tags and stable IDs without materializing definitions."""
 
     expected = CommandProtocol(protocol)
@@ -914,7 +919,7 @@ def validate_toolset_protocols(protocol: str | CommandProtocol, toolsets: Sequen
 
 def validate_toolset_composition(
     protocol: str | CommandProtocol,
-    toolsets: Sequence[AnyToolset],
+    toolsets: Sequence[TypedToolset[AgentDepsT]],
 ) -> None:
     """Materialize definitions and reject cross-Toolset dispatch conflicts."""
 
@@ -923,13 +928,13 @@ def validate_toolset_composition(
 
 def materialize_toolset_index(
     protocol: str | CommandProtocol,
-    toolsets: Sequence[AnyToolset],
-) -> dict[str, tuple[AnyToolset, ToolDefinition]]:
+    toolsets: Sequence[TypedToolset[AgentDepsT]],
+) -> dict[str, tuple[TypedToolset[AgentDepsT], ToolDefinition]]:
     """Build one validated dispatch snapshot from the current Toolset views."""
 
     validate_toolset_protocols(protocol, toolsets)
     owners: dict[str, str] = {}
-    resolved: dict[str, tuple[AnyToolset, ToolDefinition]] = {}
+    resolved: dict[str, tuple[TypedToolset[AgentDepsT], ToolDefinition]] = {}
     for toolset in toolsets:
         for definition in toolset.definitions():
             for name in definition.names:
@@ -944,9 +949,9 @@ def materialize_toolset_index(
 
 
 def resolve_tool(
-    toolsets: tuple[AnyToolset, ...],
+    toolsets: tuple[TypedToolset[AgentDepsT], ...],
     name: str,
-) -> tuple[AnyToolset, ToolDefinition] | None:
+) -> tuple[TypedToolset[AgentDepsT], ToolDefinition] | None:
     """Resolve a declared name from exactly one same-protocol Toolset."""
 
     if not toolsets:
@@ -955,7 +960,7 @@ def resolve_tool(
 
 
 __all__ = [
-    "AnyToolset",
+    "ContextFreeToolset",
     "DefinitionSource",
     "NativeToolset",
     "NativeApprovalPolicy",
@@ -963,6 +968,7 @@ __all__ = [
     "ToolDefinitionsPrepare",
     "Toolset",
     "ToolsetPolicy",
+    "TypedToolset",
     "ToolsetCompositionError",
     "ToolsetConflictError",
     "XmlToolset",

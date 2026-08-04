@@ -16,10 +16,6 @@ from mote.contracts.config.base import ConfigModel as YamlModel
 class SecretsConfig(YamlModel):
     """Storage knobs; core prompt/result protection cannot be disabled."""
 
-    cipher: str = Field(
-        default="aes",
-        description="Vault key/cipher strategy name. 'aes' = AES-256-GCM with a ~/.mote/vault.key key file.",
-    )
     vault_path: Optional[str] = Field(
         default=None,
         description="Override the encrypted vault file location (default ~/.mote/secrets.json).",

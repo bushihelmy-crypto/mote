@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from mote.contracts.hook import HookIdentity, StopInvocation, StopPayload
+from mote.contracts.hook import HookIdentity, HookOutcome, HookStop, StopInvocation, StopPayload
 from mote.runtime.config.hook import HookCommandHandler, HookConfig, HookMatcherGroup
 from mote.runtime.hook.command_handler import HookCommandFailure, run_command_handler
 from mote.runtime.hook.manager import HookManager
@@ -82,6 +82,14 @@ async def test_observation_callback_failure_is_best_effort() -> None:
     assert outcome.behavior is None
 
 
+def test_hook_generation_rejects_registration_after_activation() -> None:
+    manager = HookManager()
+    manager.register("PreToolUse", lambda _event: None)
+    manager.activate()
+    with pytest.raises(RuntimeError, match="already active"):
+        manager.register("PreToolUse", lambda _event: None)
+
+
 def test_control_wire_rejects_malformed_and_unknown_decisions() -> None:
     with pytest.raises(ValueError):
         parse_command_output("not-json", "", 0, strict=True)
@@ -94,6 +102,16 @@ def test_control_wire_rejects_malformed_and_unknown_decisions() -> None:
             0,
             strict=True,
         )
+    with pytest.raises(ValueError):
+        parse_command_output('{"decision":"approve","futureField":true}', "", 0, strict=True)
+
+
+def test_hook_outcome_uses_immutable_stop_variant_and_argument_snapshot() -> None:
+    arguments = {"command": "before"}
+    outcome = HookOutcome(updated_args=arguments, stop=HookStop("halt"))
+    arguments["command"] = "after"
+    assert outcome.updated_args == {"command": "before"}
+    assert outcome.stop == HookStop("halt")
 
 
 class _Sandbox:
@@ -112,8 +130,8 @@ class _Sandbox:
 async def test_command_runner_uses_bounded_stdin_and_sandbox(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fixed(argv, **kwargs):
-        captured["argv"] = tuple(argv)
+    async def fixed(binding, arguments, **kwargs):
+        captured["argv"] = (binding, *tuple(arguments))
         captured.update(kwargs)
         return ProcessResult(
             ProcessDisposition.EXITED,
@@ -123,7 +141,8 @@ async def test_command_runner_uses_bounded_stdin_and_sandbox(monkeypatch) -> Non
 
     import mote.runtime.hook.command_handler as command_handler
 
-    monkeypatch.setattr(command_handler, "run_fixed_argv", fixed)
+    monkeypatch.setattr(command_handler, "run_verified_fixed_argv", fixed)
+    monkeypatch.setattr(command_handler, "resolve_fixed_executable", lambda command: command)
     outcome = await run_command_handler(
         HookCommandHandler(id="bounded", argv=("/bin/true",)),
         StopInvocation(HookIdentity(), StopPayload()),
@@ -133,17 +152,18 @@ async def test_command_runner_uses_bounded_stdin_and_sandbox(monkeypatch) -> Non
     assert captured["argv"] == ("/sandbox", "/bin/true")
     assert captured["max_output_bytes"] == 256 * 1024
     assert isinstance(captured["stdin"], bytes)
-    assert "SECRET" not in captured["env"]
+    assert "SECRET" not in captured["env"].materialize()
 
 
 @pytest.mark.asyncio
 async def test_command_timeout_is_typed_failure(monkeypatch) -> None:
-    async def fixed(argv, **kwargs):
+    async def fixed(binding, arguments, **kwargs):
         return ProcessResult(ProcessDisposition.TIMED_OUT)
 
     import mote.runtime.hook.command_handler as command_handler
 
-    monkeypatch.setattr(command_handler, "run_fixed_argv", fixed)
+    monkeypatch.setattr(command_handler, "run_verified_fixed_argv", fixed)
+    monkeypatch.setattr(command_handler, "resolve_fixed_executable", lambda command: command)
     with pytest.raises(HookCommandFailure):
         await run_command_handler(
             HookCommandHandler(id="timeout", argv=("/bin/true",)),

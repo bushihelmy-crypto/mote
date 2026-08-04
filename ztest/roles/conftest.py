@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent import Role
 
 
@@ -32,7 +33,9 @@ def _isolated_session_root(tmp_path, monkeypatch):
         user_config_root=tmp_path / "config",
         workspace_root=tmp_path / "workspace",
     )
-    dependencies = CodingAgentFactory(paths=paths).dependencies(deps=None, output_contract=text_output_contract())
+    dependencies = CodingAgentFactory(
+        model_checkpoint_policy=approved_model_checkpoint_policy(), paths=paths
+    ).dependencies(deps=None, output_contract=text_output_contract())
     monkeypatch.setattr(
         AgentWiring,
         "defaults",
@@ -149,6 +152,7 @@ def role(context, _isolated_session_root):
     from mote.kernel.output import text_output_contract
     from mote.product.agents.factory import CodingAgentFactory
     from mote.runtime.agent import AgentWiring
+    from mote.ztest.model_fakes import offline_config
 
     paths = _isolated_session_root
     built = Role(
@@ -156,10 +160,11 @@ def role(context, _isolated_session_root):
         wiring=AgentWiring.for_context(
             context,
             application_composition=context._test_application_composition,
-            dependencies=CodingAgentFactory(paths=paths).dependencies(
-                deps=None, output_contract=text_output_contract()
-            ),
+            dependencies=CodingAgentFactory(
+                model_checkpoint_policy=approved_model_checkpoint_policy(), paths=paths
+            ).dependencies(deps=None, output_contract=text_output_contract()),
         ),
+        config=offline_config(),
     )
     application, runtime = context._test_application_composition.test_lease_pair()
     built._components._state.application_lease = application

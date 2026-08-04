@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, List, Literal, Optional
+from typing import TYPE_CHECKING, ClassVar, List, Literal, Optional, cast
 
+from mote.contracts.events.envelope import JsonValue, freeze_json
+from mote.contracts.events.scope import ScopePath
 from mote.contracts.tool.identity import ToolInvocationIdentity
 
 if TYPE_CHECKING:
@@ -49,10 +52,16 @@ class ToolInvocationStartedEvent:
 
     identity: ToolInvocationIdentity
     tool_name: str = ""
-    tool_input: dict[str, Any] = field(default_factory=dict)
-    scope: tuple[object, ...] = ()
+    tool_input: Mapping[str, JsonValue] = field(default_factory=dict)
+    scope: ScopePath = ()
 
     name: ClassVar[str] = TOOL_INVOCATION_STARTED
+
+    def __post_init__(self) -> None:
+        frozen = freeze_json(self.tool_input, path="tool invocation input")
+        if not isinstance(frozen, Mapping):
+            raise TypeError("tool invocation input must be an object")
+        self.tool_input = cast(Mapping[str, JsonValue], frozen)
 
 
 @dataclass
@@ -61,8 +70,8 @@ class ToolCallFinishedEvent:
 
     identity: ToolInvocationIdentity
     tool_name: str = ""
-    tool_input: dict[str, Any] = field(default_factory=dict)
-    tool_response: Any = None
+    tool_input: Mapping[str, JsonValue] = field(default_factory=dict)
+    tool_response: str = ""
     outcome: Literal["succeeded", "failed", "rejected"] = "succeeded"
     #: Structured failure record on a non-success result (``ErrorReport``), mirrored
     #: from the ``ToolResult``; ``None`` on success or for a legacy output-only fail.
@@ -80,6 +89,12 @@ class ToolCallFinishedEvent:
     #: instead of sniffing ``tool_response`` text for a diff shape.
     file_changes: list["FileChange"] = field(default_factory=list)
     #: Execution lineage (``ScopePath``) this call ran under. ``()`` = top level.
-    scope: tuple[object, ...] = ()
+    scope: ScopePath = ()
 
     name: ClassVar[str] = TOOL_CALL_FINISHED
+
+    def __post_init__(self) -> None:
+        frozen = freeze_json(self.tool_input, path="tool result input")
+        if not isinstance(frozen, Mapping):
+            raise TypeError("tool result input must be an object")
+        self.tool_input = cast(Mapping[str, JsonValue], frozen)

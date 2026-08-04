@@ -9,6 +9,8 @@ import pytest
 
 from mote.contracts.artifact import (
     ArtifactContentRef,
+    ArtifactHold,
+    ArtifactHoldKind,
     ArtifactPublishRequest,
     ArtifactRef,
     ArtifactRepresentationInput,
@@ -29,6 +31,7 @@ from mote.runtime.artifacts import (
     DurableArtifactStore,
 )
 from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
+from mote.runtime.control.leases import InMemoryLeaseCoordinator
 
 
 class MemoryBlobs:
@@ -390,7 +393,7 @@ async def test_ephemeral_scope_releases_at_explicit_turn_boundary(tmp_path):
     ephemeral = await store.publish(_request(b"turn", retention=ArtifactRetention.EPHEMERAL))
     session = await store.publish(_request(b"session"))
 
-    assert store.release_retentions((ArtifactRetention.EPHEMERAL,)) == 1
+    assert await store.release(ephemeral.artifact_id, ephemeral.revision) is True
     with pytest.raises(ArtifactNotFoundError):
         await store.get_revision(ephemeral.artifact_id, ephemeral.revision)
     assert await store.read(session.get("svg")) == b"session"
@@ -403,7 +406,10 @@ async def test_store_gc_reclaims_only_after_last_logical_root(tmp_path):
         tmp_path / "project" / "artifacts.sqlite3",
         ContentAddressedArtifactBlobStore(repository),
     )
-    collector = ArtifactGarbageCollector(project, repository)
+    leases = InMemoryLeaseCoordinator()
+    collector = ArtifactGarbageCollector(
+        project, repository, lease_coordinator=leases, lease=leases.acquire("artifact-gc:test", "owner", 30)
+    )
     first = await project.publish(
         _request(
             b"shared",
@@ -445,7 +451,14 @@ async def test_artifact_gc_preserves_content_under_legal_hold_pin(tmp_path):
         ContentAddressedArtifactBlobStore(repository),
     )
     hold = LegalHoldPins()
-    collector = ArtifactGarbageCollector(store, repository, pin_sources=(hold,))
+    leases = InMemoryLeaseCoordinator()
+    collector = ArtifactGarbageCollector(
+        store,
+        repository,
+        pin_sources=(("legal-hold-fixture", hold),),
+        lease_coordinator=leases,
+        lease=leases.acquire("artifact-gc:test", "owner", 30),
+    )
     revision = await store.publish(_request(b"held", retention=ArtifactRetention.PROJECT))
     ref = revision.get("svg")
     content_ref = ArtifactContentRef(ContentIdentity(ref.digest, ref.size), ref.content_ref)
@@ -457,6 +470,60 @@ async def test_artifact_gc_preserves_content_under_legal_hold_pin(tmp_path):
 
     hold.refs = ()
     assert collector.collect() == 1
+
+
+@pytest.mark.asyncio
+async def test_artifact_gc_formal_hold_blocks_claim_until_owner_releases(tmp_path):
+    repository = ContentAddressedArtifactStore(tmp_path / "blobs", hard_limit_bytes=1_024)
+    store = DurableArtifactStore(tmp_path / "artifacts.sqlite3", ContentAddressedArtifactBlobStore(repository))
+    leases = InMemoryLeaseCoordinator()
+    collector = ArtifactGarbageCollector(
+        store, repository, lease_coordinator=leases, lease=leases.acquire("artifact-gc:test", "owner", 30)
+    )
+    revision = await store.publish(_request(b"held", retention=ArtifactRetention.PROJECT))
+    ref = revision.get("svg")
+    store.put_hold(ArtifactHold("legal-1", ArtifactHoldKind.LEGAL, ref.digest, "legal", 1))
+    assert await store.release(revision.artifact_id, revision.revision) is True
+    assert collector.collect() == 0
+    assert store.release_hold("legal-1", owner_id="legal", expected_generation=1) is True
+    assert collector.collect() == 1
+
+
+@pytest.mark.asyncio
+async def test_artifact_gc_recovers_in_doubt_after_blob_was_removed(tmp_path):
+    class RemoveThenFailRepository(ContentAddressedArtifactStore):
+        fail_once = True
+
+        def reclaim(self, ref):
+            removed = super().reclaim(ref)
+            if self.fail_once:
+                self.fail_once = False
+                raise OSError("receipt commit lost")
+            return removed
+
+    class Blobs:
+        def __init__(self, repository):
+            self.repository = repository
+
+        def put_bytes(self, content):
+            return self.repository.put_bytes(content)
+
+        def read_bytes(self, ref):
+            return self.repository.read_bytes(ref)
+
+    repository = RemoveThenFailRepository(tmp_path / "blobs", hard_limit_bytes=1_024)
+    store = DurableArtifactStore(tmp_path / "artifacts.sqlite3", Blobs(repository))
+    leases = InMemoryLeaseCoordinator()
+    collector = ArtifactGarbageCollector(
+        store, repository, lease_coordinator=leases, lease=leases.acquire("artifact-gc:test", "owner", 30)
+    )
+    revision = await store.publish(_request(b"uncertain", retention=ArtifactRetention.PROJECT))
+    assert await store.release(revision.artifact_id, revision.revision) is True
+    with pytest.raises(OSError, match="receipt commit lost"):
+        collector.collect()
+    assert len(store.scan_in_doubt_deletions()) == 1
+    assert collector.collect() == 0
+    assert store.scan_in_doubt_deletions() == ()
 
 
 @pytest.mark.asyncio
@@ -504,7 +571,7 @@ async def test_releasing_one_session_owner_preserves_another(tmp_path):
     revision = await first.publish(request)
     assert await second.publish(request) == revision
 
-    assert first.release_session_scope() == 1
+    assert await first.release(revision.artifact_id, revision.revision) is True
     with pytest.raises(ArtifactNotFoundError):
         await first.get_revision(revision.artifact_id, revision.revision)
     assert await second.read(revision.get("svg")) == b"shared"

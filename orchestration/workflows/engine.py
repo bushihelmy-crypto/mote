@@ -17,7 +17,8 @@ from __future__ import annotations
 import asyncio
 import random
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Optional
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Optional
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -47,7 +48,18 @@ from mote.orchestration.workflows.notify import (
     push_started_notification,
     push_terminal_notification,
 )
-from mote.orchestration.workflows.types import END, GraphPause, GraphRunState, GraphState, Stage, WorkflowNodeStatus
+from mote.orchestration.workflows.types import (
+    END,
+    GraphPause,
+    GraphRunState,
+    GraphState,
+    Stage,
+    WorkflowDeferredExecutor,
+    WorkflowNodeStatus,
+    WorkflowStateUpdate,
+    _LlmEdge,
+    _NodeDef,
+)
 from mote.runtime.events.scope import ScopeRef, push_scope
 from mote.runtime.resilience.recovery import RecoveryRunner
 
@@ -58,7 +70,7 @@ if TYPE_CHECKING:
 class _LlmPauseSignal(Exception):
     """Internal: raised by :func:`successors` to pause on an LLM edge."""
 
-    def __init__(self, edge: Any):
+    def __init__(self, edge: _LlmEdge):
         self.edge = edge
         super().__init__(f"LLM route pause at '{edge.from_node}'")
 
@@ -126,14 +138,6 @@ def _validate_node_params_runtime(graph: "WorkflowBuilder", node_name: str, stat
             )
 
 
-async def _run_poll(stage: Stage, submit_result: Any) -> Any:
-    assert stage.poll is not None, "_run_poll requires a poll callable"
-    poll_coro = stage.poll(submit_result)
-    if stage.timeout:
-        return await asyncio.wait_for(poll_coro, stage.timeout)
-    return await poll_coro
-
-
 async def _run_one_node(
     node_name: str,
     state: GraphState,
@@ -175,7 +179,7 @@ async def _run_one_node_body(
     graph: "WorkflowBuilder",
     completed: set,
     run_state: Optional[GraphRunState],
-    node_def: Any,
+    node_def: _NodeDef,
 ) -> None:
     """The actual node execution, run inside the pushed ``node`` scope."""
     if run_state is None:
@@ -191,16 +195,13 @@ async def _run_one_node_body(
 
     attempts = 0
 
-    async def _execute() -> Any:
+    async def _execute() -> WorkflowStateUpdate:
         nonlocal attempts
         attempts += 1
         _validate_node_params_runtime(graph, node_name, state)
         try:
             stage = await node_def.fn(state)
-            submit_result = await stage.submit
-            if stage.poll is not None:
-                return await _run_poll(stage, submit_result)
-            return submit_result
+            return await stage.execute()
         except (asyncio.TimeoutError, TimeoutError, ConnectionError) as e:
             raise GraphNodeTimeoutError(str(e), cause=e) from e
 
@@ -258,17 +259,16 @@ async def _run_one_node_body(
     # merged into the declared state fields (reducer channels combine, plain
     # fields are last-value). ``None`` means "no update". A non-dict return is a
     # wiring bug (a node returning the wrong shape) and fails loudly.
-    if result is None:
-        result = {}
-    if not isinstance(result, dict):
-        raise GraphParamTypeError(node=node_name, param="<return>", expected=dict, got=type(result))
-    apply_updates(state, result, graph._reducers)
+    updates: Mapping[str, object] = {} if result is None else result
+    if not isinstance(updates, Mapping):
+        raise GraphParamTypeError(node=node_name, param="<return>", expected=Mapping, got=type(updates))
+    apply_updates(state, updates, graph._reducers)
     completed.add(node_name)
     if run_state is not None:
         # Record the fields this node actually wrote (the update dict's keys) —
         # the only truthful, per-node account of what it produces under the
         # field/channel model (there is no static output declaration).
-        run_state.mark_success(node_name, writes=sorted(result.keys()))
+        run_state.mark_success(node_name, writes=sorted(updates.keys()))
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +335,7 @@ def successors(
     return out
 
 
-def _collect_finish_result(graph: "WorkflowBuilder", state: GraphState) -> Any:
+def _collect_finish_result(graph: "WorkflowBuilder", state: GraphState) -> object:
     # The run result is the graph's *declared output* — only the fields marked
     # ``Annotated[T, Output]`` (``graph._output_fields``). This keeps inputs and
     # intermediate scratch out of what is returned / pushed to the model on
@@ -347,12 +347,16 @@ def _collect_finish_result(graph: "WorkflowBuilder", state: GraphState) -> Any:
     return {name: dump[name] for name in output_fields if name in dump}
 
 
-async def _commit_finish_result(graph: "WorkflowBuilder", result: Any, run_state: GraphRunState) -> Any:
+async def _commit_finish_result(graph: "WorkflowBuilder", result: object, run_state: GraphRunState) -> object:
     """Validate and durably commit a declared typed graph terminal output."""
-    if graph.output_engine_factory is None:
+    factory = graph.output_engine_factory
+    contract = graph.output_contract
+    if factory is None:
         return result
-    engine = graph.output_engine_factory(
-        graph.output_contract,
+    if contract is None:
+        raise RuntimeError("Workflow output engine is missing its output contract")
+    engine = factory(
+        contract,
         run_id=run_state.activity_execution_id,
         run_kind=RunKind.GRAPH,
     )
@@ -438,7 +442,7 @@ async def _run_driver(
     initial_params: Optional[dict] = None,
     push_start: bool = True,
     run_state: Optional[GraphRunState] = None,
-) -> Any:
+) -> object:
     """Run the frontier scheduler to terminal / pause.
 
     Args:
@@ -532,11 +536,13 @@ async def _run_driver(
                 )
     except _LlmPauseSignal:
         await _cancel_running(running)
+        if pause_edge is None:
+            raise RuntimeError("LLM route pause is missing its canonical edge")
         push_llm_route_notification(pause_edge, state, graph, run_state)
         return GraphPause(
             reason=PauseReason.LLM_ROUTE,
             state=state,
-            completed=completed,
+            completed=frozenset(completed),
             edge=pause_edge,
             run_state=run_state,
         )
@@ -588,7 +594,7 @@ async def _run_driver(
         return GraphPause(
             reason=PauseReason.STALL,
             state=state,
-            completed=completed,
+            completed=frozenset(completed),
             run_state=run_state,
             stalled_nodes=stalled_nodes,
         )
@@ -611,10 +617,10 @@ async def _run_driver(
 # ---------------------------------------------------------------------------
 
 
-def _build_executor(graph: "WorkflowBuilder"):
+def _build_executor(graph: "WorkflowBuilder") -> WorkflowDeferredExecutor:
     """Return an async executor producing a Workflow-owned deferred result."""
 
-    async def executor(**initial_state) -> WorkflowDeferredResult:
+    async def executor(**initial_state: object) -> WorkflowDeferredResult[GraphState | GraphPause]:
         state = graph.state_schema(**initial_state)
         entry_nodes = graph._get_entry_nodes()
         initial_params = dict(initial_state)
@@ -633,10 +639,10 @@ def _build_executor(graph: "WorkflowBuilder"):
             ),
             command_name=graph.command_name,
             graph_meta=WorkflowRunMetadata(
-                graph_ref=graph,
+                executable=graph.build(),
+                stage_summary=graph.stage_summary,
                 initial_params=initial_params,
                 run_state=run_state,
-                state=state,
                 definition_source=graph._definition_source,
             ),
         )
@@ -656,7 +662,7 @@ def resume(
     state: GraphState,
     from_nodes: list[str],
     run_state: Optional[GraphRunState] = None,
-) -> WorkflowDeferredResult:
+) -> WorkflowDeferredResult[GraphState | GraphPause]:
     """Resume execution by re-running *from_nodes*.
 
     Completed nodes come from the authoritative ``run_state`` (status SUCCESS /
@@ -686,9 +692,9 @@ def resume(
         ),
         command_name=graph.command_name,
         graph_meta=WorkflowRunMetadata(
-            graph_ref=graph,
+            executable=graph.build(),
+            stage_summary=graph.stage_summary,
             run_state=run_state,
-            state=state,
             from_nodes=tuple(from_nodes),
             definition_source=graph._definition_source,
         ),
@@ -720,7 +726,7 @@ def resume_skip(
     state: GraphState,
     skip_nodes: list[str],
     run_state: Optional[GraphRunState] = None,
-) -> WorkflowDeferredResult:
+) -> WorkflowDeferredResult[GraphState | GraphPause]:
     """Skip *skip_nodes* (keeping partial results) and continue downstream."""
     run_state = GraphRunState.ensure(graph, state, run_state)
     _apply_skip(graph, state, skip_nodes, run_state)
@@ -742,9 +748,9 @@ def resume_skip(
         ),
         command_name=graph.command_name,
         graph_meta=WorkflowRunMetadata(
-            graph_ref=graph,
+            executable=graph.build(),
+            stage_summary=graph.stage_summary,
             run_state=run_state,
-            state=state,
             skip_nodes=tuple(skip_nodes),
             definition_source=graph._definition_source,
         ),
@@ -757,7 +763,7 @@ def resume_skip_and_from(
     skip_nodes: list[str],
     from_nodes: list[str],
     run_state: Optional[GraphRunState] = None,
-) -> WorkflowDeferredResult:
+) -> WorkflowDeferredResult[GraphState | GraphPause]:
     """Skip *skip_nodes* then re-run *from_nodes*, continuing downstream."""
     run_state = GraphRunState.ensure(graph, state, run_state)
     _apply_skip(graph, state, skip_nodes, run_state)
@@ -784,9 +790,9 @@ def resume_skip_and_from(
         ),
         command_name=graph.command_name,
         graph_meta=WorkflowRunMetadata(
-            graph_ref=graph,
+            executable=graph.build(),
+            stage_summary=graph.stage_summary,
             run_state=run_state,
-            state=state,
             from_nodes=tuple(from_nodes),
             skip_nodes=tuple(skip_nodes),
             definition_source=graph._definition_source,

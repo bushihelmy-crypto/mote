@@ -56,12 +56,16 @@ from mote.contracts.runtime import (
 from mote.contracts.surface import (
     NOTEBOOK_MEDIA_TYPE,
     NotebookCell,
+    NotebookDisplayDataOutput,
     NotebookDocument,
+    NotebookErrorOutput,
     NotebookExecuteInput,
+    NotebookExecuteResultOutput,
     NotebookExportRepresentation,
     NotebookInputReply,
     NotebookInputRequest,
     NotebookOutput,
+    NotebookStreamOutput,
     SurfaceDescriptor,
     SurfaceFrame,
     SurfaceInput,
@@ -322,8 +326,7 @@ class KernelSession:
             parts.append(text)
             KernelSession._append_output(
                 outputs,
-                NotebookOutput(
-                    output_type="stream",
+                NotebookStreamOutput(
                     name=content.get("name") if content.get("name") in {"stdout", "stderr"} else "stdout",
                     text=cap_head_tail(text, OUTPUT_MAX_CHARS)[0],
                 ),
@@ -355,11 +358,10 @@ class KernelSession:
             else:
                 KernelSession._append_output(
                     outputs,
-                    NotebookOutput(
-                        output_type=msg_type,
-                        data=safe_data,
-                        execution_count=count,
-                        display_id=display_id,
+                    (
+                        NotebookExecuteResultOutput(data=safe_data, execution_count=count, display_id=display_id)
+                        if msg_type == "execute_result"
+                        else NotebookDisplayDataOutput(data=safe_data, display_id=display_id)
                     ),
                 )
         elif msg_type == "error":
@@ -367,8 +369,7 @@ class KernelSession:
             parts.append("\n".join(traceback) + "\n")
             KernelSession._append_output(
                 outputs,
-                NotebookOutput(
-                    output_type="error",
+                NotebookErrorOutput(
                     ename=str(content.get("ename", ""))[:512],
                     evalue=str(content.get("evalue", ""))[:4096],
                     traceback=traceback,
@@ -398,11 +399,11 @@ class KernelSession:
 
     @staticmethod
     def _output_size(output: NotebookOutput) -> int:
-        return (
-            len(output.text)
-            + sum(len(value) for value in output.data.values())
-            + sum(len(line) for line in output.traceback)
-        )
+        if isinstance(output, NotebookStreamOutput):
+            return len(output.text)
+        if isinstance(output, NotebookErrorOutput):
+            return sum(len(line) for line in output.traceback)
+        return sum(len(value) for value in output.data.values())
 
     async def _drain(
         self,
@@ -743,6 +744,8 @@ class KernelRuntimeDriver:
         self._surface_observers = SurfaceObservationHub()
         self._input_request: NotebookInputRequest | None = None
         self._active_human_cell_id: str | None = None
+        self._connection_generation = 0
+        self._human_generation = 0
 
     @property
     def session(self) -> KernelSession:
@@ -764,6 +767,7 @@ class KernelRuntimeDriver:
             sandbox_runtime=self._sandbox_runtime,
         )
         self._session = session
+        self._connection_generation += 1
         try:
             await session.start()
             restore = self._decode_checkpoint(checkpoint) if checkpoint is not None else None
@@ -860,6 +864,9 @@ class KernelRuntimeDriver:
         return result.text, result.timed_out
 
     async def interrupt(self) -> str:
+        if self._input_request is not None:
+            await self.session.cancel_input()
+            self._input_request = None
         output = await self.session.interrupt()
         self._kernel_status = "idle"
         self._publish_surface()
@@ -869,6 +876,9 @@ class KernelRuntimeDriver:
         self._kernel_status = "restarting"
         self._publish_surface()
         try:
+            if self._input_request is not None:
+                await self.session.cancel_input()
+                self._input_request = None
             await self.session.restart()
         except BaseException:
             self._kernel_status = "stopped" if self.session.closed else "idle"
@@ -887,6 +897,7 @@ class KernelRuntimeDriver:
         if self.closed:
             raise ToolError("Error: Python kernel is not running.")
         self._handoff_id = uuid.uuid4().hex
+        self._human_generation += 1
         self._surface_observers.attach(self._handoff_id)
         self._surface_ref = f"jupyter-notebook:{request.runtime_ref.runtime_id}"
         return DriverHandoffHandle(
@@ -972,9 +983,18 @@ class KernelRuntimeDriver:
         if event.kind == "notebook.input_reply":
             reply = NotebookInputReply.model_validate_json(event.data)
             pending = self._input_request
-            if pending is None or pending.request_id != reply.request_id:
+            if pending is None or (
+                pending.request_id != reply.request_id
+                or pending.request_revision != reply.expected_request_revision
+                or pending.document_revision != reply.document_revision
+                or pending.kernel_epoch != reply.kernel_epoch
+                or pending.connection_generation != reply.connection_generation
+                or pending.human_generation != reply.human_generation
+            ):
                 raise RuntimeError("jupyter input request is not current")
             self.session.reply_input(reply.value)
+            self._input_request = None
+            self._publish_surface()
             self._input_request = None
             self._publish_surface()
             return
@@ -999,7 +1019,14 @@ class KernelRuntimeDriver:
             raise RuntimeError("jupyter stdin requires an active human handoff")
         if self._input_request is not None:
             raise RuntimeError("jupyter already has a pending input request")
-        self._input_request = request
+        self._input_request = request.model_copy(
+            update={
+                "document_revision": self._surface_sequence + 1,
+                "kernel_epoch": self._kernel_epoch,
+                "connection_generation": self._connection_generation,
+                "human_generation": self._human_generation,
+            }
+        )
         self._publish_surface()
 
     def _clear_input_request(self, cell_id: str) -> None:
@@ -1009,7 +1036,10 @@ class KernelRuntimeDriver:
     def _replace_display(self, update: KernelDisplayUpdate) -> None:
         for cell in self._cells:
             for index, output in enumerate(cell.outputs):
-                if output.display_id == update.display_id:
+                if (
+                    isinstance(output, (NotebookExecuteResultOutput, NotebookDisplayDataOutput))
+                    and output.display_id == update.display_id
+                ):
                     cell.outputs[index] = output.model_copy(update={"data": dict(update.data)})
 
     def _trim_cells(self) -> None:

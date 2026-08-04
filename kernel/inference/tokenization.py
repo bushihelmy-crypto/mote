@@ -2,13 +2,36 @@
 
 from __future__ import annotations
 
+import json
 import warnings
-from typing import Any, Optional
+from collections.abc import Sequence
+from typing import Optional
 
 import tiktoken
 
+from mote.contracts.events.envelope import JsonValue, thaw_json
+from mote.contracts.model.invocation import CanonicalMessage
 
-def count_message_tokens(messages: list[dict[str, Any]], model: Optional[str] = "gpt-3.5-turbo-0125") -> int:
+
+def _content_text(value: JsonValue) -> str:
+    if type(value) is str:
+        return value
+    if type(value) is list:
+        text_parts: list[str] = []
+        for item in value:
+            if type(item) is dict and item.get("type") == "text":
+                text = item.get("text")
+                if type(text) is str:
+                    text_parts.append(text)
+        if text_parts:
+            return "\n".join(text_parts)
+    return json.dumps(thaw_json(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def count_message_tokens(
+    messages: Sequence[CanonicalMessage],
+    model: Optional[str] = "gpt-3.5-turbo-0125",
+) -> int:
     """Estimate tokens used by provider-neutral messages."""
     model = model or "gpt-3.5-turbo-0125"
     try:
@@ -55,18 +78,22 @@ def count_message_tokens(messages: list[dict[str, Any]], model: Optional[str] = 
     num_tokens = 0
     for message in messages:
         num_tokens += tokens_per_message
-        for key, value in message.items():
-            content = value
-            if isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        content = item.get("text", "")
+        parts = [message.role, _content_text(message.content)]
+        if message.name is not None:
+            parts.append(message.name)
+            num_tokens += tokens_per_name
+        if message.tool_call_id is not None:
+            parts.append(message.tool_call_id)
+        for call in message.tool_calls:
+            parts.extend((call.id, call.name, _content_text(dict(call.arguments))))
+        parts.extend(message.tool_references)
+        if message.cache_intent is not None:
+            parts.append(message.cache_intent)
+        for content in parts:
             try:
                 num_tokens += len(encoding.encode(content))
             except ValueError:
                 num_tokens += len(encoding.encode(content, allowed_special="all"))
-            if key == "name":
-                num_tokens += tokens_per_name
     num_tokens += 3
     if model.startswith(("claude", "anthropic")):
         num_tokens *= 1.26

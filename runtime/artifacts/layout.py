@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
-from mote.runtime.artifacts.budgets import ARTIFACT_HARD_LIMIT_BYTES, ARTIFACT_MINIMUM_GC_AGE_NS
+from mote.runtime.artifacts.budgets import ARTIFACT_HARD_LIMIT_BYTES
 from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
+from mote.runtime.control.leases import FileLeaseCoordinator
 
 from .gc import ArtifactGarbageCollector
 from .ownership import ArtifactOwnership
@@ -62,36 +64,43 @@ class ArtifactRepositoryLayout:
         self,
         ownership: ArtifactOwnership,
         *,
+        repository: ContentAddressedArtifactStore | None = None,
         root_sources: tuple[ArtifactRootSource, ...] = (),
         pin_sources: tuple[ArtifactPinSource, ...] = (),
         metadata_sources: tuple[ArtifactMetadataSource, ...] = (),
-        minimum_gc_age_ns: int = ARTIFACT_MINIMUM_GC_AGE_NS,
     ) -> ArtifactRepositoryBundle:
         pins = ArtifactPinRegistry()
         for index, source in enumerate(pin_sources):
             pins.register_source(f"layout-source:{index}", source)
-        repository = ContentAddressedArtifactStore(
-            self.blobs_path,
-            hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES,
-        )
+        if repository is None:
+            repository = self.build_repository()
         store = DurableArtifactStore(
             self.index_path,
             ContentAddressedArtifactBlobStore(repository),
             ownership=ownership,
         )
+        gc_leases = FileLeaseCoordinator(self.root / "artifact-gc-leases.json")
+        gc_lease = gc_leases.acquire(f"artifact-gc:{ownership.project_id}", f"artifact-collector:{uuid4().hex}", 30.0)
         return ArtifactRepositoryBundle(
             store=store,
             repository=repository,
             collector=ArtifactGarbageCollector(
                 store,
                 repository,
-                root_sources=root_sources,
-                pin_sources=(pins,),
+                root_sources=tuple((f"root:{index}", source) for index, source in enumerate(root_sources)),
+                # canonical pin registry (pin_sources=(pins,)); the collector receives the stable
+                # producer identity rather than a second registry.
+                pin_sources=(("runtime-pins", pins),),
                 metadata_sources=metadata_sources,
-                minimum_age_ns=minimum_gc_age_ns,
+                lease_coordinator=gc_leases,
+                lease=gc_lease,
             ),
             pins=pins,
         )
+
+    def build_repository(self) -> ContentAddressedArtifactStore:
+        """Construct the one canonical CAS writer for this layout."""
+        return ContentAddressedArtifactStore(self.blobs_path, hard_limit_bytes=ARTIFACT_HARD_LIMIT_BYTES)
 
 
 __all__ = [

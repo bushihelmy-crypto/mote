@@ -43,7 +43,7 @@ def test_v1_schedule_task_and_trigger_round_trip(tmp_path) -> None:
         attempt=1,
     ).to_automation_trigger()
 
-    assert raw["schema"] == "mote.cron-schedule/v2"
+    assert raw["schema"] == "mote.cron-schedule/v3"
     assert restored.revision == 1
     assert restored.tasks[0].to_dict() == task.to_dict()
     assert type(restored.tasks[0].id) is DurableCronTaskId

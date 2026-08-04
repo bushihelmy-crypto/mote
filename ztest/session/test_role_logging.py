@@ -19,6 +19,7 @@ from mote.contracts.runtime import (
     RuntimeCheckpoint,
 )
 from mote.kernel.output import text_output_contract
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent import AgentDependencies, AgentWiring, Role
 from mote.runtime.events.fabric import EventFabricUnavailable
 from mote.runtime.events.telemetry import TelemetryState
@@ -90,9 +91,9 @@ def _offline_wiring(*, run_lease_coordinator=None, toolsets=()) -> AgentWiring:
         workspace_root=_runtime_root,
     )
     return AgentWiring(
-        dependencies=CodingAgentFactory(paths=paths).dependencies(
-            deps=None, output_contract=text_output_contract(), toolsets=toolsets
-        ),
+        dependencies=CodingAgentFactory(
+            model_checkpoint_policy=approved_model_checkpoint_policy(), paths=paths
+        ).dependencies(deps=None, output_contract=text_output_contract(), toolsets=toolsets),
         services=EngineServices(
             context=_offline_context(),
             run_lease_coordinator=run_lease_coordinator,

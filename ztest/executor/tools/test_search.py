@@ -5,10 +5,10 @@ import os
 import pytest
 
 from mote.contracts.tool.effects import ToolEffect
+from mote.contracts.tool.errors import ToolError
 from mote.product.toolsets.builtin.search import Search
 from mote.product.toolsets.constants import GLIMPSE_EXTENSIONS
 from mote.runtime.tools.definitions import native_definition
-from mote.runtime.tools.tool_result import ToolError
 
 from .conftest import CapRole, bind, run, write_file
 

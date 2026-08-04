@@ -196,7 +196,7 @@ async def test_collect_never_raises_on_git_failure(tmp_path, monkeypatch):
     # swallow (best-effort on the prompt-build path). collect must degrade to
     # zero counts / no commits rather than raise; branch is still read
     # filesystem-first from HEAD (which exists once initialised).
-    monkeypatch.setattr(collector, "run_fixed_argv", _boom)
+    monkeypatch.setattr(collector, "run_verified_fixed_argv", _boom)
     state = await collect_git_state(repo)
     assert state is not None
     assert state.staged == 0 and state.unstaged == 0 and state.untracked == 0

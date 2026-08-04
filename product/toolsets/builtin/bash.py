@@ -56,7 +56,11 @@ def _inputs_to_env(inputs: dict) -> dict[str, str]:
     ``true``/``false``, numbers their decimal form, a string verbatim. Non-scalar
     entries (dict/list/None) are reachable only via ``$INPUTS``.
     """
-    env: dict[str, str] = {_INPUTS_ENV: json.dumps(inputs, default=str)}
+    try:
+        encoded_inputs = json.dumps(inputs, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("bash inputs must contain JSON-compatible values") from exc
+    env: dict[str, str] = {_INPUTS_ENV: encoded_inputs}
     for key, value in inputs.items():
         if not (isinstance(key, str) and key.isidentifier()) or key == _INPUTS_ENV:
             continue

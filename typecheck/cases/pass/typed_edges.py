@@ -13,8 +13,6 @@ from mote.product.presentation.input_events import PresentationInputEvent
 from mote.product.presentation.projection.projector import ViewProjector
 from mote.product.presentation.projection.protocol import Projector
 from mote.runtime.agent import AgentDependencies
-from mote.runtime.events.telemetry import TypedTelemetryBinding
-from mote.runtime.tools.provider import NativeToolset
 
 
 class CommonDeps(Protocol):
@@ -30,13 +28,11 @@ class ConcreteCodingDeps:
     language = "python"
 
 
-common_tools: NativeToolset[CommonDeps] = NativeToolset("common", ())
 coding_deps: CodingDeps = ConcreteCodingDeps()
 coding_dependencies: AgentDependencies[CodingDeps, str]
 coding_dependencies = AgentDependencies(
     deps=coding_deps,
     output_contract=text_output_contract(),
-    toolsets=(common_tools,),
 )
 
 
@@ -54,7 +50,6 @@ class HandlerA:
 
 
 handler_a: TelemetryHandler[EventA] = HandlerA()
-typed_binding: TypedTelemetryBinding[EventA]
 presentation_projector: Projector[PresentationInputEvent, ViewEvent] = ViewProjector()
 
 

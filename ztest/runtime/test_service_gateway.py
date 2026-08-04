@@ -175,8 +175,8 @@ class _CrashAfterAttemptFinish:
     def recover(self, service_call_id):
         return self._journal.recover(service_call_id)
 
-    async def request_cancel(self, service_call_id):
-        await self._journal.request_cancel(service_call_id)
+    async def request_cancel(self, command):
+        return await self._journal.request_cancel(command)
 
     def cancellation_requested(self, service_call_id):
         return self._journal.cancellation_requested(service_call_id)

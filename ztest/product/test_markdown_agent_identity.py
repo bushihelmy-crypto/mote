@@ -6,6 +6,7 @@ import pytest
 
 from mote.kernel.output import text_output_contract
 from mote.product.agents.markdown_loader import _build_agent_class
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.product.extensions.sources import ExtensionKind, ExtensionSourcePolicy
 from mote.runtime.agent import AgentDependencies, AgentWiring, RoleSchema
 from mote.runtime.agent.session_manager import SessionResumeIdentityError
@@ -38,7 +39,9 @@ def _wiring():
     from mote.product.agents.factory import CodingAgentFactory
 
     return AgentWiring.for_dependencies(
-        CodingAgentFactory().dependencies(deps=None, output_contract=text_output_contract())
+        CodingAgentFactory(
+            model_checkpoint_policy=approved_model_checkpoint_policy(),
+        ).dependencies(deps=None, output_contract=text_output_contract())
     )
 
 

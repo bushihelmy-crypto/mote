@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from mote.contracts.config.tool import DurableConfig, RunJournalConfig, ToolResultLimitConfig
-from mote.runtime.ledger import RunJournal
+from mote.contracts.config.tool import ToolEffectStoreConfig, ToolResultLimitConfig
+from mote.runtime.tools.effect_store import ToolEffectStore
 from mote.runtime.tools.tool_catalog import BoundToolCatalog, NativeToolCatalog, XmlToolCatalog
 
 
@@ -41,6 +41,11 @@ class ToolExecutorViews:
     def tool_names(self) -> list[str]:
         self.prepare()
         return self._bound_catalog.names()
+
+    @property
+    def tool_binding_generation(self) -> int:
+        self.prepare()
+        return self._bound_catalog.generation
 
     def reconstructable_tool_names(self) -> frozenset[str]:
         self.prepare()
@@ -98,13 +103,9 @@ class ToolExecutorViews:
         raise NotImplementedError
 
     @property
-    def journal_config(self) -> RunJournalConfig:
+    def effect_store_config(self) -> ToolEffectStoreConfig:
         raise NotImplementedError
 
     @property
-    def durable_config(self) -> DurableConfig:
-        raise NotImplementedError
-
-    @property
-    def journal(self) -> RunJournal | None:
+    def effect_store(self) -> ToolEffectStore | None:
         raise NotImplementedError

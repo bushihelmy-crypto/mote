@@ -120,7 +120,8 @@ class ModelTopology(FrozenModel):
             raise ValueError("recovery profile ids must be unique")
         if len(groups) != len(self.failover_groups):
             raise ValueError("failover group ids must be unique")
-        if len({value.route_id for value in self.routes}) != len(self.routes):
+        route_ids = tuple(value.route_id for value in self.routes)
+        if any(route_id in route_ids[:index] for index, route_id in enumerate(route_ids)):
             raise ValueError("route ids must be unique")
         for group in self.failover_groups:
             if not set(group.endpoint_ids) <= endpoints:

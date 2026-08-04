@@ -6,15 +6,16 @@ Uses a fake HookRunner recording every ``fire`` call to verify a change becomes
 a ``FileChanged`` event with the right payload, that a misbehaving hook does not
 break the watch loop, and that the real HookManager matches on the ``path`` field.
 """
+
 from __future__ import annotations
 
 import pytest
 
+from mote.contracts.events.file.observation import FileMutatedEvent
 from mote.contracts.file.errors import ReadCursorError
 from mote.contracts.file.identity import FileChangeKind
 from mote.contracts.file.views import ContinueReadRequest, TextReadRequest
 from mote.contracts.hook import FileChangedInvocation
-from mote.runtime.events import FileMutatedEvent
 from mote.runtime.hook.manager import HookManager
 from mote.runtime.hook.subscriber import HookSubscriber
 from mote.runtime.hook.types import HookOutcome
@@ -32,6 +33,25 @@ class FakeHookRunner:
 
     async def fire(self, event: str, payload: dict, *, permission_mode=None) -> HookOutcome:
         self.calls.append((event, payload))
+        if self._raise:
+            raise RuntimeError("boom")
+        return HookOutcome()
+
+    async def fire_file_changed(self, payload: FileChangedInvocation | object) -> HookOutcome:
+        """Implement the canonical typed file-change hook port."""
+        self.calls.append(
+            (
+                FILE_CHANGED_EVENT,
+                (
+                    payload.__dict__
+                    if hasattr(payload, "__dict__")
+                    else {
+                        name: getattr(payload, name)
+                        for name in ("path", "change_type", "prior_version", "version", "attribution")
+                    }
+                ),
+            )
+        )
         if self._raise:
             raise RuntimeError("boom")
         return HookOutcome()

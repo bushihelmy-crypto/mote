@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from mote.contracts.events.envelope import JsonValue, freeze_json, thaw_json
 from mote.contracts.tool import CommandProtocol, ToolEffect
+from mote.runtime.tools.base_tool import BaseTool
 from mote.runtime.tools.provider_definitions import NativeToolDefinition, ToolDefinition, XmlToolDefinition
 
 _DEFINITION_SCHEMA = "mote.tool-definition/v1"
@@ -20,7 +23,8 @@ class CompiledToolDefinition:
     name: str
     aliases: tuple[str, ...]
     description: str
-    input_schema: dict[str, Any]
+    input_schema: Mapping[str, JsonValue]
+    rendered_schema: Mapping[str, JsonValue]
     execution_kind: str
     effect: ToolEffect
     approval_required: bool
@@ -52,6 +56,10 @@ def compile_tool_definition(
     if not isinstance(effect, ToolEffect):
         raise TypeError(f"tool definition '{definition.name}' returned an invalid effect")
     aliases = tuple(sorted(definition.aliases))
+    frozen_schema = freeze_json(schema, path=f"tool.{definition.name}.input_schema")
+    frozen_rendered = freeze_json(rendered, path=f"tool.{definition.name}.rendered_schema")
+    if not isinstance(frozen_schema, Mapping) or not isinstance(frozen_rendered, Mapping):
+        raise TypeError("compiled Tool schemas must be JSON objects")
     payload = {
         "aliases": aliases,
         "approval_identity": approval_identity,
@@ -59,7 +67,7 @@ def compile_tool_definition(
         "description": definition.description,
         "effect": effect.value,
         "execution_kind": definition.execution_kind.value,
-        "input_schema": schema,
+        "input_schema": thaw_json(frozen_schema),
         "name": definition.name,
         "protocol": definition.protocol.value,
         "schema": _DEFINITION_SCHEMA,
@@ -70,7 +78,8 @@ def compile_tool_definition(
         name=definition.name,
         aliases=aliases,
         description=definition.description,
-        input_schema=dict(schema),
+        input_schema=frozen_schema,
+        rendered_schema=frozen_rendered,
         execution_kind=definition.execution_kind.value,
         effect=effect,
         approval_required=definition.approval_required,
@@ -101,17 +110,19 @@ def compile_tool_catalog_identity(definitions: tuple[CompiledToolDefinition, ...
     )
 
 
-def python_tool_source_identity(capability_type: type) -> str:
+def python_tool_source_identity(capability_type: type[BaseTool]) -> str:
     """Stable source declaration identity; behavior fields are hashed separately."""
 
-    explicit_version = getattr(capability_type, "definition_version", "1")
+    definition_name = capability_type.name
+    if not isinstance(definition_name, str) or not definition_name:
+        raise TypeError("Python tool type must declare a stable non-empty name")
+    explicit_version = capability_type.definition_version
     if not isinstance(explicit_version, str) or not explicit_version:
         raise TypeError(f"tool type '{capability_type.__name__}' has an invalid definition_version")
     return compile_tool_source_identity(
         "python",
         {
-            "module": capability_type.__module__,
-            "qualname": capability_type.__qualname__,
+            "definition_name": definition_name,
             "version": explicit_version,
         },
     )

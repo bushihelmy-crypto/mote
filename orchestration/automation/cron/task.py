@@ -26,6 +26,7 @@ from enum import StrEnum
 from typing import Literal, Optional
 from zoneinfo import ZoneInfo
 
+from mote.contracts.artifact import ArtifactRef
 from mote.orchestration.automation import AutomationTrigger
 
 
@@ -49,6 +50,9 @@ class CronDstPolicy(StrEnum):
     EARLIEST_FOLD_SKIP_GAP = "earliest_fold_skip_gap"
 
 
+_MAX_INLINE_PROMPT_CHARS = 1_048_576
+
+
 @dataclass(frozen=True, slots=True)
 class CronTriggerIntent:
     """Versioned projection of one Cron occurrence into Automation dispatch."""
@@ -61,6 +65,7 @@ class CronTriggerIntent:
     scheduled_at_ms: int
     fired_at_ms: int
     attempt: int
+    artifact_ref: ArtifactRef | None = None
 
     def __post_init__(self) -> None:
         if type(self.schema_version) is not int or self.schema_version != 1:
@@ -69,8 +74,10 @@ class CronTriggerIntent:
             raise ValueError("cron trigger task revision is invalid")
         if type(self.target) is not str or not self.target:
             raise ValueError("cron trigger target is invalid")
-        if type(self.content) is not str or not self.content:
+        if type(self.content) is not str or (not self.content and self.artifact_ref is None):
             raise ValueError("cron trigger content is invalid")
+        if self.artifact_ref is not None and not isinstance(self.artifact_ref, ArtifactRef):
+            raise TypeError("cron trigger artifact reference is invalid")
         if type(self.scheduled_at_ms) is not int or type(self.fired_at_ms) is not int:
             raise ValueError("cron trigger instants must be integers")
         if self.scheduled_at_ms < 0 or self.fired_at_ms < self.scheduled_at_ms:
@@ -88,9 +95,50 @@ class CronTriggerIntent:
             source_id=str(self.task_id),
             target=self.target,
             content=self.content,
+            artifact_ref=self.artifact_ref,
             scheduled_at_ms=self.scheduled_at_ms,
             fired_at_ms=self.fired_at_ms,
             attempt=self.attempt,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "task_id": str(self.task_id),
+            "task_revision": self.task_revision,
+            "target": self.target,
+            "content": self.content,
+            "artifact_ref": None if self.artifact_ref is None else self.artifact_ref.to_dict(),
+            "scheduled_at_ms": self.scheduled_at_ms,
+            "fired_at_ms": self.fired_at_ms,
+            "attempt": self.attempt,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "CronTriggerIntent":
+        fields = {
+            "schema_version",
+            "task_id",
+            "task_revision",
+            "target",
+            "content",
+            "artifact_ref",
+            "scheduled_at_ms",
+            "fired_at_ms",
+            "attempt",
+        }
+        if type(value) is not dict or set(value) != fields:
+            raise ValueError("cron trigger wire shape is invalid")
+        return cls(
+            schema_version=value["schema_version"],
+            task_id=DurableCronTaskId(value["task_id"]),
+            task_revision=value["task_revision"],
+            target=value["target"],
+            content=value["content"],
+            artifact_ref=None if value["artifact_ref"] is None else ArtifactRef.from_dict(value["artifact_ref"]),
+            scheduled_at_ms=value["scheduled_at_ms"],
+            fired_at_ms=value["fired_at_ms"],
+            attempt=value["attempt"],
         )
 
 
@@ -105,6 +153,7 @@ class CronTask:
     prompt: str
     #: Epoch ms when the task was created. Anchor for missed-task detection.
     created_at: int
+    prompt_artifact_ref: ArtifactRef | None = None
     revision: int = 0
     #: Epoch ms of the most recent fire. Written back after each recurring fire so
     #: next-fire computation survives restarts. Never set for one-shots.
@@ -132,12 +181,16 @@ class CronTask:
             object.__setattr__(self, "id", identity)
         if self.durable is not isinstance(self.id, DurableCronTaskId):
             raise ValueError("cron task identity does not match its durability scope")
-        if len(self.id) != 8 or any(character not in "0123456789abcdef" for character in self.id):
-            raise ValueError("cron task id must be eight lowercase hexadecimal characters")
+        if len(self.id) != 32 or any(character not in "0123456789abcdef" for character in self.id):
+            raise ValueError("cron task id must be a 128-bit lowercase hexadecimal identity")
         if type(self.cron) is not str or not self.cron:
             raise ValueError("cron expression must be a non-empty string")
         if type(self.prompt) is not str or not self.prompt:
             raise ValueError("cron prompt must be a non-empty string")
+        if len(self.prompt) > _MAX_INLINE_PROMPT_CHARS:
+            raise ValueError("cron prompt exceeds inline bound; publish payload as an ArtifactRef")
+        if self.prompt_artifact_ref is not None and not isinstance(self.prompt_artifact_ref, ArtifactRef):
+            raise TypeError("cron prompt artifact reference is invalid")
         if type(self.created_at) is not int or self.created_at < 0:
             raise ValueError("cron created_at must be a non-negative integer")
         if self.last_fired_at is not None and (
@@ -175,13 +228,9 @@ class CronTask:
         target_session_id: Optional[str] = None,
         timezone_name: str = "UTC",
     ) -> "CronTask":
-        """Construct a task, minting a fresh 8-hex-char id.
-
-        8 hex chars is plenty for the 50-task cap and gives the jitter hash a
-        clean u32 to read (see :func:`cron._jitter_frac`).
-        """
+        """Construct a task, minting a non-reusable 128-bit identity."""
         return cls(
-            id=(DurableCronTaskId if durable else SessionCronTaskId)(uuid.uuid4().hex[:8]),
+            id=(DurableCronTaskId if durable else SessionCronTaskId)(uuid.uuid4().hex),
             revision=0,
             cron=cron,
             prompt=prompt,
@@ -212,6 +261,7 @@ class CronTask:
             "revision": self.revision,
             "cron": self.cron,
             "prompt": self.prompt,
+            "prompt_artifact_ref": None if self.prompt_artifact_ref is None else self.prompt_artifact_ref.to_dict(),
             "created_at": self.created_at,
             "last_fired_at": self.last_fired_at,
             "recurring": self.recurring,
@@ -233,6 +283,7 @@ class CronTask:
             "revision",
             "cron",
             "prompt",
+            "prompt_artifact_ref",
             "created_at",
             "last_fired_at",
             "recurring",
@@ -270,6 +321,9 @@ class CronTask:
             revision=data["revision"],
             cron=data["cron"],
             prompt=data["prompt"],
+            prompt_artifact_ref=(
+                None if data["prompt_artifact_ref"] is None else ArtifactRef.from_dict(data["prompt_artifact_ref"])
+            ),
             created_at=data["created_at"],
             last_fired_at=data["last_fired_at"],
             recurring=data["recurring"],

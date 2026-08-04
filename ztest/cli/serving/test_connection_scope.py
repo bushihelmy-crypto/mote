@@ -28,7 +28,13 @@ from mote.contracts.conversation import AIMessage
 from mote.contracts.events.conversation import MessageAppendedEvent
 from mote.product.presentation.consumer import BaseConsumer
 from mote.product.presentation.events import Capabilities, MessageBlockCompleted
-from mote.product.session_hosting.connection import ConnectionScope, _format_turn_error
+from mote.product.session_hosting.connection import (
+    ConnectionCleanupPhase,
+    ConnectionCloseDisposition,
+    ConnectionLifecycleState,
+    ConnectionScope,
+    _format_turn_error,
+)
 from mote.product.session_hosting.registry import ResidentSession
 
 
@@ -198,6 +204,63 @@ async def test_context_manager_opens_and_closes():
         assert any(handler is scope.projector for _, handler in session.role.telemetry.handlers)
     assert not any(handler is scope.projector for _, handler in session.role.telemetry.handlers)
     assert consumer.closed is True
+
+
+@pytest.mark.asyncio
+async def test_failed_cleanup_keeps_generation_draining_until_retry():
+    class FailingPort:
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        async def aclose(self) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("busy")
+
+    session = make_session("s1")
+    port = FailingPort()
+    scope = ConnectionScope(session, consumers=[], port=port)
+    await scope.open()
+
+    first = await scope.aclose()
+    assert first.state is ConnectionLifecycleState.DRAINING
+    assert first.failed == (ConnectionCleanupPhase.PORT,)
+    with pytest.raises(RuntimeError, match="does not accept turns"):
+        await scope.run_turn(SimpleNamespace(content="blocked", id="m"))
+    with pytest.raises(RuntimeError, match="cannot activate"):
+        await scope.open()
+
+    second = await scope.aclose()
+    assert second.state is ConnectionLifecycleState.CLOSED
+    assert second.settled == (ConnectionCleanupPhase.PORT,)
+
+
+@pytest.mark.asyncio
+async def test_context_manager_surfaces_cleanup_failure():
+    class FailingPort:
+        async def aclose(self) -> None:
+            raise RuntimeError("close failed")
+
+    scope = ConnectionScope(make_session("s1"), consumers=[], port=FailingPort())
+    with pytest.raises(RuntimeError, match="connection cleanup incomplete"):
+        async with scope:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_close_timeout_retains_draining_generation_for_policy_action():
+    class HangingPort:
+        async def aclose(self) -> None:
+            await asyncio.Event().wait()
+
+    scope = ConnectionScope(make_session("s1"), consumers=[], port=HangingPort(), cleanup_timeout=0.01)
+    await scope.open()
+
+    receipt = await scope.close_with_timeout()
+
+    assert receipt.disposition is ConnectionCloseDisposition.TIMED_OUT
+    assert receipt.state is ConnectionLifecycleState.DRAINING
+    assert ConnectionCleanupPhase.PORT in receipt.failed
 
 
 # --------------------------------------------------------------------------

@@ -27,12 +27,15 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+from collections.abc import Mapping
 from typing import Any, Callable, Optional
 
+from mote.contracts.events.envelope import JsonValue
 from mote.contracts.interaction import AskUserQuestionAnswer, AskUserQuestionAnswers
 from mote.contracts.interaction.handoff import HandoffStatus, HumanHandoffOutcome
 from mote.product.i18n import keys as K
 from mote.product.i18n import t
+from mote.product.interaction.ports import DriverControlDisposition, DriverControlReceipt
 from mote.product.interfaces.terminal.menu import (
     _AMBER_RGB,
     _RULE_WIDTH,
@@ -90,10 +93,10 @@ class TerminalPort:
         prompt: Optional[str] = None,
         banner: Optional[str] = None,
         out=None,
-        on_interrupt: Optional[Callable[[], Any]] = None,
+        on_interrupt: Optional[Callable[[], DriverControlReceipt]] = None,
         is_turn_running: Optional[Callable[[], bool]] = None,
         get_input_reader: Optional[Callable[[], Any]] = None,
-        on_steer: Optional[Callable[[str], Any]] = None,
+        on_steer: Optional[Callable[[str], DriverControlReceipt]] = None,
     ):
         # Default to the shared terminal look (orange ``❯`` prompt + masthead);
         # the style module is rich-free so importing it keeps the port's plain
@@ -107,6 +110,7 @@ class TerminalPort:
         # Driver-wired steering hook (mirror of ``_on_interrupt``): a submitted
         # steer is forwarded here for the driver to fold into the next turn.
         self._on_steer = on_steer
+        self._idle_poll_interval = 0.1
 
         self._reader: Any = None
         self._read_task: Optional[asyncio.Task] = None
@@ -158,7 +162,7 @@ class TerminalPort:
                 pass
             self._sigint_installed = False
 
-    def take_turn_images(self) -> list[dict]:
+    def take_turn_images(self) -> list[Mapping[str, JsonValue]]:
         return []
 
     async def _setup_stdin(self) -> None:
@@ -193,9 +197,7 @@ class TerminalPort:
             self._write("\n^C  interrupting current turn\u2026\n")
             self._sigint_armed = False
             if self._on_interrupt is not None:
-                result = self._on_interrupt()
-                if asyncio.iscoroutine(result):
-                    asyncio.ensure_future(result)
+                self._on_interrupt()
         elif self._sigint_armed:
             # Idle prompt, second consecutive press → exit (no timing window; the
             # arm was cleared by any intervening input, so reaching here means the
@@ -639,14 +641,13 @@ class TerminalPort:
     # ------------------------------------------------------------------
     # InputPort.signal_interrupt + exit / restore controls
     # ------------------------------------------------------------------
-    def signal_interrupt(self, ctx: Any = None) -> None:
+    def signal_interrupt(self, ctx: Any = None) -> DriverControlReceipt:
         """Programmatic interrupt (mirror of mid-turn Ctrl+C)."""
         if self._on_interrupt is not None:
-            result = self._on_interrupt()
-            if asyncio.iscoroutine(result):
-                asyncio.ensure_future(result)
+            return self._on_interrupt()
+        return DriverControlReceipt(DriverControlDisposition.IGNORED)
 
-    def submit_steer(self, ctx: Any = None, text: str = "") -> None:
+    def submit_steer(self, ctx: Any = None, text: str = "") -> DriverControlReceipt:
         """Forward steering *text* to the driver for the next turn (§5.3).
 
         The public inbound entry point; the driver wires ``_on_steer`` to its
@@ -655,9 +656,8 @@ class TerminalPort:
         programmatic / cross-session steer submission.
         """
         if text and text.strip() and self._on_steer is not None:
-            result = self._on_steer(text)
-            if asyncio.iscoroutine(result):
-                asyncio.ensure_future(result)
+            return self._on_steer(text)
+        return DriverControlReceipt(DriverControlDisposition.IGNORED)
 
     def request_exit(self) -> None:
         """Signal the loop to exit and cancel any pending read (from /exit)."""

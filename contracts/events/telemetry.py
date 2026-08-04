@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, List, Optional
+from enum import StrEnum
+from typing import TYPE_CHECKING, ClassVar, List, Optional
+
+from mote.contracts.events.envelope import JsonValue
 
 if TYPE_CHECKING:
     pass
@@ -18,7 +22,15 @@ SPAN_START = "span_start"
 
 SPAN_END = "span_end"
 
-JOURNAL = "journal"
+
+class RecoveryPhase(StrEnum):
+    RECOVERED = "recovered"
+    GIVE_UP = "give_up"
+
+
+class SpanStatus(StrEnum):
+    OK = "ok"
+    ERROR = "error"
 
 
 @dataclass
@@ -51,7 +63,7 @@ class RecoveryEvent:
     mirrors *what the loop decided*.
     """
 
-    phase: str = "recovered"  # recovered | give_up
+    phase: RecoveryPhase = RecoveryPhase.RECOVERED
     action: str = ""  # RecoveryAction.value (retry / rotate_credential / ...)
     attempt: int = 0
     error_type: str = ""
@@ -72,8 +84,8 @@ class ResourceReportEvent:
 
     block: str = ""
     name_: str = ""
-    value: Any = None
-    extra: Optional[dict] = None
+    value: JsonValue = None
+    extra: Optional[Mapping[str, JsonValue]] = None
     uuid: str = ""
     role: Optional[str] = None
 
@@ -95,7 +107,7 @@ class SpanStartEvent:
     parent_span_id: Optional[str] = None
     trace_id: str = ""
     label: str = ""
-    attributes: dict = field(default_factory=dict)
+    attributes: Mapping[str, JsonValue] = field(default_factory=dict)
 
     name: ClassVar[str] = SPAN_START
 
@@ -106,36 +118,8 @@ class SpanEndEvent:
 
     span_id: str = ""
     trace_id: str = ""
-    status: str = "ok"  # ok | error
+    status: SpanStatus = SpanStatus.OK
     error: str = ""
-    attributes: dict = field(default_factory=dict)
+    attributes: Mapping[str, JsonValue] = field(default_factory=dict)
 
     name: ClassVar[str] = SPAN_END
-
-
-@dataclass
-class JournalEvent:
-    """A durable run-journal step crossed a lifecycle boundary.
-
-    Emitted (observation-only) by the durable-execution seams
-    (:class:`~mote.runtime.durable.inference_journal.InferenceJournal` think steps, durable
-    timers, and the EXTERNAL/LOCAL tool ledger) whenever a step is started,
-    completed, failed, or reaped, so a frontend/logger can watch the otherwise
-    invisible crash-resume bookkeeping (which thinks were memoized, which
-    dangling calls were healed, how the long-session journal stays bounded).
-
-    Purely a mirror: the journal's own on-disk log is the source of truth; this
-    just announces *that* a record moved. ``kind`` is the step class
-    (``think`` / ``tool`` / ``timer``); ``phase`` is the lifecycle transition
-    (``started`` / ``completed`` / ``failed`` / ``reaped``); ``effect`` is the
-    step's side-effect class (``pure`` / ``local`` / ``external``); ``step_id``
-    is the journal's self-anchored key.
-    """
-
-    step_id: str = ""
-    kind: str = ""  # think | tool | timer
-    phase: str = ""  # started | completed | failed | reaped
-    effect: str = ""  # pure | local | external
-    seq: int = 0
-
-    name: ClassVar[str] = JOURNAL

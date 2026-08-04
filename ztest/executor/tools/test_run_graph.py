@@ -18,6 +18,7 @@ import pytest
 from mote.contracts.activity import ActivityKind, ActivityNodeKind, ActivityNodeStatus, ActivityOutcome
 from mote.contracts.events.task import ACTIVITY_COMPLETED, ACTIVITY_STARTED, TASK_PROGRESS
 from mote.contracts.tool.errors import ToolError
+from mote.contracts.tool.result_payload import json_tool_payload
 from mote.product.workflows.run_graph.tool import RunGraph
 from mote.runtime.events.context import bind_telemetry
 from mote.runtime.tools.execution_context import bind_tool_call_id
@@ -25,6 +26,10 @@ from mote.runtime.tools.tool_result import ToolResult
 from mote.ztest.telemetry import InlineTelemetry
 
 from .conftest import CapRole, bind, run
+
+
+def _payload(result: ToolResult):
+    return result.payload.materialize() if result.payload is not None else None
 
 
 def _role(**tools) -> CapRole:
@@ -43,20 +48,20 @@ def _call(role: CapRole, graph, inputs=None) -> ToolResult:
 
 
 async def _double(kw):
-    return ToolResult(output=str(kw["x"] * 2), data=kw["x"] * 2)
+    return ToolResult(output=str(kw["x"] * 2), payload=json_tool_payload(kw["x"] * 2))
 
 
 async def _add(kw):
-    return ToolResult(output=str(kw["a"] + kw["b"]), data=kw["a"] + kw["b"])
+    return ToolResult(output=str(kw["a"] + kw["b"]), payload=json_tool_payload(kw["a"] + kw["b"]))
 
 
 async def _classify(kw):
     label = "big" if kw["x"] > 5 else "small"
-    return ToolResult(output=label, data=label)
+    return ToolResult(output=label, payload=json_tool_payload(label))
 
 
 async def _shout(kw):
-    return ToolResult(output=kw["s"].upper(), data=kw["s"].upper())
+    return ToolResult(output=kw["s"].upper(), payload=json_tool_payload(kw["s"].upper()))
 
 
 async def _deny(kw):
@@ -102,7 +107,7 @@ class TestPipeline:
         }
         result = _call(role, graph, inputs={"nums": [1, 2, 3]})
         assert result.success
-        assert result.data == {"doubled": [2, 4, 6], "total": 12, "final": 112}
+        assert _payload(result) == {"doubled": [2, 4, 6], "total": 12, "final": 112}
 
 
 # --- Map: concurrency cap ----------------------------------------------------
@@ -137,7 +142,7 @@ class TestMapConcurrency:
             state["peak"] = max(state["peak"], state["cur"])
             await asyncio.sleep(0.02)  # hold the slot so overlap is observable
             state["cur"] -= 1
-            return ToolResult(output=str(kw["x"]), data=kw["x"])
+            return ToolResult(output=str(kw["x"]), payload=json_tool_payload(kw["x"]))
 
         role = _role(probe=_probe)
         r = _call(role, graph, inputs={"items": list(range(n))})
@@ -146,7 +151,7 @@ class TestMapConcurrency:
     def test_concurrency_caps_in_flight(self, workspace):
         r, peak = self._run_with_probe(self._map_graph(concurrency=2), n=6)
         assert r.success
-        assert r.data == list(range(6))  # results stay input-ordered
+        assert _payload(r) == list(range(6))  # results stay input-ordered
         assert peak <= 2  # never more than the cap ran at once
 
     def test_default_caps_at_eight(self, workspace):
@@ -154,7 +159,7 @@ class TestMapConcurrency:
         # never exceed 8 in flight.
         r, peak = self._run_with_probe(self._map_graph(concurrency=None), n=12)
         assert r.success
-        assert r.data == list(range(12))
+        assert _payload(r) == list(range(12))
         assert peak <= 8
         assert peak > 1  # sanity: items DO overlap (it's not serial)
 
@@ -186,7 +191,7 @@ class TestNoGraphNesting:
         """A role exposing *name* as both a callable fake AND a graph tool."""
 
         async def _noop(kw):
-            return ToolResult(output="ran", data="ran")
+            return ToolResult(output="ran", payload=json_tool_payload("ran"))
 
         role = _role(**{name: _noop})
         role.graph_tools = {name}
@@ -224,7 +229,7 @@ class TestNoGraphNesting:
     def test_non_graph_tool_still_allowed(self, workspace):
         # A normal tool alongside a graph tool in the table is unaffected.
         async def _echo(kw):
-            return ToolResult(output=kw["s"], data=kw["s"])
+            return ToolResult(output=kw["s"], payload=json_tool_payload(kw["s"]))
 
         role = _role(echo=_echo)
         role.graph_tools = {"GraphWorkflow"}  # present but unused by the graph
@@ -235,7 +240,7 @@ class TestNoGraphNesting:
         }
         r = _call(role, graph)
         assert r.success
-        assert r.data == "hi"
+        assert _payload(r) == "hi"
 
 
 # --- Excluded tools (Sleep) may not be graph nodes --------------------------
@@ -246,7 +251,7 @@ class TestExcludedTools:
         """A role exposing *name* as both a callable fake AND an excluded tool."""
 
         async def _noop(kw):
-            return ToolResult(output="ran", data="ran")
+            return ToolResult(output="ran", payload=json_tool_payload("ran"))
 
         role = _role(**{name: _noop})
         role.excluded_tools = {name}
@@ -306,7 +311,7 @@ class TestExcludedTools:
     def test_non_excluded_tool_still_allowed(self, workspace):
         # A normal tool alongside an excluded tool in the table is unaffected.
         async def _echo(kw):
-            return ToolResult(output=kw["s"], data=kw["s"])
+            return ToolResult(output=kw["s"], payload=json_tool_payload(kw["s"]))
 
         role = _role(echo=_echo)
         role.excluded_tools = {"Sleep"}  # present but unused by the graph
@@ -317,7 +322,7 @@ class TestExcludedTools:
         }
         r = _call(role, graph)
         assert r.success
-        assert r.data == "hi"
+        assert _payload(r) == "hi"
 
 
 # --- Compute: curated stdlib namespace + statement blocks --------------------
@@ -343,7 +348,7 @@ class TestCompute:
             inputs={"diff": "+++ b/a.py\n+++ b/pkg/b.py\n"},
         )
         assert r.success
-        assert r.data == ["a.py", "pkg/b.py"]
+        assert _payload(r) == ["a.py", "pkg/b.py"]
 
     def test_json_roundtrip(self, workspace):
         r = self._compute(
@@ -351,7 +356,7 @@ class TestCompute:
             {"s": {"$input": "s"}},
             inputs={"s": '{"b": 2, "a": 1}'},
         )
-        assert r.data == '{"a": 1, "b": 2}'
+        assert _payload(r) == '{"a": 1, "b": 2}'
 
     def test_collections_counter(self, workspace):
         r = self._compute(
@@ -359,14 +364,14 @@ class TestCompute:
             {"xs": {"$input": "xs"}},
             inputs={"xs": ["x", "y", "x", "x"]},
         )
-        assert r.data == "x"
+        assert _payload(r) == "x"
 
     def test_statement_block_ending_in_expr(self, workspace):
         # A short block (assignments + comprehension) whose last node is a bare
         # expression — its value is what the node stores.
         expr = "lines = text.split('\\n')\nkept = [l for l in lines if l.strip()]\nlen(kept)"
         r = self._compute("".join(expr), {"text": {"$input": "text"}}, inputs={"text": "a\n\n b \n\n"})
-        assert r.data == 2
+        assert _payload(r) == 2
 
     def test_import_still_blocked(self, workspace):
         # The sandbox invariant holds: no ``import`` escape hatch (asteval bars
@@ -446,12 +451,12 @@ class TestBranching:
         role = _role(classify=_classify, shout=_shout)
         result = _call(role, self._branch_graph(), inputs={"v": 9})
         # big fired; the skipped small branch resolves to None (missing_ok output).
-        assert result.data == {"big": "YES", "small": None}
+        assert _payload(result) == {"big": "YES", "small": None}
 
     def test_else_branch_taken(self, workspace):
         role = _role(classify=_classify, shout=_shout)
         result = _call(role, self._branch_graph(), inputs={"v": 2})
-        assert result.data == {"big": None, "small": "NO"}
+        assert _payload(result) == {"big": None, "small": "NO"}
 
 
 # --- Parallel AND-join -------------------------------------------------------
@@ -489,7 +494,7 @@ class TestAndJoin:
             "output": {"$ref": "sum"},
         }
         result = _call(role, graph, inputs={"p": 2, "q": 5})  # (2*2) + (5*2)
-        assert result.data == 14
+        assert _payload(result) == 14
 
 
 # --- Failure / denial semantics ----------------------------------------------
@@ -516,7 +521,7 @@ async def _echo_opt(kw):
     # Wraps the received optional value in a marker dict so a resolved None is
     # distinguishable from the tool having failed (_unwrap falls back to .output
     # when .data is None, so we must not return bare None as data).
-    return ToolResult(output="ok", data={"got": kw.get("opt")})
+    return ToolResult(output="ok", payload=json_tool_payload({"got": kw.get("opt")}))
 
 
 class TestOptionalInputs:
@@ -541,7 +546,7 @@ class TestOptionalInputs:
         }
         result = _call(role, graph, inputs={"must": "hi"})
         assert result.success
-        assert result.data == {"got": None}
+        assert _payload(result) == {"got": None}
 
     def test_provided_optional_input_passes_through(self, workspace):
         role = _role(echo=_echo_opt)
@@ -559,7 +564,7 @@ class TestOptionalInputs:
         }
         result = _call(role, graph, inputs={"opt": "there"})
         assert result.success
-        assert result.data == {"got": "there"}
+        assert _payload(result) == {"got": "there"}
 
     def test_missing_required_input_still_fails(self, workspace):
         # Required inputs keep riding extra="allow": omitting one still fails loudly.
@@ -621,11 +626,11 @@ class TestGuards:
 
 async def _incr(kw):
     # A stateless "add one" tool used to drive loops/accumulators.
-    return ToolResult(output=str(kw["x"] + 1), data=kw["x"] + 1)
+    return ToolResult(output=str(kw["x"] + 1), payload=json_tool_payload(kw["x"] + 1))
 
 
 async def _identity(kw):
-    return ToolResult(output=str(kw["x"]), data=kw["x"])
+    return ToolResult(output=str(kw["x"]), payload=json_tool_payload(kw["x"]))
 
 
 class TestChannels:
@@ -650,7 +655,7 @@ class TestChannels:
         }
         r = _call(role, graph)
         assert r.success
-        assert r.data == 42  # 41 (initial) + 1, written back into the channel
+        assert _payload(r) == 42  # 41 (initial) + 1, written back into the channel
 
     def test_reduce_extend_accumulates(self, workspace):
         # A compute node writes into an ``extend`` channel — the reducer grows the
@@ -681,7 +686,7 @@ class TestChannels:
         }
         r = _call(role, graph, inputs={"xs": []})
         assert r.success
-        assert r.data == [1, 2, 3]
+        assert _payload(r) == [1, 2, 3]
 
     def test_reduce_add_running_total(self, workspace):
         role = _role()
@@ -708,7 +713,7 @@ class TestChannels:
             "output": {"$ref": "total"},
         }
         r = _call(role, graph)
-        assert r.data == 15
+        assert _payload(r) == 15
 
     def test_parallel_map_folds_into_channel(self, workspace):
         # map fan-out's result (a list) is extended into an ``extend`` channel.
@@ -731,7 +736,7 @@ class TestChannels:
         }
         r = _call(role, graph, inputs={"items": [1, 2, 3]})
         assert r.success
-        assert sorted(r.data) == [1, 2, 3]
+        assert sorted(_payload(r)) == [1, 2, 3]
 
     def test_channel_ref_adds_no_edge(self, workspace):
         # Reading a channel must NOT force ordering: two nodes that only share a
@@ -759,7 +764,7 @@ class TestChannels:
         }
         r = _call(role, graph)
         assert r.success
-        assert r.data == {"a": 8, "b": 9}
+        assert _payload(r) == {"a": 8, "b": 9}
 
 
 # --- Looping: back-edge + recursion_limit ------------------------------------
@@ -795,7 +800,7 @@ class TestLooping:
         }
         r = _call(role, graph)
         assert r.success
-        assert r.data == 3
+        assert _payload(r) == 3
 
     def test_recursion_limit_fails_runaway_loop(self, workspace):
         # A back-edge whose guard is always true is an infinite loop; the
@@ -903,12 +908,12 @@ async def _translate(kw):
     term = kw["term"]
     # Deterministic "translation": index within the accumulated glossary, so the
     # value proves each step saw the state built by the previous ones.
-    return ToolResult(output=term, data={term: f"t{len(glossary)}"})
+    return ToolResult(output=term, payload=json_tool_payload({term: f"t{len(glossary)}"}))
 
 
 async def _acc_sum(kw):
     # Add the item to the running total (proves acc + item both reach the body).
-    return ToolResult(output="", data=kw["acc"] + kw["item"])
+    return ToolResult(output="", payload=json_tool_payload(kw["acc"] + kw["item"]))
 
 
 class TestFold:
@@ -938,7 +943,7 @@ class TestFold:
         assert r.success
         # Each value is the glossary size at that step → proves serial ordering
         # and that the accumulator was visible to the body.
-        assert r.data == {"a": "t0", "b": "t1", "c": "t2"}
+        assert _payload(r) == {"a": "t0", "b": "t1", "c": "t2"}
 
     def test_add_running_total(self, workspace):
         role = _role(acc_sum=_acc_sum)
@@ -961,7 +966,7 @@ class TestFold:
         }
         r = _call(role, graph, inputs={"xs": [1, 2, 3, 4]})
         assert r.success
-        assert r.data == 10
+        assert _payload(r) == 10
 
     def test_empty_collection_yields_initial(self, workspace):
         # No items → the accumulator is never touched → its initial is returned.
@@ -985,7 +990,7 @@ class TestFold:
         }
         r = _call(role, graph, inputs={"mods": []})
         assert r.success
-        assert r.data == {"seed": "x"}
+        assert _payload(r) == {"seed": "x"}
 
     def test_writes_into_channel(self, workspace):
         # A fold may redirect its final accumulator into a channel via ``writes``
@@ -1012,7 +1017,7 @@ class TestFold:
         }
         r = _call(role, graph, inputs={"xs": [2, 3]})
         assert r.success
-        assert r.data == 5
+        assert _payload(r) == 5
 
     def test_failed_item_fails_fold(self, workspace):
         # A denied/failed dispatched call in the body fails the whole fold node.
@@ -1143,7 +1148,7 @@ class TestFold:
         }
         r = _call(role, graph, inputs={"xs": [1, 2, 3]})
         assert r.success
-        assert r.data == 6
+        assert _payload(r) == 6
 
 
 # --- on_item_error: per-item isolation for map / fold ------------------------
@@ -1155,7 +1160,7 @@ async def _double_but_deny_odd(kw):
     x = kw["x"]
     if x % 2 == 1:
         return ToolResult(output="denied by user", success=False)
-    return ToolResult(output=str(x * 2), data=x * 2)
+    return ToolResult(output=str(x * 2), payload=json_tool_payload(x * 2))
 
 
 async def _add_but_deny_negative(kw):
@@ -1163,7 +1168,7 @@ async def _add_but_deny_negative(kw):
     item = kw["item"]
     if item < 0:
         return ToolResult(output="denied by user", success=False)
-    return ToolResult(output="", data=kw["acc"] + item)
+    return ToolResult(output="", payload=json_tool_payload(kw["acc"] + item))
 
 
 class TestOnItemError:
@@ -1189,7 +1194,7 @@ class TestOnItemError:
         }
         r = _call(role, graph, inputs={"nums": [1, 2, 3, 4]})
         assert r.success
-        assert r.data == [4, 8]  # only the even items, doubled, in order
+        assert _payload(r) == [4, 8]  # only the even items, doubled, in order
 
     def test_map_skip_surfaces_note_to_model(self, workspace):
         # The skipped items must not be silent: the tool output carries a note so
@@ -1219,7 +1224,7 @@ class TestOnItemError:
         assert 'dbl({"x": 1})' in r.output
         assert 'dbl({"x": 3})' in r.output
         # ``data`` stays the clean resolved output — the note is text-only.
-        assert r.data == [4]
+        assert _payload(r) == [4]
 
     def test_map_defaults_to_skip(self, workspace):
         # map items are INDEPENDENT, so the default (no on_item_error) is "skip":
@@ -1242,7 +1247,7 @@ class TestOnItemError:
         }
         r = _call(role, graph, inputs={"nums": [1, 2, 3, 4]})
         assert r.success
-        assert r.data == [4, 8]  # odd items skipped by default
+        assert _payload(r) == [4, 8]  # odd items skipped by default
         assert "2 item(s) failed" in r.output
         assert "doubled: 2 skipped" in r.output
 
@@ -1315,7 +1320,7 @@ class TestOnItemError:
         }
         r = _call(role, graph, inputs={"nums": [2, 4, 6]})
         assert r.success
-        assert r.data == [4, 8, 12]
+        assert _payload(r) == [4, 8, 12]
         assert "item(s) failed" not in r.output
 
     def test_fold_skip_does_not_fold_failed_item(self, workspace):
@@ -1342,7 +1347,7 @@ class TestOnItemError:
         }
         r = _call(role, graph, inputs={"xs": [1, 2, -5, 3]})
         assert r.success
-        assert r.data == 6  # 1 + 2 + 3; the -5 item was skipped, not folded
+        assert _payload(r) == 6  # 1 + 2 + 3; the -5 item was skipped, not folded
         assert "1 item(s) failed" in r.output
         assert "total: 1 skipped" in r.output
         # The failed item's resolved args (item + the acc it saw, =3) are shown.
@@ -1597,7 +1602,7 @@ class TestActivityLineage:
             from mote.runtime.events.scope import current_scope
 
             seen[kw["tag"]] = current_scope()
-            return ToolResult(output="ok", data="ok")
+            return ToolResult(output="ok", payload=json_tool_payload("ok"))
 
         role = _role(rec=_record_scope)
         graph = {
@@ -1636,7 +1641,7 @@ class TestActivityLineage:
             from mote.runtime.events.scope import current_scope
 
             seen.append(current_scope())
-            return ToolResult(output=str(kw["x"]), data=kw["x"])
+            return ToolResult(output=str(kw["x"]), payload=json_tool_payload(kw["x"]))
 
         role = _role(rec=_record)
         graph = {
@@ -1679,9 +1684,9 @@ class TestActivityLineage:
         ev = completed[0]
         assert ev.outcome == "failed"
         assert ev.summary  # carries the GraphError text
-        by_id = {s["id"]: s for s in ev.node_states}
+        by_id = {s.node_id: s for s in ev.node_states}
         assert "x" in by_id
-        assert by_id["x"]["status"] == "failed"
+        assert by_id["x"].status == "failed"
 
     def test_started_precedes_completed(self, workspace):
         role = _role(double=_double)
@@ -1719,7 +1724,7 @@ class TestActivityLineage:
         }
         result = _call(role, graph, inputs={"p": 5})
         assert result.success
-        assert result.data == 10
+        assert _payload(result) == 10
 
 
 # --- Bash inside a map: shell values via `inputs`, failures via `check` -------
@@ -1751,9 +1756,9 @@ async def _fake_bash(kw):
         # Non-zero exit WITHOUT check: success=True, error text rides in output/data.
         return ToolResult(
             output=f"error: bad {n} [exit code: 1]",
-            data=f"error: bad {n} [exit code: 1]",
+            payload=json_tool_payload(f"error: bad {n} [exit code: 1]"),
         )
-    return ToolResult(output=str(n * 2), data=n * 2)
+    return ToolResult(output=str(n * 2), payload=json_tool_payload(n * 2))
 
 
 class TestBashInMap:
@@ -1781,7 +1786,7 @@ class TestBashInMap:
         }
         r = _call(role, graph, inputs={"nums": [2, 4, 6]})
         assert r.success
-        assert r.data == [4, 8, 12]  # clean structured ints, not scraped text
+        assert _payload(r) == [4, 8, 12]  # clean structured ints, not scraped text
 
     def test_check_isolates_failed_command(self, workspace):
         # With check, an odd item's non-zero exit becomes success=False, so the
@@ -1808,7 +1813,7 @@ class TestBashInMap:
         }
         r = _call(role, graph, inputs={"nums": [1, 2, 3, 4]})
         assert r.success
-        assert r.data == [4, 8]  # only the even items; odd ones isolated, not scraped
+        assert _payload(r) == [4, 8]  # only the even items; odd ones isolated, not scraped
         assert "2 item(s) failed" in r.output  # the skips are surfaced
 
     def test_without_check_error_text_contaminates(self, workspace):
@@ -1837,7 +1842,7 @@ class TestBashInMap:
         assert r.success
         # The odd item's error text is in the list — garbage the model must not
         # scrape. The fix is ``check: true`` (previous test).
-        assert r.data == ["error: bad 1 [exit code: 1]", 4]
+        assert _payload(r) == ["error: bad 1 [exit code: 1]", 4]
 
 
 # --- $fmt: string-template binding ------------------------------------------
@@ -1845,7 +1850,7 @@ class TestBashInMap:
 
 async def _echo_cmd(kw):
     """Return the ``command`` arg verbatim so a test can inspect the formatted string."""
-    return ToolResult(output=kw["command"], data=kw["command"])
+    return ToolResult(output=kw["command"], payload=json_tool_payload(kw["command"]))
 
 
 class TestFmtBinding:
@@ -1866,7 +1871,7 @@ class TestFmtBinding:
         }
         r = _call(role, graph, inputs={"path": "notes.txt"})
         assert r.success
-        assert r.data == "wc -l notes.txt"
+        assert _payload(r) == "wc -l notes.txt"
 
     def test_fmt_per_item_in_map(self, workspace):
         # In a map, $fmt interpolates the per-item loop var into each command — the
@@ -1888,7 +1893,7 @@ class TestFmtBinding:
         }
         r = _call(role, graph, inputs={"files": ["a.txt", "b.txt"]})
         assert r.success
-        assert r.data == ["cat a.txt", "cat b.txt"]
+        assert _payload(r) == ["cat a.txt", "cat b.txt"]
 
     def test_fmt_sibling_creates_dataflow_edge(self, workspace):
         # A $ref inside a $fmt sibling must add a data-flow edge so the producer
@@ -1916,7 +1921,7 @@ class TestFmtBinding:
         }
         r = _call(role, graph, inputs={"x": 21})
         assert r.success
-        assert r.data == "echo 42"
+        assert _payload(r) == "echo 42"
 
     def test_fmt_cannot_mix_with_ref(self, workspace):
         role = _role(sh=_echo_cmd)
@@ -1988,7 +1993,7 @@ def test_explicit_output_contract_rejects_uncommitted_value():
 
     assert result.success is False
     assert "output contract" in result.output
-    assert result.data is None
+    assert _payload(result) is None
 
 
 def test_explicit_output_contract_exposes_only_committed_value():
@@ -2012,7 +2017,7 @@ def test_explicit_output_contract_exposes_only_committed_value():
     )
 
     assert result.success is True
-    assert result.data == {"answer": 42}
+    assert _payload(result) == {"answer": 42}
 
 
 def test_replayed_committed_graph_short_circuits_before_node_execution():
@@ -2037,5 +2042,5 @@ def test_replayed_committed_graph_short_circuits_before_node_execution():
         result = run(tool.call(graph=graph))
 
     assert result.success is True
-    assert result.data == 42
+    assert _payload(result) == 42
     assert role.graph_resume_calls[0][1] == "tool-call-1"

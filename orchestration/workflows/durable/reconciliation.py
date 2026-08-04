@@ -27,6 +27,11 @@ from mote.contracts.runtime.operation_ownership import (
     project_operation_guarantee,
 )
 from mote.contracts.workflow.admission import WorkflowCreateAdmissionLifecycle
+from mote.contracts.workflow.effect import (
+    WorkflowEffectAdmissionDisposition,
+    WorkflowEffectAdmissionReceipt,
+    WorkflowEffectCapacityError,
+)
 from mote.contracts.workflow.governance import (
     WorkflowGovernanceAcceptanceDisposition,
     WorkflowGovernanceCancelAcceptance,
@@ -48,7 +53,7 @@ from .control import WorkflowRunControl
 from .model import WorkflowRunCommand, WorkflowRunPhase
 from .store import WorkflowRunStore
 
-_SCHEMA = "mote.workflow-reconciliation/v2"
+WORKFLOW_RECONCILIATION_SCHEMA = "mote.workflow-reconciliation/v3"
 
 
 class ReconcileState(str, Enum):
@@ -56,6 +61,7 @@ class ReconcileState(str, Enum):
     CLAIMED = "claimed"
     SETTLED = "settled"
     IN_DOUBT = "in_doubt"
+    OWNER_ACTION_REQUIRED = "owner_action_required"
     DEAD_LETTER = "dead_letter"
 
 
@@ -71,6 +77,37 @@ class WorkflowEffect:
     attempts: int
     next_eligible_at: AbsoluteInstant
     reason: str = ""
+    terminal_at: AbsoluteInstant | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowEffectOwnerActionCommand:
+    """Typed operator decision command for an externally in-doubt effect."""
+
+    effect_id: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.effect_id or not self.reason:
+            raise ValueError("owner-action command requires effect identity and reason")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowEffectOwnerActionResolution:
+    effect_id: str
+    provider_receipt: str
+    settled: bool
+
+    def __post_init__(self) -> None:
+        if not self.effect_id or not self.provider_receipt or type(self.settled) is not bool:
+            raise ValueError("owner-action resolution is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowEffectTombstone:
+    effect_id: str
+    terminal_at: AbsoluteInstant
+    tombstoned_at: AbsoluteInstant
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +121,7 @@ class WorkflowTerminalDelivery:
     attempts: int
     next_eligible_at: AbsoluteInstant
     reason: str = ""
+    terminal_at: AbsoluteInstant | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,12 +136,17 @@ class WorkflowGovernanceCancellation:
 
 
 class WorkflowReconciliationStore:
-    def __init__(self, path: Path, ownership, *, governance_capacity: int = 1024) -> None:
+    def __init__(
+        self, path: Path, ownership, *, governance_capacity: int = 1024, effect_capacity: int = 100_000
+    ) -> None:
         if governance_capacity < 1:
             raise ValueError("Workflow governance capacity must be positive")
         self._path = path
         self._ownership = ownership
         self._governance_capacity = governance_capacity
+        if effect_capacity < 1 or effect_capacity > 100_000:
+            raise ValueError("Workflow effect capacity must be between 1 and 100000")
+        self._effect_capacity = effect_capacity
 
     @staticmethod
     def effect_identity(run_id: WorkflowRunId, logical_key: str) -> str:
@@ -115,6 +158,108 @@ class WorkflowReconciliationStore:
 
     def records(self):
         return self._read()
+
+    def effect_admission_available(self) -> bool:
+        """Bounded admission query; accepted facts are never evicted."""
+        return len(self._read()["effects"]) < self._effect_capacity
+
+    def effect_admission(self, effect_id: str) -> WorkflowEffectAdmissionReceipt:
+        current = self._read()["effects"].get(effect_id)
+        if current is not None:
+            return WorkflowEffectAdmissionReceipt(
+                effect_id, WorkflowEffectAdmissionDisposition.IDEMPOTENT, current.revision
+            )
+        disposition = (
+            WorkflowEffectAdmissionDisposition.ACCEPTED
+            if self.effect_admission_available()
+            else WorkflowEffectAdmissionDisposition.BACKPRESSURED
+        )
+        return WorkflowEffectAdmissionReceipt(effect_id, disposition, None)
+
+    def scan_effect_retention(
+        self, *, before: AbsoluteInstant, after: str | None = None, limit: int = 500
+    ) -> tuple[str, ...]:
+        """Bounded deterministic page of terminal effects eligible for retention."""
+        if limit < 1 or limit > 500:
+            raise ValueError("Workflow effect retention scan limit is invalid")
+        result: list[str] = []
+        for item in sorted(self._read()["effects"].values(), key=lambda value: value.effect_id):
+            if after is not None and item.effect_id <= after:
+                continue
+            if item.state not in {ReconcileState.SETTLED, ReconcileState.DEAD_LETTER}:
+                continue
+            if item.terminal_at is None or item.terminal_at.epoch_nanoseconds > before.epoch_nanoseconds:
+                continue
+            result.append(item.effect_id)
+            if len(result) >= limit:
+                break
+        return tuple(result)
+
+    def tombstone_effect(
+        self, effect_id: str, *, before: AbsoluteInstant, now: AbsoluteInstant
+    ) -> WorkflowEffectTombstone:
+        state = self._read()
+        item = state["effects"].get(effect_id)
+        if item is None or item.state not in {ReconcileState.SETTLED, ReconcileState.DEAD_LETTER}:
+            raise ValueError("only terminal Workflow effects may be tombstoned")
+        if item.terminal_at is None or item.terminal_at.epoch_nanoseconds > before.epoch_nanoseconds:
+            raise ValueError("Workflow effect retention window has not elapsed")
+        tombstone = WorkflowEffectTombstone(effect_id, item.terminal_at, now)
+        ownership = self._ownership.claim(
+            OperationOwnershipRequest(
+                "workflow-effect-retention",
+                effect_id,
+                "retention-worker",
+                OperationBackend.LOCAL_FILE,
+                item.revision,
+                effect_id,
+                EffectCapability.IDEMPOTENT_BY_KEY,
+            ),
+            30.0,
+        )
+        try:
+            with self._ownership.guard(ownership):
+                with self._store_transaction():
+                    current = self._read()["effects"].get(effect_id)
+                    if current != item:
+                        raise RuntimeError("Workflow effect changed during retention claim")
+                    state["tombstones"][effect_id] = tombstone
+                    del state["effects"][effect_id]
+                    self._write(state)
+        finally:
+            self._ownership.release(ownership)
+        return tombstone
+
+    def purge_effect_tombstone(self, effect_id: str, *, before: AbsoluteInstant) -> None:
+        """Purge only an aged tombstone under a fenced retention owner."""
+        state = self._read()
+        tombstone = state["tombstones"].get(effect_id)
+        if tombstone is None:
+            raise KeyError(effect_id)
+        if tombstone.tombstoned_at.epoch_nanoseconds > before.epoch_nanoseconds:
+            raise ValueError("Workflow tombstone retention window has not elapsed")
+        ownership = self._ownership.claim(
+            OperationOwnershipRequest(
+                "workflow-effect-retention",
+                effect_id,
+                "retention-worker",
+                OperationBackend.LOCAL_FILE,
+                0,
+                effect_id,
+                EffectCapability.IDEMPOTENT_BY_KEY,
+            ),
+            30.0,
+        )
+        try:
+            with self._ownership.guard(ownership):
+                with self._store_transaction():
+                    current = self._read()["tombstones"].get(effect_id)
+                    if current != tombstone:
+                        raise RuntimeError("Workflow tombstone changed during purge claim")
+                    state["tombstones"].pop(effect_id)
+                    self._write(state)
+        finally:
+            self._ownership.release(ownership)
 
     def terminal_deliveries_for_run(self, run_id: WorkflowRunId) -> tuple[WorkflowTerminalDelivery, ...]:
         return tuple(
@@ -263,16 +408,24 @@ class WorkflowReconciliationStore:
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return {"effects": {}, "deliveries": {}, "governance_cancellations": {}}
+            return {"effects": {}, "deliveries": {}, "governance_cancellations": {}, "tombstones": {}}
         if (
             type(raw) is not dict
-            or set(raw) != {"schema", "effects", "deliveries", "governance_cancellations"}
-            or raw["schema"] != _SCHEMA
+            or set(raw) != {"schema", "effects", "deliveries", "governance_cancellations", "tombstones"}
+            or raw["schema"] != WORKFLOW_RECONCILIATION_SCHEMA
         ):
             raise ValueError("workflow reconciliation envelope is invalid")
         effects = {}
         deliveries = {}
         governance_cancellations = {}
+        tombstones = {}
+        for item in raw["tombstones"]:
+            _strict_item(item, {"effect_id", "terminal_at", "tombstoned_at"})
+            tombstones[item["effect_id"]] = WorkflowEffectTombstone(
+                item["effect_id"],
+                AbsoluteInstant.from_dict(item["terminal_at"]),
+                AbsoluteInstant.from_dict(item["tombstoned_at"]),
+            )
         for item in raw["effects"]:
             fields = {
                 "effect_id",
@@ -285,6 +438,7 @@ class WorkflowReconciliationStore:
                 "attempts",
                 "next_eligible_at",
                 "reason",
+                "terminal_at",
             }
             _strict_item(item, fields)
             record = WorkflowEffect(
@@ -298,6 +452,7 @@ class WorkflowReconciliationStore:
                 item["attempts"],
                 AbsoluteInstant.from_dict(item["next_eligible_at"]),
                 item["reason"],
+                None if item["terminal_at"] is None else AbsoluteInstant.from_dict(item["terminal_at"]),
             )
             effects[record.effect_id] = record
         for item in raw["deliveries"]:
@@ -311,6 +466,7 @@ class WorkflowReconciliationStore:
                 "attempts",
                 "next_eligible_at",
                 "reason",
+                "terminal_at",
             }
             _strict_item(item, fields)
             record = WorkflowTerminalDelivery(
@@ -323,6 +479,7 @@ class WorkflowReconciliationStore:
                 item["attempts"],
                 AbsoluteInstant.from_dict(item["next_eligible_at"]),
                 item["reason"],
+                None if item["terminal_at"] is None else AbsoluteInstant.from_dict(item["terminal_at"]),
             )
             deliveries[record.delivery_id] = record
         for item in raw["governance_cancellations"]:
@@ -334,12 +491,13 @@ class WorkflowReconciliationStore:
             "effects": effects,
             "deliveries": deliveries,
             "governance_cancellations": governance_cancellations,
+            "tombstones": tombstones,
         }
 
     def _write(self, state) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "schema": _SCHEMA,
+            "schema": WORKFLOW_RECONCILIATION_SCHEMA,
             "effects": [
                 _effect_dict(item) for item in sorted(state["effects"].values(), key=lambda value: value.effect_id)
             ],
@@ -353,6 +511,14 @@ class WorkflowReconciliationStore:
                     state["governance_cancellations"].values(),
                     key=lambda value: value.request.request_id,
                 )
+            ],
+            "tombstones": [
+                {
+                    "effect_id": item.effect_id,
+                    "terminal_at": item.terminal_at.to_dict(),
+                    "tombstoned_at": item.tombstoned_at.to_dict(),
+                }
+                for item in sorted(state["tombstones"].values(), key=lambda value: value.effect_id)
             ],
         }
         fd, temporary = tempfile.mkstemp(prefix=f".{self._path.name}.", dir=self._path.parent)
@@ -598,6 +764,9 @@ class WorkflowReconciler:
             current = self._store.records()["effects"].get(effect_id)
             if current is not None:
                 return current
+            admission = self._store.effect_admission(effect_id)
+            if admission.disposition is WorkflowEffectAdmissionDisposition.BACKPRESSURED:
+                raise WorkflowEffectCapacityError("Workflow effect admission is backpressured")
             item = WorkflowEffect(
                 effect_id, run_id, capability, payload, "", ReconcileState.AVAILABLE, 1, 0, self._now()
             )
@@ -628,6 +797,51 @@ class WorkflowReconciler:
                 and delivery.state not in {ReconcileState.SETTLED, ReconcileState.DEAD_LETTER}
             )
         )
+
+    def effects_requiring_owner_action(self) -> tuple[WorkflowEffect, ...]:
+        """Return immutable effects whose external outcome needs an operator decision."""
+        return tuple(
+            sorted(
+                (
+                    item
+                    for item in self._store.records()["effects"].values()
+                    if item.state is ReconcileState.OWNER_ACTION_REQUIRED
+                ),
+                key=lambda item: item.effect_id,
+            )
+        )
+
+    def require_owner_action(self, command: WorkflowEffectOwnerActionCommand) -> WorkflowEffect:
+        """Fence an in-doubt effect into an explicit owner-action terminal state."""
+        current = self._store.records()["effects"].get(command.effect_id)
+        if current is None:
+            raise KeyError(command.effect_id)
+        if current.state not in {ReconcileState.IN_DOUBT, ReconcileState.OWNER_ACTION_REQUIRED}:
+            raise RuntimeError("effect is not awaiting owner action")
+        ownership = self._claim(command.effect_id, current.capability, current.revision)
+        try:
+            return self._replace_effect(
+                current, ownership, state=ReconcileState.OWNER_ACTION_REQUIRED, reason=command.reason
+            )
+        finally:
+            self._ownership.release(ownership)
+
+    def acknowledge_owner_action(self, resolution: WorkflowEffectOwnerActionResolution) -> WorkflowEffect:
+        current = self._store.records()["effects"].get(resolution.effect_id)
+        if current is None:
+            raise KeyError(resolution.effect_id)
+        if current.state is not ReconcileState.OWNER_ACTION_REQUIRED:
+            raise RuntimeError("effect is not awaiting owner action")
+        ownership = self._claim(resolution.effect_id, current.capability, current.revision)
+        try:
+            return self._replace_effect(
+                current,
+                ownership,
+                state=ReconcileState.SETTLED if resolution.settled else ReconcileState.IN_DOUBT,
+                provider_receipt=resolution.provider_receipt,
+            )
+        finally:
+            self._ownership.release(ownership)
 
     def reconcile_effects(
         self,
@@ -758,31 +972,41 @@ class WorkflowReconciler:
         )
 
     def _replace_effect(self, item, ownership, **changes):
+        next_state = changes.get("state", item.state)
+        terminal_at = changes.get("terminal_at", item.terminal_at)
+        if next_state in {ReconcileState.SETTLED, ReconcileState.DEAD_LETTER} and terminal_at is None:
+            terminal_at = self._now()
         updated = WorkflowEffect(
             item.effect_id,
             item.run_id,
             item.capability,
             item.command_payload,
             changes.get("provider_receipt", item.provider_receipt),
-            changes.get("state", item.state),
+            next_state,
             item.revision + 1,
             changes.get("attempts", item.attempts),
             changes.get("next_eligible_at", item.next_eligible_at),
             changes.get("reason", item.reason),
+            terminal_at,
         )
         return self._store.commit_effect(updated, item.revision, ownership)
 
     def _replace_delivery(self, item, ownership, **changes):
+        next_state = changes.get("state", item.state)
+        terminal_at = changes.get("terminal_at", item.terminal_at)
+        if next_state in {ReconcileState.SETTLED, ReconcileState.DEAD_LETTER} and terminal_at is None:
+            terminal_at = self._now()
         updated = WorkflowTerminalDelivery(
             item.delivery_id,
             item.run_id,
             item.destination_id,
             item.outcome_payload,
-            changes.get("state", item.state),
+            next_state,
             item.revision + 1,
             changes.get("attempts", item.attempts),
             changes.get("next_eligible_at", item.next_eligible_at),
             changes.get("reason", item.reason),
+            terminal_at,
         )
         return self._store.commit_delivery(updated, item.revision, ownership)
 
@@ -809,15 +1033,16 @@ class WorkflowReconciler:
 def _strict_item(item, fields):
     if type(item) is not dict or set(item) != fields:
         raise ValueError("workflow reconciliation record shape is invalid")
-    for key in fields - {"revision", "attempts", "next_eligible_at"}:
+    for key in fields - {"revision", "attempts", "next_eligible_at", "terminal_at", "tombstoned_at"}:
         if type(item[key]) is not str:
             raise ValueError("workflow reconciliation string field is invalid")
-    if (
-        type(item["revision"]) is not int
-        or item["revision"] < 1
-        or type(item["attempts"]) is not int
-        or item["attempts"] < 0
-    ):
+    if item["terminal_at"] is not None and type(item["terminal_at"]) is not dict:
+        raise ValueError("workflow reconciliation terminal timestamp is invalid")
+    if "tombstoned_at" in fields and type(item["tombstoned_at"]) is not dict:
+        raise ValueError("workflow reconciliation tombstone timestamp is invalid")
+    if "revision" in fields and (type(item["revision"]) is not int or item["revision"] < 1):
+        raise ValueError("workflow reconciliation counter is invalid")
+    if "attempts" in fields and (type(item["attempts"]) is not int or item["attempts"] < 0):
         raise ValueError("workflow reconciliation counter is invalid")
 
 
@@ -833,6 +1058,7 @@ def _effect_dict(item):
         "attempts": item.attempts,
         "next_eligible_at": item.next_eligible_at.to_dict(),
         "reason": item.reason,
+        "terminal_at": None if item.terminal_at is None else item.terminal_at.to_dict(),
     }
 
 
@@ -847,6 +1073,7 @@ def _delivery_dict(item):
         "attempts": item.attempts,
         "next_eligible_at": item.next_eligible_at.to_dict(),
         "reason": item.reason,
+        "terminal_at": None if item.terminal_at is None else item.terminal_at.to_dict(),
     }
 
 

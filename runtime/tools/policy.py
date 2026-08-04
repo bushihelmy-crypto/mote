@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Optional
 
@@ -199,7 +200,7 @@ class DefaultToolCallPolicy:
             )
 
         if outcome.updated_args is not None:
-            if not isinstance(outcome.updated_args, dict):
+            if not isinstance(outcome.updated_args, Mapping):
                 trace.append(
                     ToolPolicyTraceEntry(
                         step="pre_tool_use_hook",
@@ -216,7 +217,7 @@ class DefaultToolCallPolicy:
             else:
                 rewritten_fields = tuple(sorted(set(arguments) | set(outcome.updated_args)))
                 arguments.clear()
-                arguments.update(outcome.updated_args)
+                arguments.update(dict(outcome.updated_args))
                 trace.append(
                     ToolPolicyTraceEntry(
                         step="pre_tool_use_hook",
@@ -225,12 +226,16 @@ class DefaultToolCallPolicy:
                     )
                 )
 
-        if outcome.behavior == "deny" or outcome.stop:
-            reason = outcome.system_message or outcome.stop_reason or "blocked before tool use"
+        if outcome.behavior == "deny" or outcome.stop is not None:
+            reason = (
+                outcome.system_message
+                or (outcome.stop.reason if outcome.stop is not None else "")
+                or "blocked before tool use"
+            )
             trace.append(
                 ToolPolicyTraceEntry(
                     step="pre_tool_use_hook",
-                    disposition="stop" if outcome.stop else "deny",
+                    disposition="stop" if outcome.stop is not None else "deny",
                     detail="hook denied call",
                 )
             )
@@ -238,7 +243,7 @@ class DefaultToolCallPolicy:
                 intent.identity.with_arguments(arguments),
                 arguments,
                 reason,
-                terminate=outcome.stop,
+                terminate=outcome.stop is not None,
                 trace=tuple(trace),
             )
 
@@ -580,16 +585,20 @@ class DefaultToolResultPolicy:
                     disposition="rewrite",
                 )
             )
-        if outcome.behavior == "deny" or outcome.stop:
-            reason = outcome.system_message or outcome.stop_reason or "tool result withheld by presentation policy"
+        if outcome.behavior == "deny" or outcome.stop is not None:
+            reason = (
+                outcome.system_message
+                or (outcome.stop.reason if outcome.stop is not None else "")
+                or "tool result withheld by presentation policy"
+            )
             trace.append(
                 ToolPolicyTraceEntry(
                     step="post_tool_use_hook",
-                    disposition="stop" if outcome.stop else "deny",
+                    disposition="stop" if outcome.stop is not None else "deny",
                     detail="hook withheld result",
                 )
             )
-            return f"[PostToolUse] {reason}", outcome.stop
+            return f"[PostToolUse] {reason}", outcome.stop is not None
         if outcome.additional_context:
             extra = "\n".join(outcome.additional_context)
             output = f"{output}\n{extra}" if output else extra

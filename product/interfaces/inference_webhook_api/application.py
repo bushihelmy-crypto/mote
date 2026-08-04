@@ -3,26 +3,26 @@
 from __future__ import annotations
 
 import json
-from typing import Protocol, cast
+from typing import Protocol
 
 from aiohttp import web
 from pydantic import ValidationError
 
 from mote.contracts.inference.provider_evidence import ProviderEvidence, ProviderEvidenceConflictError
 
-_VERIFIER = web.AppKey("provider_webhook_verifier", object)
-_SINK = web.AppKey("provider_webhook_sink", object)
 _MAX_BODY = 1024 * 1024
 
 
 class ProviderWebhookVerifier(Protocol):
-    async def verify(self, provider: str, event_id: str, signature: str, body: bytes) -> bool:
-        ...
+    async def verify(self, provider: str, event_id: str, signature: str, body: bytes) -> bool: ...
 
 
 class ProviderEvidenceSink(Protocol):
-    async def append(self, evidence: ProviderEvidence) -> bool:
-        ...
+    async def append(self, evidence: ProviderEvidence) -> bool: ...
+
+
+_VERIFIER = web.AppKey[ProviderWebhookVerifier]("provider_webhook_verifier")
+_SINK = web.AppKey[ProviderEvidenceSink]("provider_webhook_sink")
 
 
 async def _receive(request: web.Request) -> web.Response:
@@ -32,7 +32,7 @@ async def _receive(request: web.Request) -> web.Response:
     if request.content_length is not None and request.content_length > _MAX_BODY:
         return web.json_response({"error": "request_too_large"}, status=413)
     body = await request.read()
-    verifier = cast(ProviderWebhookVerifier, request.app[_VERIFIER])
+    verifier = request.app[_VERIFIER]
     if not event_id or not signature or not await verifier.verify(provider, event_id, signature, body):
         return web.json_response({"error": "unauthorized"}, status=401)
     try:
@@ -43,7 +43,7 @@ async def _receive(request: web.Request) -> web.Response:
     except (TypeError, ValueError, ValidationError, json.JSONDecodeError) as exc:
         return web.json_response({"error": "invalid_evidence", "message": str(exc)}, status=400)
     try:
-        inserted = await cast(ProviderEvidenceSink, request.app[_SINK]).append(evidence)
+        inserted = await request.app[_SINK].append(evidence)
     except ProviderEvidenceConflictError:
         return web.json_response({"error": "evidence_conflict"}, status=409)
     return web.json_response(

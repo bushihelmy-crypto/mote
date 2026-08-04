@@ -7,7 +7,8 @@ import pytest
 from mote.contracts.ports.surface.canvas_backend import CanvasBackendCapabilities
 from mote.contracts.surface import (
     CanvasDocument,
-    CanvasElement,
+    CanvasEllipse,
+    CanvasRectangle,
     SurfaceDescriptor,
     SurfaceFrame,
     SurfacePresentationMode,
@@ -24,7 +25,13 @@ class _Surface:
     )
 
     def __init__(self) -> None:
-        self.document = CanvasDocument(elements=[CanvasElement(id="first", kind="rect")])
+        self.document = CanvasDocument(
+            elements=[
+                CanvasRectangle(
+                    id="first",
+                )
+            ]
+        )
         self.sequence = 1
         self.sent = []
         self.detached = False
@@ -87,9 +94,7 @@ class _BackendSession:
         self.updated.set()
 
     async def snapshot_scene(self):
-        return self.scene.model_copy(
-            update={"elements": [*self.scene.elements, CanvasElement(id="human", kind="ellipse")]}
-        )
+        return self.scene.model_copy(update={"elements": [*self.scene.elements, CanvasEllipse(id="human")]})
 
     async def wait_closed(self):
         await self._closed.wait()
@@ -136,9 +141,7 @@ async def test_window_presenter_registry_synchronizes_canonical_scene():
         assert backend.session.editable is False
         backend.session.updated.clear()
         surface.publish(
-            surface.document.model_copy(
-                update={"elements": [*surface.document.elements, CanvasElement(id="agent", kind="rect")]}
-            )
+            surface.document.model_copy(update={"elements": [*surface.document.elements, CanvasRectangle(id="agent")]})
         )
         await asyncio.wait_for(backend.session.updated.wait(), timeout=1)
         assert [element.id for element in backend.session.scene.elements] == ["first", "human", "agent"]
@@ -161,7 +164,13 @@ async def test_registry_reuses_open_window_and_reopens_after_user_closes_it():
     await first.release()
 
     second_surface = _Surface()
-    second_surface.document = CanvasDocument(elements=[CanvasElement(id="second", kind="rect")])
+    second_surface.document = CanvasDocument(
+        elements=[
+            CanvasRectangle(
+                id="second",
+            )
+        ]
+    )
     second = await registry.present(second_surface)
 
     assert second is first

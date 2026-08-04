@@ -368,7 +368,7 @@ class DeviceUse(BaseTool):
             media.append(ToolMedia(kind="image", mime="image/png", artifact=artifact))
         return ToolResult(
             output="\n".join(lines),
-            media=media,
+            media=tuple(media),
             payload=json_tool_payload({"state_id": obs.state_id, "empty": obs.empty}),
         )
 

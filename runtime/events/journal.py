@@ -6,10 +6,11 @@ import hashlib
 import json
 import os
 import threading
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncIterator, Iterator, Mapping, Optional, Sequence, cast
+from typing import AsyncIterator, ContextManager, Iterator, Mapping, Optional, Protocol, Sequence, cast
 
 from mote.contracts.events.envelope import (
     CorrelationId,
@@ -50,6 +51,10 @@ class _ScanResult:
     report: VerificationReport
 
 
+class JournalCommitGuard(Protocol):
+    def guard(self) -> ContextManager[None]: ...
+
+
 @log_class(level="DEBUG", exclude={"path_for"})
 class LocalEventJournal:
     """Append-only JSONL journal owned by one Runtime process.
@@ -65,12 +70,14 @@ class LocalEventJournal:
         stream_id: StreamId,
         *,
         writer: DiskWriter | None = None,
+        commit_guard: JournalCommitGuard | None = None,
     ) -> None:
         self._path = Path(path)
         self._stream_id = StreamId(_validate_stream_id(stream_id))
         self._writer = writer or DiskWriter()
         self._states: dict[str, _StreamState] = {}
         self._commit_lock = threading.Lock()
+        self._commit_guard = commit_guard
 
     @property
     def writer(self) -> DiskWriter:
@@ -118,11 +125,13 @@ class LocalEventJournal:
             raise ValueError("one append cannot contain duplicate event IDs")
         self.path_for(stream)
         with self._commit_lock:
-            return self._append_sync(
-                stream,
-                batch,
-                expected_version=expected_version,
-            )
+            guard = self._commit_guard.guard() if self._commit_guard is not None else nullcontext()
+            with guard:
+                return self._append_sync(
+                    stream,
+                    batch,
+                    expected_version=expected_version,
+                )
 
     async def read(
         self,
@@ -522,6 +531,7 @@ def _fsync_directory(path: Path) -> None:
 
 
 __all__ = [
+    "JournalCommitGuard",
     "LocalEventJournal",
     "decode_event_record",
     "encode_event_record",

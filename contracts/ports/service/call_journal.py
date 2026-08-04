@@ -5,7 +5,13 @@ from __future__ import annotations
 from types import TracebackType
 from typing import Protocol
 
-from mote.contracts.service import PendingServiceCall, ServiceCallJournalRecord, ServiceCallRecovery
+from mote.contracts.service import (
+    PendingServiceCall,
+    ServiceCallJournalRecord,
+    ServiceCallRecovery,
+    ServiceCancelCommand,
+    ServiceCancelReceipt,
+)
 
 
 class ServiceCallJournal(Protocol):
@@ -19,7 +25,7 @@ class ServiceCallJournal(Protocol):
 
     async def pending_calls(self, *, after: str | None, limit: int) -> tuple[PendingServiceCall, ...]: ...
 
-    async def request_cancel(self, service_call_id: str) -> None: ...
+    async def request_cancel(self, command: ServiceCancelCommand) -> ServiceCancelReceipt: ...
 
     def cancellation_requested(self, service_call_id: str) -> bool: ...
 

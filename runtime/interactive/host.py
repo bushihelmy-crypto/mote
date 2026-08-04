@@ -40,7 +40,12 @@ from mote.contracts.runtime.errors import (
     ManagedRuntimeRevisionConflictError,
     ManagedRuntimeStateError,
 )
-from mote.contracts.runtime.handoff import RuntimeHandoffIntent, RuntimeHandoffRecovery, RuntimeHandoffResolution
+from mote.contracts.runtime.handoff import (
+    RuntimeHandoffIntent,
+    RuntimeHandoffRecovery,
+    RuntimeHandoffResolution,
+    RuntimeHandoffResolutionStatus,
+)
 from mote.contracts.runtime.lease import RuntimeLeasePolicy
 from mote.runtime.control.leases import InMemoryLeaseCoordinator, LeaseHandle
 from mote.runtime.telemetry.logging import log_call, logger
@@ -559,7 +564,7 @@ class RuntimeHost:
                 await journal.resolve(
                     RuntimeHandoffResolution(
                         handoff_id=handoff_id,
-                        status="recovered",
+                        status=RuntimeHandoffResolutionStatus.RECOVERED,
                         runtime_id=record.ref.runtime_id,
                         kind=record.ref.kind,
                         alias=record.ref.alias,
@@ -1178,7 +1183,11 @@ class RuntimeHost:
                 revision=access._record.revision,
             )
         outcome = access._outcome
-        status = outcome.status.value if outcome is not None else "failed"
+        status = (
+            RuntimeHandoffResolutionStatus(outcome.status.value)
+            if outcome is not None
+            else RuntimeHandoffResolutionStatus.FAILED
+        )
         try:
             await journal.resolve(
                 RuntimeHandoffResolution(
@@ -1209,7 +1218,7 @@ class RuntimeHost:
             await journal.resolve(
                 RuntimeHandoffResolution(
                     handoff_id=intent.handoff_id,
-                    status="failed",
+                    status=RuntimeHandoffResolutionStatus.FAILED,
                     runtime_id=access._record.ref.runtime_id,
                     kind=access._record.ref.kind,
                     alias=access._record.ref.alias,

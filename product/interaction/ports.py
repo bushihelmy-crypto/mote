@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional, Protocol, runtime_checkable
 
 from mote.contracts.events.envelope import JsonValue
@@ -39,11 +40,22 @@ if TYPE_CHECKING:  # avoid a runtime import cycle (view.events → common) — t
     from mote.product.presentation.events.events import ApprovalDecision
 
 
+class DriverControlDisposition(StrEnum):
+    ACCEPTED = "accepted"
+    ALREADY_PENDING = "already_pending"
+    IGNORED = "ignored"
+
+
+@dataclass(frozen=True, slots=True)
+class DriverControlReceipt:
+    disposition: DriverControlDisposition
+
+
 @dataclass(frozen=True)
 class DriverControlBinding:
-    interrupt: Callable[[], object]
+    interrupt: Callable[[], DriverControlReceipt]
     turn_running: Callable[[], bool]
-    steer: Callable[[str], object]
+    steer: Callable[[str], DriverControlReceipt]
 
 
 @runtime_checkable
@@ -103,11 +115,11 @@ class InputPort(Protocol):
         """
         ...
 
-    def signal_interrupt(self, ctx: object) -> None:
+    def signal_interrupt(self, ctx: object) -> DriverControlReceipt:
         """Cancel the in-flight turn (Ctrl+C / explicit cancel)."""
         ...
 
-    def submit_steer(self, ctx: object, text: str) -> None:
+    def submit_steer(self, ctx: object, text: str) -> DriverControlReceipt:
         """Queue *steering* input to fold into the **next** turn (§5.3).
 
         Turn-level steering, NOT a mid-turn interrupt: the text is captured now

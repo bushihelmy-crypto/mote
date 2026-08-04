@@ -290,16 +290,16 @@ class Canvas(BaseTool):
             output=output,
             payload=json_tool_payload(document.model_dump(mode="json")),
             media=(
-                [
+                (
                     ToolMedia(
                         kind="image",
                         mime=preview_export.mime_type,
                         artifact=preview_artifact,
                         ref=local_paths[preview_export.representation],
-                    )
-                ]
+                    ),
+                )
                 if local_paths
-                else []
+                else ()
             ),
         )
 

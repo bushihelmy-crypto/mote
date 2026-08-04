@@ -1,37 +1,49 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "boundaries": [
     {
-      "name": "heterogeneous-telemetry-core",
+      "name": "heterogeneous-telemetry-binding",
       "file": "runtime/events/telemetry.py",
-      "source": "cross-layer telemetry publishers",
-      "validation": "TypedTelemetryBinding.erase applies its TypeGuard before typed delivery",
+      "qualified_symbol": "_TypedTelemetryBinding.erase",
+      "category": "heterogeneous-erasure",
+      "source": "typed cross-layer telemetry subscriptions",
+      "validation": "nominal _TelemetryTypeToken is created with the event type and checked before dispatch",
+      "validation_test": "ztest/events/test_telemetry.py",
       "owner": "runtime-observability",
-      "review_after": "2027-07-30"
+      "review_after": "2027-08-04"
     },
     {
-      "name": "heterogeneous-tool-definition-registry",
-      "file": "runtime/tools/provider.py",
-      "source": "dynamic and mixed capability definitions",
-      "validation": "toolset definition materialization validates protocol and unique names",
-      "owner": "runtime-tools",
-      "review_after": "2027-07-30"
-    },
-    {
-      "name": "heterogeneous-role-component-registry",
+      "name": "heterogeneous-component-slots",
       "file": "runtime/agent/component_graph.py",
-      "source": "Role component specifications with heterogeneous value types",
-      "validation": "Immutable ComponentKey[T] identities control every get, peek, seed, and builder dependency edge",
+      "qualified_symbol": "ComponentGraph.get",
+      "category": "heterogeneous-erasure",
+      "source": "typed Role component specifications",
+      "validation": "nominal ComponentKey token controls registration and retrieval from the private heterogeneous slot map",
+      "validation_test": "ztest/roles/test_component_graph.py",
       "owner": "runtime-agent",
-      "review_after": "2027-07-30"
+      "review_after": "2027-08-04"
     },
     {
-      "name": "open-view-event-consumer-dispatch",
-      "file": "product/presentation/consumer.py",
-      "source": "Extensible ViewEvent kinds implemented by host-specific on_<kind> handlers",
-      "validation": "Input is statically ViewEvent and reflective lookup is narrowed to a callable ViewEventHandler before invocation",
-      "owner": "product-presentation",
-      "review_after": "2027-07-30"
+      "name": "provider-sdk-close-lifecycle",
+      "file": "runtime/models/clients/base.py",
+      "qualified_symbol": "BaseLLM.aclose",
+      "category": "external-sdk-lifecycle",
+      "source": "provider SDK client close methods with untyped sync/async return contracts",
+      "validation": "adapter owns the SDK object, deduplicates instances, invokes only the SDK close method and awaits only an Awaitable",
+      "validation_test": "ztest/router/llm/test_gateway_client.py",
+      "owner": "runtime-model-clients",
+      "review_after": "2027-08-04"
+    },
+    {
+      "name": "langfuse-sdk-close-lifecycle",
+      "file": "runtime/telemetry/observability/langfuse_integration.py",
+      "qualified_symbol": "LangfuseRuntime.aclose",
+      "category": "external-sdk-lifecycle",
+      "source": "Langfuse SDK flush/shutdown methods with version-dependent sync/async contracts",
+      "validation": "adapter owns the SDK client and normalizes flush/shutdown before releasing the sole client reference",
+      "validation_test": "ztest/events/test_trace.py",
+      "owner": "runtime-observability",
+      "review_after": "2027-08-04"
     }
   ]
 }

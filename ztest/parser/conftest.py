@@ -40,7 +40,7 @@ class FakeThinkEngine:
         tool_calls: Optional[list[CanonicalToolCall]] = None,
         done: bool = True,
     ):
-        self.result = InferenceResult(content=content, tool_calls=tool_calls)
+        self.result = InferenceResult(content=content, tool_calls=None if tool_calls is None else tuple(tool_calls))
         self.done = done
         self.join_calls = 0
 
@@ -107,8 +107,21 @@ def executed_command(
 
 
 async def collect(channel, inference_engine, valid_names: set[str]) -> list[dict]:
-    """Drain ``channel.iter_commands`` into a list."""
-    return [cmd async for cmd in channel.iter_commands(inference_engine.result, valid_names)]
+    """Project the canonical ModelTurn tool actions into assertion records."""
+    from mote.contracts.model.turn import ToolCallAction
+
+    turn = await channel.model_turn(inference_engine.result)
+    return [
+        {
+            "id": action.action_id or None,
+            "command_name": action.name,
+            "args": action.arguments,
+            "status": "running",
+            "error_msg": "",
+        }
+        for action in turn.actions
+        if isinstance(action, ToolCallAction) and (not valid_names or action.name in valid_names)
+    ]
 
 
 async def apply_projection(memory: FakeMemory, projection) -> None:

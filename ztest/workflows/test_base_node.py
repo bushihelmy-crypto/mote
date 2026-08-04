@@ -135,7 +135,7 @@ def test_get_params_class_docstring():
 async def test_base_node_class_in_graph():
     """Register a BaseNode subclass (type) and run the compiled graph."""
     g = WorkflowBuilder("test", state_schema=BaseNodeState)
-    g.add_node("doubler", Doubler)
+    g.add_node("doubler", Doubler, implementation_id="test.base-node.doubler/v1")
     g.add_edge(START, "doubler")
     g.add_edge("doubler", END)
 
@@ -145,7 +145,7 @@ async def test_base_node_class_in_graph():
 async def test_base_node_instance_in_graph():
     """Register a BaseNode instance and run."""
     g = WorkflowBuilder("test", state_schema=BaseNodeState)
-    g.add_node("doubler", Doubler())
+    g.add_node("doubler", Doubler(), implementation_id="test.base-node.doubler/v1")
     g.add_edge(START, "doubler")
     g.add_edge("doubler", END)
 
@@ -168,7 +168,7 @@ async def test_plain_function_backward_compat():
         return Stage(submit=submit())
 
     g = WorkflowBuilder("test", state_schema=BaseNodeState)
-    g.add_node("triple", triple)
+    g.add_node("triple", triple, implementation_id="test.base-node.triple/v1")
     g.add_edge(START, "triple")
     g.add_edge("triple", END)
 
@@ -178,7 +178,7 @@ async def test_plain_function_backward_compat():
 def test_stage_summary_uses_base_node_description():
     """BaseNode description appears in stage_summary."""
     g = WorkflowBuilder("test", state_schema=BaseNodeState)
-    g.add_node("doubler", Doubler)
+    g.add_node("doubler", Doubler, implementation_id="test.base-node.doubler/v1")
     g.add_edge(START, "doubler")
     g.add_edge("doubler", END)
     g.compile()  # validate
@@ -394,6 +394,7 @@ async def test_runtime_type_mismatch_raises():
         "a",
         lambda state: None,  # placeholder — won't reach fn call
         params={"x": {"from": "$input.x", "desc": "val", "type": int}},
+        implementation_id="test.base-node.runtime-mismatch/v1",
     )
     g2.add_edge(START, "a")
     g2.add_edge("a", END)
@@ -412,7 +413,7 @@ async def test_runtime_type_mismatch_raises():
 async def test_runtime_type_ok_passes():
     """state.x = 42 + param type int → no error."""
     g = WorkflowBuilder("test", state_schema=BaseNodeState)
-    g.add_node("typed", TypedNode)
+    g.add_node("typed", TypedNode, implementation_id="test.base-node.typed/v1")
     g.add_edge(START, "typed")
     g.add_edge("typed", END)
 
@@ -434,6 +435,7 @@ async def test_runtime_none_value_skipped():
         "a",
         lambda state: None,
         params={"x": {"from": "$input.x", "desc": "val", "type": int}},
+        implementation_id="test.base-node.null/v1",
     )
     g.add_edge(START, "a")
     g.add_edge("a", END)
@@ -462,5 +464,5 @@ async def test_runtime_generic_type_validated():
     g.add_edge("a", END)
 
     state = ListState(items=["hello", 123])  # 123 is not str
-    with pytest.raises(GraphParamTypeError, match="expected list, got list"):
+    with pytest.raises(GraphParamTypeError, match=r"expected list\[str\], got list"):
         _validate_node_params_runtime(g, "a", state)

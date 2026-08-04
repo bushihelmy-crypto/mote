@@ -137,10 +137,27 @@ class SubscriptionCheckpoint:
     identity: SubscriptionIdentity
     stream_id: StreamId
     sequence: int
+    owner_id: str
+    generation: int
+    fencing_token: int
 
     def __post_init__(self) -> None:
         if type(self.sequence) is not int or self.sequence < 0:
             raise ValueError("subscription checkpoint sequence is invalid")
+        if type(self.owner_id) is not str or not self.owner_id:
+            raise ValueError("subscription checkpoint owner is invalid")
+        if type(self.generation) is not int or self.generation < 1:
+            raise ValueError("subscription checkpoint generation is invalid")
+        if type(self.fencing_token) is not int or self.fencing_token < 1:
+            raise ValueError("subscription checkpoint fence is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionOwnerLease:
+    identity: SubscriptionIdentity
+    owner_id: str
+    generation: int
+    fencing_token: int
 
 
 @dataclass(frozen=True)
@@ -190,6 +207,8 @@ class SubscriptionStateStore(Protocol):
     ``quarantine`` must persist the dead letter and its checkpoint atomically.
     """
 
+    async def claim_owner(self, identity: SubscriptionIdentity, owner_id: str) -> SubscriptionOwnerLease: ...
+
     async def load(
         self,
         identity: SubscriptionIdentity,
@@ -229,6 +248,7 @@ __all__ = [
     "RetryPolicy",
     "SubscriptionCheckpoint",
     "SubscriptionIdentity",
+    "SubscriptionOwnerLease",
     "SubscriptionSpec",
     "SubscriptionStateStore",
 ]

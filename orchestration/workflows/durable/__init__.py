@@ -13,6 +13,8 @@ from .model import (
 from .reconciliation import (
     ReconcileState,
     WorkflowEffect,
+    WorkflowEffectOwnerActionCommand,
+    WorkflowEffectOwnerActionResolution,
     WorkflowGovernanceCancellation,
     WorkflowGovernanceCancellationInbox,
     WorkflowGovernanceCancellationReconciler,
@@ -36,6 +38,8 @@ __all__ = [
     "WorkflowRunStore",
     "ReconcileState",
     "WorkflowEffect",
+    "WorkflowEffectOwnerActionCommand",
+    "WorkflowEffectOwnerActionResolution",
     "WorkflowGovernanceCancellation",
     "WorkflowGovernanceCancellationInbox",
     "WorkflowGovernanceCancellationReconciler",

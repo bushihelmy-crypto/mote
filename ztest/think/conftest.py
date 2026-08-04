@@ -4,7 +4,7 @@
 
 The fixtures keep ``InferenceEngine._run`` fully offline and deterministic:
 
-- :class:`FakeLLM` is a duck-typed :class:`~mote.contracts.ports.LLMClient`.
+- :class:`FakeLLM` supplies the narrow inference behavior exercised here.
   ``aask`` returns the next queued reply (or a constant); ``aask_tool`` returns a
   pre-built :class:`~mote.contracts.model.LLMResponse`. Both record
   their calls so tests can assert which channel fired.
@@ -77,7 +77,7 @@ class _FakeGateway:
 
 
 class FakeLLM:
-    """Duck-typed LLMClient for think-engine tests."""
+    """Narrow fake for think-engine tests."""
 
     def __init__(
         self,

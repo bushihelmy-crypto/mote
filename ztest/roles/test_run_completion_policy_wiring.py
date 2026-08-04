@@ -6,6 +6,7 @@ from mote.contracts.output.policy import RunCompletionPolicyContribution
 from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicyExtensionSpec
 from mote.kernel.output import text_output_contract
 from mote.product.agents.factory import CodingAgentFactory
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent import AgentWiring, Role
 from mote.runtime.models.clients.context import Context
 from mote.ztest.model_fakes import offline_config
@@ -24,6 +25,7 @@ def test_run_completion_policy_extension_factory_runs_once_per_role():
         return extension
 
     dependencies = CodingAgentFactory(
+        model_checkpoint_policy=approved_model_checkpoint_policy(),
         run_completion_policy_extensions=(RunCompletionPolicyExtensionSpec("organization", factory),),
     ).dependencies(deps=None, output_contract=text_output_contract())
     first = Role(

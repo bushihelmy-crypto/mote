@@ -41,10 +41,12 @@ class ServiceCallState(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     IN_DOUBT = "in_doubt"
+    CANCELLATION_IN_DOUBT = "cancellation_in_doubt"
+    OWNER_ACTION_REQUIRED = "owner_action_required"
 
 
 class ServiceInvocation(_FrozenContract):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     service_call_id: str = Field(min_length=1)
     route_id: str = Field(min_length=1)
     capability: str = Field(min_length=1)
@@ -68,7 +70,7 @@ class ServiceInvocation(_FrozenContract):
 
 
 class ServiceResponse(_FrozenContract):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     value: HostedServiceResult
     provider_request_id: str | None = None
     cost_usd: Decimal = Decimal("0")
@@ -77,7 +79,7 @@ class ServiceResponse(_FrozenContract):
 class ServiceReceipt(_FrozenContract):
     """Secret-free durable handle for an accepted remote operation."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     provider_operation_id: str = Field(min_length=1)
     state: dict[str, JsonValue] = Field(default_factory=dict)
     poll_after_seconds: float = Field(default=1.0, ge=0.0)
@@ -132,7 +134,7 @@ class ServiceEndpointDescriptor(_FrozenContract):
 
 
 class ServicePlan(_FrozenContract):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     plan_id: str = Field(min_length=1)
     service_call_id: str = Field(min_length=1)
     config_revision: str = Field(min_length=1)
@@ -143,7 +145,7 @@ class ServicePlan(_FrozenContract):
 
 
 class ResolvedServiceResponse(_FrozenContract):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     response: ServiceResponse
     endpoint_id: str = Field(min_length=1)
     endpoint_fingerprint: str = Field(min_length=1)
@@ -156,9 +158,33 @@ class ResolvedServiceResponse(_FrozenContract):
 
 
 class ServiceResumeHandle(_FrozenContract):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[3] = 3
     service_call_id: str = Field(min_length=1)
     stream_revision: int = Field(ge=1)
+
+
+class ServiceCallOwnerEpoch(_FrozenContract):
+    schema_version: Literal[3] = 3
+    service_call_id: str = Field(min_length=1)
+    owner_id: str = Field(min_length=1)
+    generation: int = Field(ge=1)
+    fencing_token: int = Field(ge=1)
+    revision: int = Field(ge=1)
+
+
+class ServiceCancelCommand(_FrozenContract):
+    schema_version: Literal[3] = 3
+    command_id: str = Field(min_length=1)
+    service_call_id: str = Field(min_length=1)
+    authority_id: str = Field(min_length=1)
+    expected_stream_revision: int = Field(ge=1)
+
+
+class ServiceCancelReceipt(_FrozenContract):
+    schema_version: Literal[3] = 3
+    command_id: str = Field(min_length=1)
+    service_call_id: str = Field(min_length=1)
+    command_revision: int = Field(ge=1)
 
 
 __all__ = [
@@ -177,4 +203,7 @@ __all__ = [
     "ServiceReceipt",
     "ServiceResponse",
     "ServiceResumeHandle",
+    "ServiceCallOwnerEpoch",
+    "ServiceCancelCommand",
+    "ServiceCancelReceipt",
 ]

@@ -9,20 +9,20 @@ from mote.contracts.model.failover import EndpointDescriptor
 from mote.contracts.model.invocation import ModelInvocation, ResolvedModelResponse
 from mote.contracts.model.topology import RouteId
 from mote.contracts.ports.artifact.store import ArtifactResolver
+from mote.contracts.ports.model.recovery import ModelRecoveryInspection
 from mote.contracts.ports.model.request_transformer import ModelRequestTransformer
 from mote.contracts.ports.session.facts import SessionFactSink
 
 
 @runtime_checkable
 class ModelGateway(Protocol):
-    def supports_route(self, route_id: RouteId) -> bool:
-        ...
+    def inspect_recovery(self, model_call_id: str) -> ModelRecoveryInspection: ...
 
-    def route_profile(self, route_id: RouteId) -> EndpointDescriptor | None:
-        ...
+    def supports_route(self, route_id: RouteId) -> bool: ...
 
-    def route_profiles(self, route_id: RouteId) -> tuple[EndpointDescriptor, ...]:
-        ...
+    def route_profile(self, route_id: RouteId) -> EndpointDescriptor | None: ...
+
+    def route_profiles(self, route_id: RouteId) -> tuple[EndpointDescriptor, ...]: ...
 
     async def execute(
         self,
@@ -32,8 +32,7 @@ class ModelGateway(Protocol):
         stream: bool = False,
         session_fact_sink: SessionFactSink | None = None,
         artifact_resolver: ArtifactResolver | None = None,
-    ) -> ResolvedModelResponse:
-        ...
+    ) -> ResolvedModelResponse: ...
 
     async def resume(
         self,
@@ -43,8 +42,7 @@ class ModelGateway(Protocol):
         stream: bool = False,
         session_fact_sink: SessionFactSink | None = None,
         artifact_resolver: ArtifactResolver | None = None,
-    ) -> ResolvedModelResponse:
-        ...
+    ) -> ResolvedModelResponse: ...
 
 
 @dataclass(frozen=True)

@@ -20,6 +20,7 @@ contract holds for the whole toolbox:
 ``build_prose_view()`` renders the same data as a human-readable catalogue for
 eyeballing — the "generated view" the design calls for.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -27,16 +28,13 @@ import inspect
 import pytest
 
 from mote.kernel.tools.docstrings import first_line
+from mote.product.toolsets import builtin_tool_catalog
 from mote.runtime.tools.definitions import native_definition
-from mote.runtime.tools.tool_registry import registry
 
 
 def _all_tool_classes() -> list[type]:
-    """Every registered tool class (deduped by primary name), discovery forced."""
-    from mote.product.toolsets import discover_builtin_tools
-
-    discover_builtin_tools()
-    return sorted(registry.all_tools().values(), key=lambda c: c.name)
+    """Every Product-owned built-in tool class from one immutable catalog."""
+    return sorted(builtin_tool_catalog().all_tools().values(), key=lambda c: c.name)
 
 
 def build_prose_view() -> str:

@@ -43,6 +43,7 @@ from typing import List, Optional
 
 from mote.contracts.async_work.codec import decode_async_work_observation, encode_async_work_observation
 from mote.product.presentation.events import events as ev
+from mote.product.presentation.events.catalog import ViewEventDisposition, adapter_disposition
 from mote.product.presentation.wire_types import WireJsonValue, WireObject, to_wire_json
 from mote.product.session_hosting.prompt_broker import PromptHandle
 
@@ -198,9 +199,10 @@ def to_agui_events(event: ev.ViewEvent, state: AguiWireState) -> list[WireObject
     correlation counters (unavoidable — AG-UI needs stable per-block ids that
     mote's block deltas don't carry). Unknown / display-only kinds → ``[]``.
     """
-    handler = _DISPATCH.get(event.kind)
-    if handler is None:
+    disposition = adapter_disposition(event, frozenset(_DISPATCH))
+    if disposition is ViewEventDisposition.INTENTIONALLY_OMITTED:
         return []
+    handler = _DISPATCH[event.kind]
     return handler(event, state)
 
 

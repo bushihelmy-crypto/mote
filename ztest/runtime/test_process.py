@@ -7,16 +7,30 @@ import sys
 import pytest
 
 import mote.runtime.process as process_module
+from mote.contracts.tool.identity import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity
 from mote.runtime.process import (
     AuthorizedShellIntent,
     FixedExecutableBinding,
     ProcessDisposition,
     ProcessResult,
+    resolve_fixed_executable,
     run_authorized_shell,
-    run_fixed_argv,
     run_verified_fixed_argv,
 )
 from mote.runtime.tools.execution_context import AuthorizedToolInvocation, bind_authorized_invocation
+
+
+def _authorization(command: str, generation: int) -> AuthorizedToolInvocation:
+    identity = ToolInvocationIdentity(
+        ToolInvocationId("process-test"),
+        ToolAttemptOrdinal(1),
+        "bash/v1",
+        1,
+        "sha256-test",
+        "test-owner",
+        "test-run",
+    )
+    return AuthorizedToolInvocation(identity, "Bash", {"command": command}, generation)
 
 
 @pytest.mark.asyncio
@@ -57,7 +71,9 @@ class _PassthroughSandbox:
 @pytest.mark.asyncio
 async def test_fixed_argv_does_not_expand_shell_syntax(tmp_path) -> None:
     marker = tmp_path / "must-not-exist"
-    result = await run_fixed_argv((sys.executable, "-c", "import sys; print(sys.argv[1])", f"> {marker}"))
+    result = await run_verified_fixed_argv(
+        resolve_fixed_executable(sys.executable), ("-c", "import sys; print(sys.argv[1])", f"> {marker}")
+    )
 
     assert result.disposition is ProcessDisposition.EXITED
     assert result.stdout == f"> {marker}"
@@ -66,8 +82,9 @@ async def test_fixed_argv_does_not_expand_shell_syntax(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_fixed_argv_enforces_output_bound() -> None:
-    result = await run_fixed_argv(
-        (sys.executable, "-c", "print('x' * 10000)"),
+    result = await run_verified_fixed_argv(
+        resolve_fixed_executable(sys.executable),
+        ("-c", "print('x' * 10000)"),
         max_output_bytes=32,
     )
 
@@ -77,8 +94,9 @@ async def test_fixed_argv_enforces_output_bound() -> None:
 
 @pytest.mark.asyncio
 async def test_fixed_argv_invalid_utf8_is_typed() -> None:
-    result = await run_fixed_argv(
-        (sys.executable, "-c", "import os; os.write(1, b'\\xff')"),
+    result = await run_verified_fixed_argv(
+        resolve_fixed_executable(sys.executable),
+        ("-c", "import os; os.write(1, b'\\xff')"),
         max_output_bytes=32,
     )
 
@@ -92,7 +110,7 @@ async def test_fast_output_process_does_not_stall_after_exit() -> None:
     script = f"import sys; sys.stdout.write('x' * {payload_size})"
 
     result = await asyncio.wait_for(
-        run_fixed_argv((sys.executable, "-c", script), timeout=1.0),
+        run_verified_fixed_argv(resolve_fixed_executable(sys.executable), ("-c", script), timeout=1.0),
         timeout=2.0,
     )
 
@@ -104,7 +122,7 @@ async def test_fast_output_process_does_not_stall_after_exit() -> None:
 @pytest.mark.asyncio
 async def test_shell_timeout_is_typed_and_keeps_partial_output() -> None:
     command = "echo started; sleep 10"
-    with bind_authorized_invocation(AuthorizedToolInvocation("Bash", {"command": command}, 1)):
+    with bind_authorized_invocation(_authorization(command, 1)):
         result = await run_authorized_shell(
             AuthorizedShellIntent(command, "Bash", authorization_generation=1),
             sandbox=_PassthroughSandbox(),
@@ -118,7 +136,7 @@ async def test_shell_timeout_is_typed_and_keeps_partial_output() -> None:
 @pytest.mark.asyncio
 async def test_user_shell_requires_sandbox() -> None:
     command = "echo unsafe"
-    with bind_authorized_invocation(AuthorizedToolInvocation("Bash", {"command": command}, 1)):
+    with bind_authorized_invocation(_authorization(command, 1)):
         result = await run_authorized_shell(
             AuthorizedShellIntent(command, "Bash", authorization_generation=1),
             sandbox=None,
@@ -129,7 +147,7 @@ async def test_user_shell_requires_sandbox() -> None:
 
 @pytest.mark.asyncio
 async def test_stale_shell_authorization_is_rejected() -> None:
-    with bind_authorized_invocation(AuthorizedToolInvocation("Bash", {"command": "echo old"}, 2)):
+    with bind_authorized_invocation(_authorization("echo old", 2)):
         with pytest.raises(PermissionError, match="active authorization"):
             await run_authorized_shell(
                 AuthorizedShellIntent("echo old", "Bash", authorization_generation=1),

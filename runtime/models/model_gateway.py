@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from mote.contracts.artifact import ArtifactResolutionPolicy, ResolvedArtifact
+from mote.contracts.events.envelope import JsonValue
 from mote.contracts.events.model import (
     ModelAttemptAdmissionRejectedEvent,
     ModelAttemptFinishedEvent,
@@ -47,7 +48,9 @@ from mote.contracts.model.failover import (
     Retryability,
 )
 from mote.contracts.model.invocation import (
+    CanonicalModelOutput,
     CanonicalModelResponse,
+    GenerateOutput,
     ImageDescriptionInput,
     ModelInvocation,
     ModelUsage,
@@ -63,9 +66,12 @@ from mote.contracts.model.model_journal import (
     ModelDecisionRecord,
 )
 from mote.contracts.model.operations import ModelOperation
+from mote.contracts.model.topology import RouteId
 from mote.contracts.model.topology_codec import encode_route_id
 from mote.contracts.ports.artifact.store import ArtifactResolver
+from mote.contracts.ports.model.artifact import ModelResponseArtifactPublisher
 from mote.contracts.ports.model.call_journal import ModelCallJournal
+from mote.contracts.ports.model.recovery import ModelRecoveryDisposition, ModelRecoveryInspection
 from mote.contracts.ports.model.request_transformer import ModelRequestTransformer
 from mote.contracts.ports.session.facts import SessionFactSink
 from mote.runtime.events.context import observe_event, observe_event_sync
@@ -127,10 +133,50 @@ class RuntimeModelGateway:
         cost_tracker: CostTracker | None = None,
         admission_controller: ResourceAdmissionController | None = None,
         model_call_journal: ModelCallJournal | None = None,
+        response_artifact_publisher: ModelResponseArtifactPublisher | None = None,
     ) -> None:
         self._cost_tracker = cost_tracker
         self._admission_controller = admission_controller or ResourceAdmissionController()
         self._model_call_journal = model_call_journal
+        self._response_artifact_publisher = response_artifact_publisher
+
+    def inspect_recovery(self, model_call_id: str) -> ModelRecoveryInspection:
+        if not model_call_id:
+            raise ValueError("ModelCall recovery requires an identity")
+        journal = self._model_call_journal
+        if journal is None:
+            return ModelRecoveryInspection(model_call_id, ModelRecoveryDisposition.ABSENT)
+        try:
+            if not journal.records(model_call_id):
+                return ModelRecoveryInspection(model_call_id, ModelRecoveryDisposition.ABSENT)
+            recovery = journal.recover(model_call_id)
+        except Exception as exc:
+            return ModelRecoveryInspection(
+                model_call_id,
+                ModelRecoveryDisposition.CORRUPT,
+                detail=type(exc).__name__,
+            )
+        if recovery.model_call_id != model_call_id:
+            return ModelRecoveryInspection(model_call_id, ModelRecoveryDisposition.IDENTITY_MISMATCH)
+        if recovery.state is ModelCallState.IN_DOUBT:
+            disposition = ModelRecoveryDisposition.IN_DOUBT
+        elif recovery.state in {ModelCallState.PLANNED, ModelCallState.RUNNING}:
+            disposition = ModelRecoveryDisposition.RECOVERABLE
+        else:
+            disposition = ModelRecoveryDisposition.TERMINAL
+        return ModelRecoveryInspection(model_call_id, disposition, recovery)
+
+    async def _journal_output(self, output: CanonicalModelOutput) -> CanonicalModelOutput:
+        if not isinstance(output, GenerateOutput):
+            return output
+        content = output.content.encode("utf-8")
+        if len(content) <= 64 * 1024:
+            return output
+        publisher = self._response_artifact_publisher
+        if publisher is None:
+            raise RuntimeError("oversized Model response requires the Product Artifact publisher")
+        ref = await publisher(content, "text/plain", "model-response.txt")
+        return output.model_copy(update={"content": "", "content_artifact": ref})
 
     async def execute_generation(
         self,
@@ -308,9 +354,8 @@ class RuntimeModelGateway:
                 wire_attempts=summary.wire_attempts_used,
                 usage=self._usage_from_summary(summary),
                 cost_usd=summary.known_cost_usd,
-                summary=summary,
                 accepted_response=CanonicalModelResponse(
-                    output=result.output,
+                    output=await self._journal_output(result.output),
                     usage=result.usage,
                     cost_usd=result.cost_usd,
                 ),
@@ -334,7 +379,6 @@ class RuntimeModelGateway:
                     wire_attempts=summary.wire_attempts_used,
                     usage=self._usage_from_summary(summary),
                     cost_usd=summary.known_cost_usd,
-                    summary=summary,
                 )
                 await commit_terminal(terminal)
                 await self._publish_finished(terminal, session_fact_sink)
@@ -355,7 +399,6 @@ class RuntimeModelGateway:
                     usage=self._usage_from_summary(summary),
                     cost_usd=summary.known_cost_usd,
                     failure=failure,
-                    summary=summary,
                 )
                 await commit_terminal(terminal)
                 if isinstance(exc, MoteError):
@@ -964,7 +1007,7 @@ class RuntimeModelGateway:
         record: ModelAttemptFinishedRecord,
         started_at: float,
         *,
-        output: object = None,
+        output: JsonValue = None,
     ) -> None:
         await observe_event(
             ModelAttemptFinishedEvent(
@@ -1080,7 +1123,6 @@ class RuntimeModelGateway:
             wire_attempts=terminal.wire_attempts,
             usage=terminal.usage.model_dump(mode="json"),
             cost_usd=float(terminal.cost_usd),
-            summary=summary.model_dump(mode="json"),
         )
         await observe_event(event)
         if sink is not None:
@@ -1119,8 +1161,7 @@ class RuntimeModelGateway:
             provider=terminal.provider or "unknown",
             transport=terminal.transport or "unknown",
             model_call_id=recovery.model_call_id,
-            successful_attempt_id=terminal.successful_attempt_id or "",
-            summary=terminal.summary,
+            successful_attempt_id=terminal.successful_attempt_id,
         )
 
     def _resume_plan(
@@ -1234,10 +1275,10 @@ class GenerationBoundRuntimeModelGateway:
     def topology_revision(self) -> str:
         return self._generation.revision
 
-    def supports_route(self, route_id) -> bool:
+    def supports_route(self, route_id: RouteId) -> bool:
         return self._generation.planner.snapshot.group_for_route(route_id) is not None
 
-    def route_profile(self, route_id) -> EndpointDescriptor | None:
+    def route_profile(self, route_id: RouteId) -> EndpointDescriptor | None:
         snapshot = self._generation.planner.snapshot
         group = snapshot.group_for_route(route_id)
         if group is None or not group.endpoint_ids:
@@ -1261,7 +1302,7 @@ class GenerationBoundRuntimeModelGateway:
             )
         return min(profiles, key=lambda endpoint: endpoint.endpoint_id)
 
-    def route_profiles(self, route_id) -> tuple[EndpointDescriptor, ...]:
+    def route_profiles(self, route_id: RouteId) -> tuple[EndpointDescriptor, ...]:
         snapshot = self._generation.planner.snapshot
         group = snapshot.group_for_route(route_id)
         if group is None:
@@ -1270,20 +1311,45 @@ class GenerationBoundRuntimeModelGateway:
             endpoint for endpoint_id in group.endpoint_ids if (endpoint := snapshot.endpoint(endpoint_id)) is not None
         )
 
-    async def execute(self, invocation: ModelInvocation, **kwargs) -> ResolvedModelResponse:
+    def inspect_recovery(self, model_call_id: str) -> ModelRecoveryInspection:
+        return self._executor.inspect_recovery(model_call_id)
+
+    async def execute(
+        self,
+        invocation: ModelInvocation,
+        *,
+        request_transformer: ModelRequestTransformer | None = None,
+        stream: bool = False,
+        session_fact_sink: SessionFactSink | None = None,
+        artifact_resolver: ArtifactResolver | None = None,
+    ) -> ResolvedModelResponse:
         return await self._executor.execute_generation(
             self._generation,
             invocation,
+            request_transformer=request_transformer,
+            stream=stream,
+            session_fact_sink=session_fact_sink,
+            artifact_resolver=artifact_resolver,
             runtime_generation_id=self._runtime_generation_id,
-            **kwargs,
         )
 
-    async def resume(self, invocation: ModelInvocation, **kwargs) -> ResolvedModelResponse:
+    async def resume(
+        self,
+        invocation: ModelInvocation,
+        *,
+        request_transformer: ModelRequestTransformer | None = None,
+        stream: bool = False,
+        session_fact_sink: SessionFactSink | None = None,
+        artifact_resolver: ArtifactResolver | None = None,
+    ) -> ResolvedModelResponse:
         return await self._executor.resume_generation(
             self._generation,
             invocation,
+            request_transformer=request_transformer,
+            stream=stream,
+            session_fact_sink=session_fact_sink,
+            artifact_resolver=artifact_resolver,
             runtime_generation_id=self._runtime_generation_id,
-            **kwargs,
         )
 
 

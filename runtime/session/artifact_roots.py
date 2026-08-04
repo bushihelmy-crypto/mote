@@ -30,7 +30,7 @@ class SessionFileOpsArtifactRoots:
         roots: dict[str, ArtifactContentRef] = {}
         for operations in self._operations():
             for ref in operations.artifact_roots():
-                roots[ref.digest] = ref
+                roots[str(ref.identity.digest)] = ref
         return tuple(roots[digest] for digest in sorted(roots))
 
     def prune_artifact_metadata(self, reachable: Sequence[ArtifactContentRef]) -> None:

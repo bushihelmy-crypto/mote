@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from mote.contracts.async_work.command import CancelLocalBackgroundTask, LocalCancelReceipt
 from mote.contracts.async_work.identity import LocalBackgroundTaskReference
-from mote.contracts.ports.task.operations import BackgroundMessageSink, BackgroundTaskBuildContext, BackgroundWakeReason
+from mote.contracts.ports.task.operations import (
+    BackgroundMessageSink,
+    BackgroundTaskBuildContext,
+    BackgroundWakeReason,
+    LocalAsyncWorkAdapter,
+)
 from mote.contracts.session.identity import SessionId
 from mote.contracts.task.lifecycle import BackgroundTaskAcceptance, BackgroundTaskOwner, LocalTaskReference
 from mote.contracts.task.models import (
@@ -43,7 +48,7 @@ class AgentBackgroundTasks:
     def message_sink(self) -> BackgroundMessageSink:
         return self._message_sink
 
-    def async_work_adapter(self) -> AgentOwnedLocalAsyncWorkAdapter:
+    def async_work_adapter(self) -> LocalAsyncWorkAdapter:
         return AgentOwnedLocalAsyncWorkAdapter(self._pool)
 
     def submit(
@@ -54,7 +59,7 @@ class AgentBackgroundTasks:
     ) -> BackgroundTaskAcceptance:
         return self._pool.submit(operation, command_name, **options)
 
-    def get_task_info(self, task_id: str):
+    def get_task_info(self, task_id: TaskId):
         meta = self._pool.get_task_info(task_id)
         return meta
 
@@ -91,23 +96,23 @@ class AgentBackgroundTasks:
         receipt = await self._pool.drain(owner=owner, timeout_seconds=timeout_seconds)
         return receipt
 
-    def mark_retrieved(self, task_id: str) -> None:
+    def mark_retrieved(self, task_id: TaskId) -> None:
         self._pool.mark_retrieved(task_id)
 
-    def cancel_current(self, task_id: str, reason: str) -> LocalCancelReceipt:
+    def cancel_current(self, task_id: TaskId, reason: str) -> LocalCancelReceipt:
         meta = self._pool.get_task_info(task_id)
         if meta is None:
             raise KeyError(task_id)
         reference = LocalBackgroundTaskReference(
             LocalTaskReference(
                 self._pool.owner,
-                TaskId(meta.task_id),
+                meta.task_id,
                 meta.attempt_id,
             )
         )
         return self.async_work_adapter().cancel(CancelLocalBackgroundTask(reference, reason))
 
-    def get_outcome(self, task_id: str):
+    def get_outcome(self, task_id: TaskId):
         return self._pool.get_outcome(task_id)
 
     async def aclose(self) -> None:
@@ -129,7 +134,7 @@ def build_background_task_pool(
         owner=context.owner,
     )
 
-    def on_cap(task_id: str) -> None:
+    def on_cap(task_id: TaskId) -> None:
         pool.cancel_for_cap(task_id)
 
     output_store.set_on_cap(on_cap)
@@ -138,27 +143,26 @@ def build_background_task_pool(
         status_value = meta.status.value if isinstance(meta.status, BackgroundTaskStatus) else str(meta.status)
         if meta.status == BackgroundTaskStatus.SUCCESS:
             pointer = CompletedInlineTaskResultPointer(
-                task_id=TaskId(meta.task_id),
+                task_id=meta.task_id,
                 command_name=CommandName(meta.command_name),
                 summary=f"{meta.command_name} finished ({status_value}).",
                 output=InlineTaskOutput(meta.result or ""),
             )
         elif meta.status in TERMINAL_STATUSES:
             pointer = FailedTaskResultPointer(
-                task_id=TaskId(meta.task_id),
+                task_id=meta.task_id,
                 command_name=CommandName(meta.command_name),
                 summary=f"{meta.command_name} finished ({status_value}).",
                 error=TaskFailure(meta.result or status_value),
             )
         else:
             return
-        context.result_registry.register_task_result(TaskId(meta.task_id), render_task_result_pointer(pointer))
-        meta.registered_resource = True
+        context.result_registry.register_task_result(meta.task_id, render_task_result_pointer(pointer))
 
     pool.set_on_terminal_result(on_terminal)
 
-    def retire(task_id: str) -> None:
-        context.result_registry.unload(TaskId(task_id))
+    def retire(task_id: TaskId) -> None:
+        context.result_registry.unload(task_id)
 
     pool.set_retire_result(retire)
     return AgentBackgroundTasks(

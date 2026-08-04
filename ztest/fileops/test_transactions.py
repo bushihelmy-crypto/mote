@@ -110,7 +110,13 @@ def test_journal_ignores_foreign_events_but_fails_closed_on_corrupt_fileops(
 ):
     _, _, _, journal = _components(tmp_path)
     log = SessionLog("session", base_dir=str(tmp_path))
-    log.commit_offline(SessionMetaEvent(session_id="session"))
+    log.commit_offline(
+        SessionMetaEvent(
+            session_id="session",
+            role_class="mote.file_operations.v1",
+            toolset_manifest=(),
+        )
+    )
     log.commit_offline(MessageEvent(message=UserMessage(content="ok")))
     assert journal.records() == ()
     with journal.path.open("ab") as stream:

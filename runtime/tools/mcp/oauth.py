@@ -22,6 +22,7 @@ unauthenticated client).
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator, Generator, Optional
 
 import httpx
@@ -52,13 +53,23 @@ class _OAuthManagerAuth(httpx.Auth):
         self._manager = manager
 
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
-        request.headers["Authorization"] = f"Bearer {self._manager.get_valid_token()}"
-        yield request
+        borrow = self._manager.acquire_valid_borrow(expires_at=datetime.now(timezone.utc) + timedelta(minutes=30))
+        try:
+            request.headers["Authorization"] = f"Bearer {borrow.token.access_token}"
+            yield request
+        finally:
+            self._manager.release_borrow(borrow)
 
     async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
-        token = await asyncio.to_thread(self._manager.get_valid_token)
-        request.headers["Authorization"] = f"Bearer {token}"
-        yield request
+        borrow = await asyncio.to_thread(
+            self._manager.acquire_valid_borrow,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        )
+        try:
+            request.headers["Authorization"] = f"Bearer {borrow.token.access_token}"
+            yield request
+        finally:
+            await asyncio.to_thread(self._manager.release_borrow, borrow)
 
 
 def build_mcp_auth(server_config: MCPServerConfig) -> Optional[httpx.Auth]:
@@ -78,7 +89,7 @@ def build_mcp_auth(server_config: MCPServerConfig) -> Optional[httpx.Auth]:
         raise McpAuthenticationConfigurationError(server_config.name, "credential storage root is missing")
 
     try:
-        manager = OAuthManager(oauth, provider=server_config.name)
+        manager = OAuthManager(oauth, provider=server_config.name, consumer_id=f"mcp-server:{server_config.name}")
     except Exception as error:
         raise McpAuthenticationConfigurationError(server_config.name, f"{type(error).__name__}: {error}") from error
     return _OAuthManagerAuth(manager)

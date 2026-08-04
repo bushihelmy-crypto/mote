@@ -32,7 +32,7 @@ from mote.contracts.events.envelope import JsonValue, freeze_json
 from mote.contracts.interaction import ApprovalRequest, AskUserQuestionAnswers, AskUserQuestionInput
 from mote.contracts.interaction.handoff import DriverHandoffHandle, HandoffRequest, HandoffStatus, HumanHandoffOutcome
 from mote.contracts.surface import LiveSurfaceSession
-from mote.product.interaction.ports import DriverControlBinding
+from mote.product.interaction.ports import DriverControlBinding, DriverControlDisposition, DriverControlReceipt
 from mote.product.interfaces.acp import wire as acp
 from mote.product.presentation.events.events import ApprovalDecision
 from mote.product.presentation.projection.approval import approval_action, approval_preview, approval_risk
@@ -227,14 +227,14 @@ class AcpPort:
     # ------------------------------------------------------------------
     # Control affordances (server owns the run task; these stay inert)
     # ------------------------------------------------------------------
-    def signal_interrupt(self, ctx: object = None) -> None:
+    def signal_interrupt(self, ctx: object = None) -> DriverControlReceipt:
         """Cancel the in-flight turn. The server maps ``session/cancel`` to this;
         Phase 4 leaves the actual cancel to the server's run-task ownership."""
-        return None
+        return DriverControlReceipt(DriverControlDisposition.IGNORED)
 
-    def submit_steer(self, ctx: object, text: str) -> None:
+    def submit_steer(self, ctx: object, text: str) -> DriverControlReceipt:
         """Turn-level steering. No-op (ACP has no mid-turn steer method)."""
-        return None
+        return DriverControlReceipt(DriverControlDisposition.IGNORED)
 
     async def aclose(self) -> None:
         """Mark closed so a late permission request short-circuits to reject."""

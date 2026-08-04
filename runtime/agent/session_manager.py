@@ -24,7 +24,6 @@ from mote.contracts.conversation.fields import RESOURCE_ID, RESOURCE_KIND, RESOU
 from mote.contracts.tool import parse_toolset_manifest
 from mote.runtime.agent.errors import SessionResumeIdentityError
 from mote.runtime.agent.role_state import RoleState
-from mote.runtime.durable import reconcile_think_journal
 from mote.runtime.session import list_sessions as _list_sessions
 from mote.runtime.session.attribution import HunkAttribution
 from mote.runtime.session.fork import fork
@@ -53,7 +52,7 @@ class RoleSessionManager:
     @property
     def hunk_ops(self) -> HunkOps:
         if self._hunk_ops is None:
-            file_operations = self._role.file_operations
+            file_operations = self._role._file_operations
             self._hunk_ops = HunkOps(
                 file_operations.review,
                 file_operations.artifacts,
@@ -67,7 +66,7 @@ class RoleSessionManager:
     @property
     def hunk_attribution(self) -> HunkAttribution:
         if self._hunk_attribution is None:
-            file_operations = self._role.file_operations
+            file_operations = self._role._file_operations
             self._hunk_attribution = HunkAttribution(file_operations.review, file_operations.artifacts)
         return self._hunk_attribution
 
@@ -92,7 +91,7 @@ class RoleSessionManager:
         log = SessionLog(
             role.state.session_id,
             base_dir=str(role._components.workspace_store.sessions_root),
-            writer=role.context.disk_writer,
+            writer=role._context.disk_writer,
         )
         if not log.exists():
             return False
@@ -104,7 +103,6 @@ class RoleSessionManager:
         # is already durable, or the round never completed), leaving at most the
         # single completed think the flow will reinstate on its first think node
         # — the G1 re-pay guard, adjacent to the dangling-call reconcile above.
-        self._reconcile_think_journal(messages)
         # Assign in place so the ContextManager (which backs onto this same list)
         # sees the rebuilt history without re-recording it.
         role.state.context.messages[:] = messages
@@ -121,7 +119,7 @@ class RoleSessionManager:
         state_ctl = role._state_ctl
         runtime_checkpoints = getattr(result, "runtime_checkpoints", {}) or {}
         for checkpoint in runtime_checkpoints.values():
-            role.runtime_host.stage_checkpoint(checkpoint, alias=checkpoint.alias)
+            role._components.runtime_host.stage_checkpoint(checkpoint, alias=checkpoint.alias)
         output_states = getattr(result, "output_states", {}) or {}
         agent_states = [state for state in output_states.values() if state.get("run_kind", "agent") == "agent"]
         output_state = agent_states[-1] if agent_states else result.output_state
@@ -170,7 +168,7 @@ class RoleSessionManager:
             )
 
         recorded_toolsets = meta["toolset_manifest"]
-        projection = self._role.wiring.dependencies.component_projection
+        projection = self._role._wiring.dependencies.component_projection
         if projection is None:
             raise RuntimeError("Agent composition requires a Product component projection")
         expected_manifest = toolset_manifest(projection.action().toolsets)
@@ -192,38 +190,17 @@ class RoleSessionManager:
         provider request. :func:`reconcile_tool_calls` splices a synthetic result
         after each such call — healing it verbatim from the ledger when the effect
         actually completed, or flagging ``<unknown-after-crash>`` when an EXTERNAL
-        effect's outcome was lost. After a clean reconcile the resolved records are
-        reaped so the ledger does not accumulate across resumes.
+        effect's outcome was lost. Reconciliation never deletes effect facts;
+        retention remains owned by the Tool effect store lifecycle.
 
         A no-op when the executor has no ledger (feature disabled) — the replayed
         history is returned unchanged.
         """
-        journal = self._role.executor.journal
-        if journal is None or not self._role.executor.journal_config.enabled:
+        effect_store = self._role._executor.effect_store
+        if effect_store is None or not self._role._executor.effect_store_config.enabled:
             return messages
-        outcome = reconcile_tool_calls(messages, journal)
-        if outcome.resolved_ids:
-            journal.reap(outcome.resolved_ids)
+        outcome = reconcile_tool_calls(messages, effect_store)
         return outcome.messages
-
-    def _reconcile_think_journal(self, messages) -> None:
-        """Reap resolved think records so the flow reinstates only the right one.
-
-        On resume the run journal may hold a completed think whose assistant
-        message never reached the rebuilt history (crash between the model
-        returning and the turn being recorded). :func:`reconcile_think_journal`
-        reaps every think that needs no reinstatement — non-completed rounds
-        (their result was lost) and completed rounds already durable in history
-        (reinstating one would DOUBLE-record its assistant message) — leaving at
-        most the single unmatched completed think for the flow to reinstate.
-
-        A no-op when the executor has no journal (durability disabled) — the
-        rebuilt history is untouched.
-        """
-        journal = self._role.executor.journal
-        if journal is None:
-            return
-        reconcile_think_journal(journal, messages)
 
     def reconcile_resources(self, messages) -> None:
         """Rebuild the resource side-store to match a freshly-rebuilt history.
@@ -248,7 +225,7 @@ class RoleSessionManager:
         re-projects sticky bodies through the pull provider, so it must NOT reset
         the registry — only a genuine history *rebuild* routes here.
         """
-        self._role.resource_registry.reset()
+        self._role._components.resource_registry.reset()
         self._rebuild_resource_registry(messages)
         self._rebuild_revealed_tool_resources()
 
@@ -263,7 +240,7 @@ class RoleSessionManager:
         order. Best-effort: a message without a registry or malformed metadata is
         simply skipped.
         """
-        registry = self._role.resource_registry
+        registry = self._role._components.resource_registry
         for m in messages:
             meta = getattr(m, "metadata", None) or {}
             resource_id = meta.get(RESOURCE_ID)
@@ -294,8 +271,8 @@ class RoleSessionManager:
         revealed = sorted(self._role.state.revealed_tools)
         if not revealed:
             return
-        registry = self._role.resource_registry
-        for name, desc in self._role.executor.describe_deferred_tools(revealed).items():
+        registry = self._role._components.resource_registry
+        for name, desc in self._role._executor.describe_deferred_tools(revealed).items():
             if desc:
                 registry.load(id=name, kind="tool", content=desc, sticky=True)
 
@@ -312,7 +289,7 @@ class RoleSessionManager:
         role = self._role
         child_id = await fork(
             role.state.session_id,
-            writer=role.context.disk_writer,
+            writer=role._context.disk_writer,
         )
 
         child_state = RoleState(
@@ -326,7 +303,7 @@ class RoleSessionManager:
             role_schema=role.role_schema.model_copy(deep=True),
             state=child_state,
             config=role._config,
-            wiring=role.wiring.for_incarnation(),
+            wiring=role._wiring.for_incarnation(),
         )
         forked.resume_session()
         return forked

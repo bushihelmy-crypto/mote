@@ -20,6 +20,7 @@ from mote.product.agents.factory import CodingAgentFactory
 from mote.product.composition.agent_factory import build_product_agent
 from mote.product.composition.bootstrap import _build_application_context
 from mote.product.composition.container import ProductContainer
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.product.entrypoints.cli import backend
 from mote.product.paths import default_runtime_paths
 from mote.runtime.agent import Role
@@ -61,10 +62,12 @@ def test_role_telemetry_and_cleanup_and_session_id():
     assert backend.role_session_id(role) == "sid-1"
     assert backend.role_telemetry(role) is telemetry
     assert backend.role_cleanup(role) is cleanup
-    # Missing attributes degrade to None.
+    # Missing required capabilities fail closed instead of silently degrading.
     bare = SimpleNamespace(session_id="x")
-    assert backend.role_telemetry(bare) is None
-    assert backend.role_cleanup(bare) is None
+    with pytest.raises(AttributeError):
+        backend.role_telemetry(bare)
+    with pytest.raises(AttributeError):
+        backend.role_cleanup(bare)
 
 
 @pytest.mark.asyncio
@@ -91,29 +94,27 @@ async def test_fork_role_returns_forked():
     assert await backend.fork_role(role) is forked
 
 
-class _FakeCM:
+class _FakeRoleHistory:
     def __init__(self, n):
         self._n = n
         self.cleared = False
 
-    def count(self):
-        return self._n
-
-    async def clear(self):
+    async def clear_history(self):
         self.cleared = True
+        return self._n
 
 
 @pytest.mark.asyncio
 async def test_clear_messages_counts_then_clears():
-    cm = _FakeCM(4)
-    role = SimpleNamespace(context_manager=cm)
+    role = _FakeRoleHistory(4)
     assert await backend.clear_messages(role) == 4
-    assert cm.cleared is True
+    assert role.cleared is True
 
 
 @pytest.mark.asyncio
-async def test_clear_messages_without_manager_returns_zero():
-    assert await backend.clear_messages(SimpleNamespace()) == 0
+async def test_clear_messages_requires_role_command_surface():
+    with pytest.raises(AttributeError):
+        await backend.clear_messages(SimpleNamespace())
 
 
 def test_turn_message_attaches_images_metadata():
@@ -128,7 +129,7 @@ def test_turn_message_without_images_sets_no_metadata():
 
 
 @pytest.mark.asyncio
-async def test_rewind_files_runs_blocking_read_and_mutation_off_loop(monkeypatch, tmp_path):
+async def test_rewind_files_uses_role_checkpoint_command():
     calls = []
     target = SimpleNamespace(
         working_dir="/workspace",
@@ -137,30 +138,17 @@ async def test_rewind_files_runs_blocking_read_and_mutation_off_loop(monkeypatch
         index=0,
     )
 
-    async def run_disk_io(fn, /, *args, **kwargs):
-        calls.append(fn)
-        return fn(*args, **kwargs)
+    async def rewind_checkpoint(index):
+        calls.append(index)
+        return target, SimpleNamespace(external_paths=("external.txt",))
 
-    def rewind(**kwargs):
-        assert kwargs["target_commit"] == "target"
-        return SimpleNamespace(external_paths=("external.txt",))
-
-    monkeypatch.setattr(backend, "run_disk_io", run_disk_io)
-    monkeypatch.setattr(backend, "_list_checkpoints", lambda log: [target])
     role = SimpleNamespace(
-        state=SimpleNamespace(
-            session_id="session",
-            project_root="/workspace",
-            working_dir="/workspace",
-        ),
-        context=SimpleNamespace(disk_writer=object()),
-        file_operations=SimpleNamespace(rewind=rewind),
-        _components=SimpleNamespace(workspace_store=SimpleNamespace(sessions_root=tmp_path)),
+        rewind_checkpoint=rewind_checkpoint,
     )
 
     result = await backend.rewind_files(role, 0)
 
-    assert calls == [backend._list_checkpoints, rewind]
+    assert calls == [0]
     assert result is not None
     assert result.external == ["external.txt"]
 
@@ -321,7 +309,12 @@ def test_build_role_typed_path_returns_registered_instance():
         agent_name = "ThrowawayAgent"
         description = "A throwaway agent for tests."
 
-    catalog = AgentCatalog.from_types((_ThrowawayAgent,), CodingAgentFactory())
+    catalog = AgentCatalog.from_types(
+        (_ThrowawayAgent,),
+        CodingAgentFactory(
+            model_checkpoint_policy=approved_model_checkpoint_policy(),
+        ),
+    )
     role = _build_role(
         name="tw",
         agent_type="ThrowawayAgent",
@@ -337,6 +330,11 @@ def test_list_agent_types_includes_registered():
         agent_name = "ListedAgent"
         description = "A listed agent."
 
-    catalog = AgentCatalog.from_types((_ListedAgent,), CodingAgentFactory())
+    catalog = AgentCatalog.from_types(
+        (_ListedAgent,),
+        CodingAgentFactory(
+            model_checkpoint_policy=approved_model_checkpoint_policy(),
+        ),
+    )
     types = backend.list_agent_types(catalog)
     assert ("ListedAgent", "A listed agent.") in types

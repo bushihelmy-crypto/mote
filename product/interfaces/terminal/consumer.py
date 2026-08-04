@@ -29,8 +29,9 @@ from typing import Any
 from mote.contracts.async_work.codec import decode_async_work_observation
 from mote.product.i18n import keys as K
 from mote.product.i18n import t
-from mote.product.presentation.consumer import BaseConsumer
+from mote.product.presentation.consumer import BaseConsumer, SyncViewEventHandler
 from mote.product.presentation.events import Capabilities
+from mote.product.presentation.events.events import ViewEvent
 from mote.product.presentation.rich_rendering.builders import file_change_verb
 from mote.product.presentation.rich_rendering.builders import fold_note_str as _fold_note_str
 from mote.product.presentation.rich_rendering.builders import format_usage_line as _format_usage_line
@@ -59,6 +60,30 @@ class PlainTerminalConsumer(BaseConsumer):
 
     def _print(self, text: str) -> None:
         self._out.write(text + "\n")
+
+    def _handler_for(self, ev: ViewEvent) -> SyncViewEventHandler | None:
+        handlers = {
+            "message_block_completed": self.on_message_block_completed,
+            "tool_call_started": self.on_tool_call_started,
+            "tool_call_completed": self.on_tool_call_completed,
+            "media_block": self.on_media_block,
+            "artifact_block": self.on_artifact_block,
+            "file_diff_block": self.on_file_diff_block,
+            "approval_requested": self.on_approval_requested,
+            "usage_updated": self.on_usage_updated,
+            "task_progress": self.on_task_progress,
+            "async_work_observed": self.on_async_work_observed,
+            "notice": self.on_notice,
+            "system_reminder": self.on_system_reminder,
+            "conversation_compacted": self.on_conversation_compacted,
+            "retry_status": self.on_retry_status,
+            "runtime_durability_status": self.on_runtime_durability_status,
+            "error_raised": self.on_error_raised,
+            "question_asked": self.on_question_asked,
+            "session_list_shown": self.on_session_list_shown,
+            "transcript_cleared": self.on_transcript_cleared,
+        }
+        return handlers.get(ev.kind)
 
     def on_message_block_completed(self, ev: Any) -> None:
         if ev.role == "user":

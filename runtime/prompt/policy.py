@@ -56,7 +56,10 @@ class DefaultPromptPolicy:
     @staticmethod
     def _install_extensions(
         extensions: tuple[PromptPolicyExtensionSpec, ...],
-    ) -> tuple[tuple[PromptPolicyExtensionSpec, ...], tuple[_InstalledExtension, ...],]:
+    ) -> tuple[
+        tuple[PromptPolicyExtensionSpec, ...],
+        tuple[_InstalledExtension, ...],
+    ]:
         sealed = tuple(extensions)
         identities: set[str] = set()
         installed: list[_InstalledExtension] = []
@@ -261,7 +264,7 @@ class DefaultPromptPolicy:
                     disposition="enrich",
                 )
             )
-        if outcome.behavior == "deny" or outcome.stop:
+        if outcome.behavior == "deny" or outcome.stop is not None:
             trace.append(
                 PromptPolicyTraceEntry(
                     step="user_prompt_submit_hook",
@@ -270,8 +273,10 @@ class DefaultPromptPolicy:
                 )
             )
             return (
-                outcome.system_message or outcome.stop_reason or "prompt denied by UserPromptSubmit hook",
-                outcome.stop,
+                outcome.system_message
+                or (outcome.stop.reason if outcome.stop is not None else "")
+                or "prompt denied by UserPromptSubmit hook",
+                outcome.stop is not None,
             )
         return "", False
 

@@ -5,6 +5,7 @@ marked ``Annotated[T, Output]`` — so inputs and intermediate scratch never lea
 into what is returned / pushed to the model. A graph that declares no output
 falls back to the whole final state (back-compat).
 """
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -64,7 +65,7 @@ def test_derive_output_fields_empty_when_none_marked():
 async def test_success_result_is_only_declared_output():
     g = WorkflowBuilder("narrow", state_schema=_OutState)
     # write both an output field and an intermediate one
-    g.add_node("work", _sync_node(lambda s: {"report": "R", "scratch": "S"}))
+    g.add_node("work", _sync_node(lambda s: {"report": "R", "scratch": "S"}), implementation_id="test.output.narrow/v1")
     g.add_edge(START, "work")
     g.add_edge("work", END)
 
@@ -82,7 +83,7 @@ async def test_success_result_is_only_declared_output():
 @pytest.mark.asyncio
 async def test_missing_output_declaration_is_rejected():
     g = WorkflowBuilder("full", state_schema=_NoOutState)
-    g.add_node("work", _sync_node(lambda s: {"a": 1, "b": 2}))
+    g.add_node("work", _sync_node(lambda s: {"a": 1, "b": 2}), implementation_id="test.output.missing/v1")
     g.add_edge(START, "work")
     g.add_edge("work", END)
 
@@ -93,7 +94,7 @@ async def test_missing_output_declaration_is_rejected():
 @pytest.mark.asyncio
 async def test_explicit_no_output_returns_empty_payload():
     g = WorkflowBuilder("none", state_schema=_NoOutState, output=NoOutput)
-    g.add_node("work", _sync_node(lambda s: {"a": 1, "b": 2}))
+    g.add_node("work", _sync_node(lambda s: {"a": 1, "b": 2}), implementation_id="test.output.none/v1")
     g.add_edge(START, "work")
     g.add_edge("work", END)
 
@@ -118,8 +119,11 @@ async def test_typed_graph_terminal_is_validated_and_committed():
         state_schema=_OutState,
         output_contract=contract,
         output_engine_factory=OutputEngine,
+        output_engine_identity="test.output.engine/v1",
     )
-    g.add_node("work", _sync_node(lambda _s: {"report": "R", "extra": {"n": 1}}))
+    g.add_node(
+        "work", _sync_node(lambda _s: {"report": "R", "extra": {"n": 1}}), implementation_id="test.output.typed/v1"
+    )
     g.add_edge(START, "work")
     g.add_edge("work", END)
 

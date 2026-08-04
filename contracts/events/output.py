@@ -42,6 +42,33 @@ def _freeze_records(value: object, *, field_name: str) -> tuple[Mapping[str, Jso
     return tuple(records)
 
 
+def _exact(payload: dict[str, JsonValue], fields: set[str], *, owner: str) -> dict[str, JsonValue]:
+    if set(payload) != fields:
+        raise ValueError(f"{owner} payload fields are not canonical")
+    return payload
+
+
+def _text(payload: dict[str, JsonValue], name: str, owner: str) -> str:
+    value = payload[name]
+    if type(value) is not str:
+        raise TypeError(f"{owner}.{name} must be a string")
+    return value
+
+
+def _integer(payload: dict[str, JsonValue], name: str, owner: str) -> int:
+    value = payload[name]
+    if type(value) is not int:
+        raise TypeError(f"{owner}.{name} must be an integer")
+    return value
+
+
+def _boolean(payload: dict[str, JsonValue], name: str, owner: str) -> bool:
+    value = payload[name]
+    if type(value) is not bool:
+        raise TypeError(f"{owner}.{name} must be a boolean")
+    return value
+
+
 @dataclass(frozen=True)
 class OutputCandidateReceivedEvent(_DurableFact):
     """A terminal output candidate entered the run-scoped output engine."""
@@ -59,6 +86,34 @@ class OutputCandidateReceivedEvent(_DurableFact):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "raw", freeze_json(self.raw, path="output candidate raw"))
+
+    def payload(self) -> dict[str, JsonValue]:
+        return {
+            "candidate_id": self.candidate_id,
+            "contract_id": self.contract_id,
+            "schema_fingerprint": self.schema_fingerprint,
+            "representation": self.representation,
+            "raw": self.raw,
+            "run_id": self.run_id,
+            "run_kind": self.run_kind,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputCandidateReceivedEvent":
+        values = _exact(
+            payload,
+            {"candidate_id", "contract_id", "schema_fingerprint", "representation", "raw", "run_id", "run_kind"},
+            owner=cls.__name__,
+        )
+        return cls(
+            candidate_id=_text(values, "candidate_id", cls.__name__),
+            contract_id=_text(values, "contract_id", cls.__name__),
+            schema_fingerprint=_text(values, "schema_fingerprint", cls.__name__),
+            representation=_text(values, "representation", cls.__name__),
+            raw=values["raw"],
+            run_id=_text(values, "run_id", cls.__name__),
+            run_kind=_text(values, "run_kind", cls.__name__),
+        )
 
 
 @dataclass(frozen=True)
@@ -93,6 +148,48 @@ class OutputValidationRejectedEvent(_DurableFact):
             ),
         )
 
+    def payload(self) -> dict[str, JsonValue]:
+        return {
+            "candidate_id": self.candidate_id,
+            "contract_id": self.contract_id,
+            "issues": cast(JsonValue, list(self.issues)),
+            "correction_attempt": self.correction_attempt,
+            "corrections_remaining": self.corrections_remaining,
+            "correction_allowed": self.correction_allowed,
+            "validator_provenance": cast(JsonValue, list(self.validator_provenance)),
+            "run_id": self.run_id,
+            "run_kind": self.run_kind,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputValidationRejectedEvent":
+        values = _exact(
+            payload,
+            {
+                "candidate_id",
+                "contract_id",
+                "issues",
+                "correction_attempt",
+                "corrections_remaining",
+                "correction_allowed",
+                "validator_provenance",
+                "run_id",
+                "run_kind",
+            },
+            owner=cls.__name__,
+        )
+        return cls(
+            candidate_id=_text(values, "candidate_id", cls.__name__),
+            contract_id=_text(values, "contract_id", cls.__name__),
+            issues=_freeze_records(values["issues"], field_name="issues"),
+            correction_attempt=_integer(values, "correction_attempt", cls.__name__),
+            corrections_remaining=_integer(values, "corrections_remaining", cls.__name__),
+            correction_allowed=_boolean(values, "correction_allowed", cls.__name__),
+            validator_provenance=_freeze_records(values["validator_provenance"], field_name="validator_provenance"),
+            run_id=_text(values, "run_id", cls.__name__),
+            run_kind=_text(values, "run_kind", cls.__name__),
+        )
+
 
 @dataclass(frozen=True)
 class OutputAcceptedEvent(_DurableFact):
@@ -121,6 +218,45 @@ class OutputAcceptedEvent(_DurableFact):
             ),
         )
 
+    def payload(self) -> dict[str, JsonValue]:
+        return {
+            "candidate_id": self.candidate_id,
+            "contract_id": self.contract_id,
+            "schema_fingerprint": self.schema_fingerprint,
+            "value": self.value,
+            "correction_attempts": self.correction_attempts,
+            "validator_provenance": cast(JsonValue, list(self.validator_provenance)),
+            "run_id": self.run_id,
+            "run_kind": self.run_kind,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputAcceptedEvent":
+        values = _exact(
+            payload,
+            {
+                "candidate_id",
+                "contract_id",
+                "schema_fingerprint",
+                "value",
+                "correction_attempts",
+                "validator_provenance",
+                "run_id",
+                "run_kind",
+            },
+            owner=cls.__name__,
+        )
+        return cls(
+            candidate_id=_text(values, "candidate_id", cls.__name__),
+            contract_id=_text(values, "contract_id", cls.__name__),
+            schema_fingerprint=_text(values, "schema_fingerprint", cls.__name__),
+            value=values["value"],
+            correction_attempts=_integer(values, "correction_attempts", cls.__name__),
+            validator_provenance=_freeze_records(values["validator_provenance"], field_name="validator_provenance"),
+            run_id=_text(values, "run_id", cls.__name__),
+            run_kind=_text(values, "run_kind", cls.__name__),
+        )
+
 
 @dataclass(frozen=True)
 class OutputCommitStartedEvent(_DurableFact):
@@ -134,6 +270,28 @@ class OutputCommitStartedEvent(_DurableFact):
 
     name: ClassVar[str] = OUTPUT_COMMIT_STARTED
     type: ClassVar[str] = OUTPUT_COMMIT_STARTED
+
+    def payload(self) -> dict[str, JsonValue]:
+        return {
+            "candidate_id": self.candidate_id,
+            "contract_id": self.contract_id,
+            "run_id": self.run_id,
+            "run_kind": self.run_kind,
+            "fencing_token": self.fencing_token,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputCommitStartedEvent":
+        values = _exact(
+            payload, {"candidate_id", "contract_id", "run_id", "run_kind", "fencing_token"}, owner=cls.__name__
+        )
+        return cls(
+            candidate_id=_text(values, "candidate_id", cls.__name__),
+            contract_id=_text(values, "contract_id", cls.__name__),
+            run_id=_text(values, "run_id", cls.__name__),
+            run_kind=_text(values, "run_kind", cls.__name__),
+            fencing_token=_integer(values, "fencing_token", cls.__name__),
+        )
 
 
 @dataclass(frozen=True)
@@ -158,6 +316,45 @@ class OutputMigratedEvent(_DurableFact):
             self,
             "steps",
             _freeze_records(self.steps, field_name="output migration steps"),
+        )
+
+    def payload(self) -> dict[str, JsonValue]:
+        return {
+            "candidate_id": self.candidate_id,
+            "source_contract_id": self.source_contract_id,
+            "target_contract_id": self.target_contract_id,
+            "target_schema_fingerprint": self.target_schema_fingerprint,
+            "value": self.value,
+            "steps": cast(JsonValue, list(self.steps)),
+            "run_id": self.run_id,
+            "run_kind": self.run_kind,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputMigratedEvent":
+        values = _exact(
+            payload,
+            {
+                "candidate_id",
+                "source_contract_id",
+                "target_contract_id",
+                "target_schema_fingerprint",
+                "value",
+                "steps",
+                "run_id",
+                "run_kind",
+            },
+            owner=cls.__name__,
+        )
+        return cls(
+            candidate_id=_text(values, "candidate_id", cls.__name__),
+            source_contract_id=_text(values, "source_contract_id", cls.__name__),
+            target_contract_id=_text(values, "target_contract_id", cls.__name__),
+            target_schema_fingerprint=_text(values, "target_schema_fingerprint", cls.__name__),
+            value=values["value"],
+            steps=_freeze_records(values["steps"], field_name="steps"),
+            run_id=_text(values, "run_id", cls.__name__),
+            run_kind=_text(values, "run_kind", cls.__name__),
         )
 
 
@@ -189,6 +386,48 @@ class OutputCommittedEvent(_DurableFact):
             ),
         )
 
+    def payload(self) -> dict[str, JsonValue]:
+        return {
+            "candidate_id": self.candidate_id,
+            "contract_id": self.contract_id,
+            "schema_fingerprint": self.schema_fingerprint,
+            "value": self.value,
+            "correction_attempts": self.correction_attempts,
+            "validator_provenance": cast(JsonValue, list(self.validator_provenance)),
+            "run_id": self.run_id,
+            "run_kind": self.run_kind,
+            "fencing_token": self.fencing_token,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputCommittedEvent":
+        values = _exact(
+            payload,
+            {
+                "candidate_id",
+                "contract_id",
+                "schema_fingerprint",
+                "value",
+                "correction_attempts",
+                "validator_provenance",
+                "run_id",
+                "run_kind",
+                "fencing_token",
+            },
+            owner=cls.__name__,
+        )
+        return cls(
+            candidate_id=_text(values, "candidate_id", cls.__name__),
+            contract_id=_text(values, "contract_id", cls.__name__),
+            schema_fingerprint=_text(values, "schema_fingerprint", cls.__name__),
+            value=values["value"],
+            correction_attempts=_integer(values, "correction_attempts", cls.__name__),
+            validator_provenance=_freeze_records(values["validator_provenance"], field_name="validator_provenance"),
+            run_id=_text(values, "run_id", cls.__name__),
+            run_kind=_text(values, "run_kind", cls.__name__),
+            fencing_token=_integer(values, "fencing_token", cls.__name__),
+        )
+
 
 @dataclass(frozen=True)
 class OutputPublicationQueuedEvent(_DurableFact):
@@ -202,6 +441,28 @@ class OutputPublicationQueuedEvent(_DurableFact):
 
     name: ClassVar[str] = OUTPUT_PUBLICATION_QUEUED
     type: ClassVar[str] = OUTPUT_PUBLICATION_QUEUED
+
+    def payload(self) -> dict[str, JsonValue]:
+        return {
+            "publication_id": self.publication_id,
+            "candidate_id": self.candidate_id,
+            "contract_id": self.contract_id,
+            "run_id": self.run_id,
+            "run_kind": self.run_kind,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputPublicationQueuedEvent":
+        values = _exact(
+            payload, {"publication_id", "candidate_id", "contract_id", "run_id", "run_kind"}, owner=cls.__name__
+        )
+        return cls(
+            publication_id=_text(values, "publication_id", cls.__name__),
+            candidate_id=_text(values, "candidate_id", cls.__name__),
+            contract_id=_text(values, "contract_id", cls.__name__),
+            run_id=_text(values, "run_id", cls.__name__),
+            run_kind=_text(values, "run_kind", cls.__name__),
+        )
 
 
 @dataclass(frozen=True)
@@ -217,6 +478,28 @@ class OutputPublishedEvent(_DurableFact):
     name: ClassVar[str] = OUTPUT_PUBLISHED
     type: ClassVar[str] = OUTPUT_PUBLISHED
 
+    def payload(self) -> dict[str, JsonValue]:
+        return {
+            "candidate_id": self.candidate_id,
+            "contract_id": self.contract_id,
+            "publication_id": self.publication_id,
+            "run_id": self.run_id,
+            "run_kind": self.run_kind,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputPublishedEvent":
+        values = _exact(
+            payload, {"candidate_id", "contract_id", "publication_id", "run_id", "run_kind"}, owner=cls.__name__
+        )
+        return cls(
+            candidate_id=_text(values, "candidate_id", cls.__name__),
+            contract_id=_text(values, "contract_id", cls.__name__),
+            publication_id=_text(values, "publication_id", cls.__name__),
+            run_id=_text(values, "run_id", cls.__name__),
+            run_kind=_text(values, "run_kind", cls.__name__),
+        )
+
 
 @dataclass
 class OutputSnapshotEvent:
@@ -225,9 +508,12 @@ class OutputSnapshotEvent:
     run_id: str = ""
     revision: int = 0
     schema_fingerprint: str = ""
-    value: Any = None
+    value: JsonValue = None
 
     name: ClassVar[str] = OUTPUT_SNAPSHOT
+
+    def __post_init__(self) -> None:
+        self.value = freeze_json(self.value, path="output snapshot value")
 
 
 @dataclass

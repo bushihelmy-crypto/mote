@@ -149,15 +149,15 @@ class Edit(BaseTool):
             message = _MSG_UPDATED.format(path=change.path.display)
         return ToolResult(
             output=message,
-            file_changes=[
+            file_changes=(
                 FileChange(
                     path=change.path.display,
                     old=change.old,
                     new=change.new,
                     transaction_id=outcome.result.transaction_id,
                     post_digest=change.post_digest,
-                )
-            ],
+                ),
+            ),
             payload=json_tool_payload({"transaction_id": outcome.result.transaction_id}),
         )
 

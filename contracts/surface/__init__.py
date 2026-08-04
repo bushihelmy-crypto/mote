@@ -1,11 +1,16 @@
 """Stable Terminal, Notebook, Canvas, and live presentation contracts."""
 
 from mote.contracts.surface.canvas import (
+    CanvasArrow,
     CanvasDocument,
     CanvasElement,
+    CanvasEllipse,
     CanvasExportRepresentation,
+    CanvasLine,
     CanvasOperation,
+    CanvasRectangle,
     CanvasStyle,
+    CanvasText,
 )
 from mote.contracts.surface.models import (
     LiveSurfaceSession,
@@ -18,12 +23,16 @@ from mote.contracts.surface.notebook import (
     NOTEBOOK_EXPORT_MIME_TYPE,
     NOTEBOOK_MEDIA_TYPE,
     NotebookCell,
+    NotebookDisplayDataOutput,
     NotebookDocument,
+    NotebookErrorOutput,
     NotebookExecuteInput,
+    NotebookExecuteResultOutput,
     NotebookExportRepresentation,
     NotebookInputReply,
     NotebookInputRequest,
     NotebookOutput,
+    NotebookStreamOutput,
 )
 from mote.contracts.surface.terminal import (
     TERMINAL_FRAME_BASE_SEQUENCE,
@@ -37,21 +46,30 @@ from mote.contracts.surface.terminal import (
 )
 
 __all__ = [
+    "CanvasArrow",
     "CanvasDocument",
     "CanvasElement",
+    "CanvasEllipse",
     "CanvasExportRepresentation",
+    "CanvasLine",
     "CanvasOperation",
+    "CanvasRectangle",
     "CanvasStyle",
+    "CanvasText",
     "LiveSurfaceSession",
     "NOTEBOOK_EXPORT_MIME_TYPE",
     "NOTEBOOK_MEDIA_TYPE",
     "NotebookCell",
     "NotebookDocument",
+    "NotebookDisplayDataOutput",
+    "NotebookErrorOutput",
     "NotebookExecuteInput",
+    "NotebookExecuteResultOutput",
     "NotebookExportRepresentation",
     "NotebookInputReply",
     "NotebookInputRequest",
     "NotebookOutput",
+    "NotebookStreamOutput",
     "SurfaceDescriptor",
     "SurfaceFrame",
     "SurfaceInput",

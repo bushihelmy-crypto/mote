@@ -7,6 +7,7 @@ from mote.contracts.ports.tool.policy import ToolCallPolicyExtensionSpec
 from mote.contracts.tool.policy import ToolCallInspection, ToolCallIntent
 from mote.kernel.output import text_output_contract
 from mote.product.agents.factory import CodingAgentFactory
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent import AgentWiring, Role
 from mote.runtime.tools.permission import ToolCallInspector
 
@@ -30,6 +31,7 @@ def test_role_seals_declared_tool_policy_extension_manifest() -> None:
 
     spec = ToolCallPolicyExtensionSpec("deployment-gate", build)
     dependencies = CodingAgentFactory(
+        model_checkpoint_policy=approved_model_checkpoint_policy(),
         tool_policy_extensions=(spec,),
     ).dependencies(deps=None, output_contract=text_output_contract())
     first = Role(wiring=AgentWiring.for_dependencies(dependencies))

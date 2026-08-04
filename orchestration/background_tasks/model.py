@@ -7,13 +7,13 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Callable, ClassVar, Coroutine, Generic, Optional, TypeVar
 
 from pydantic import field_validator
 
 from mote.contracts.conversation import UserMessage
 from mote.contracts.foundation.errors.report import ErrorReport
-from mote.contracts.task.models import AttemptId
+from mote.contracts.task.models import AttemptId, TaskId
 from mote.orchestration.background_tasks.operation import OperationOutcome
 from mote.orchestration.background_tasks.status import BackgroundTaskStatus
 
@@ -45,7 +45,7 @@ class BackgroundTaskNotification(UserMessage):
     ``deliver`` freely without coordinating through a shared flag.
     """
 
-    task_id: str = ""
+    task_id: TaskId = TaskId("")
     attempt_id: AttemptId = field(default_factory=lambda: AttemptId(1))
     command_name: str = ""
     status: str = ""
@@ -81,7 +81,8 @@ class BgTaskMode(str, Enum):
 
 #: A callable that returns a coroutine — instantiation is deferred to the
 #: pool's ``submit()`` call site so there's no dangling coroutine to GC-warn.
-PollFactory = Callable[[], Coroutine]
+PollFactory = Callable[[], Coroutine[object, object, object]]
+ResultT = TypeVar("ResultT")
 
 
 # ---------------------------------------------------------------------------
@@ -89,25 +90,24 @@ PollFactory = Callable[[], Coroutine]
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class BgTaskResult:
+class BgTaskResult(Generic[ResultT]):
     """Return type for background-capable tool functions.
 
     Use the named constructors (:meth:`foreground`, :meth:`background`,
     :meth:`hybrid`) — they make the mode explicit and type-safe.
     """
 
-    mode: BgTaskMode = BgTaskMode.FOREGROUND
-    result: Any = None
-    poll_factory: Optional[PollFactory] = field(default=None, repr=False)
-    command_name: str = ""
+    def __new__(cls, *args: object, **kwargs: object) -> "BgTaskResult[ResultT]":
+        if cls is BgTaskResult:
+            raise TypeError("BgTaskResult must be constructed through a legal variant factory")
+        return super().__new__(cls)
 
     # --- Named constructors ---------------------------------------------------
 
     @classmethod
-    def foreground(cls, result: Any, *, command_name: str = "") -> "BgTaskResult":
+    def foreground(cls, result: ResultT, *, command_name: str = "") -> "ForegroundBgTaskResult[ResultT]":
         """Create a foreground-only result (no background work)."""
-        return cls(mode=BgTaskMode.FOREGROUND, result=result, command_name=command_name)
+        return ForegroundBgTaskResult(result=result, command_name=command_name)
 
     @classmethod
     def background(
@@ -115,40 +115,75 @@ class BgTaskResult:
         poll_factory: PollFactory,
         *,
         command_name: str,
-    ) -> "BgTaskResult":
+    ) -> "BackgroundBgTaskResult":
         """Create a background-only result (poll submitted, no immediate value)."""
-        return cls(
-            mode=BgTaskMode.BACKGROUND,
-            poll_factory=poll_factory,
-            command_name=command_name,
-        )
+        return BackgroundBgTaskResult(poll_factory=poll_factory, command_name=command_name)
 
     @classmethod
     def hybrid(
         cls,
-        result: Any,
+        result: ResultT,
         poll_factory: PollFactory,
         *,
         command_name: str,
-    ) -> "BgTaskResult":
+    ) -> "HybridBgTaskResult[ResultT]":
         """Create a hybrid result (immediate value AND background poll)."""
-        return cls(
-            mode=BgTaskMode.HYBRID,
-            result=result,
-            poll_factory=poll_factory,
-            command_name=command_name,
-        )
+        return HybridBgTaskResult(result=result, poll_factory=poll_factory, command_name=command_name)
+
+
+@dataclass(frozen=True, slots=True)
+class ForegroundBgTaskResult(BgTaskResult[ResultT]):
+    result: ResultT
+    command_name: str = ""
+    mode: ClassVar[BgTaskMode] = BgTaskMode.FOREGROUND
+
+
+@dataclass(frozen=True, slots=True)
+class BackgroundBgTaskResult(BgTaskResult[None]):
+    poll_factory: PollFactory = field(repr=False)
+    command_name: str = ""
+    mode: ClassVar[BgTaskMode] = BgTaskMode.BACKGROUND
+
+
+@dataclass(frozen=True, slots=True)
+class HybridBgTaskResult(BgTaskResult[ResultT]):
+    result: ResultT
+    poll_factory: PollFactory = field(repr=False)
+    command_name: str = ""
+    mode: ClassVar[BgTaskMode] = BgTaskMode.HYBRID
+
+
+@dataclass(frozen=True, slots=True)
+class TaskSnapshot:
+    """Immutable query projection; mutable pool bookkeeping never crosses its owner."""
+
+    task_id: TaskId = TaskId("")
+    attempt_id: AttemptId = field(default_factory=lambda: AttemptId(1))
+    command_name: str = ""
+    status: BackgroundTaskStatus = BackgroundTaskStatus.PENDING
+    submit_time: float = field(default_factory=time.time)
+    start_time: float = field(default_factory=time.time)
+    end_time: Optional[float] = None
+    result: Optional[str] = None
+    error: ErrorReport | None = None
+    notified: bool = False
+    output_path: Optional[str] = None
+    task_type: str = TaskType.COROUTINE
+    task_kind: Optional[str] = None
+    agent_id: Optional[str] = None
+    output_capped: bool = False
+    outcome: Optional[OperationOutcome] = field(default=None, repr=False)
 
 
 @dataclass
-class TaskMeta:
+class _TaskState:
     """Metadata snapshot for a background task.
 
     Stored by ``BackgroundTaskPool`` for every submitted task and retained
     after completion so that ``check_task`` can query finished tasks.
     """
 
-    task_id: str = ""
+    task_id: TaskId = TaskId("")
     attempt_id: AttemptId = field(default_factory=lambda: AttemptId(1))
     command_name: str = ""
     status: BackgroundTaskStatus = BackgroundTaskStatus.PENDING
@@ -175,6 +210,26 @@ class TaskMeta:
     # unloaded from the registry and its meta is eligible for reaping — the
     # "real consume" half of the double-safety (the other half is round-based reap).
     retrieved: bool = False
+
+    def snapshot(self) -> TaskSnapshot:
+        return TaskSnapshot(
+            self.task_id,
+            self.attempt_id,
+            self.command_name,
+            self.status,
+            self.submit_time,
+            self.start_time,
+            self.end_time,
+            self.result,
+            self.error,
+            self.notified,
+            self.output_path,
+            self.task_type,
+            self.task_kind,
+            self.agent_id,
+            self._output_capped,
+            self.outcome,
+        )
 
 
 @dataclass(frozen=True, slots=True)

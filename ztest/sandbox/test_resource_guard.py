@@ -6,6 +6,7 @@ The cgroup analogue of ``SandboxGuard``: seeded from a ``SandboxRuntimeConfig``,
 exposing live :class:`ResourceLimits` via ``limits()`` plus session setters that
 take effect on the next read (the dynamic-cap contract the runtime relies on).
 """
+
 from __future__ import annotations
 
 from mote.runtime.sandbox.config import SandboxRuntimeConfig
@@ -13,7 +14,7 @@ from mote.runtime.tools.permission.sandbox.resource_guard import ResourceGuard
 
 
 def _cfg(**kw) -> SandboxRuntimeConfig:
-    base = dict(enabled=True, backend="none", network="open")
+    base = dict(profile="isolated-compute", network="off")
     base.update(kw)
     return SandboxRuntimeConfig(**base)
 

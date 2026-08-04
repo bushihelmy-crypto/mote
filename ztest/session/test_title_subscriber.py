@@ -10,6 +10,7 @@ log never re-generates), the ``enabled`` gate, empty/blank prompt skips, an
 empty/blank model reply appending nothing, and generator failure being
 swallowed. The model call is faked so nothing touches the network.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,8 +18,8 @@ from typing import Optional
 
 import pytest
 
+from mote.contracts.events.conversation import UserPromptSubmitEvent
 from mote.contracts.events.session import TurnEndEvent
-from mote.runtime.events import UserPromptSubmitEvent
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import MetaUpdateEvent, SessionMetaEvent
 from mote.runtime.session.log import SessionLog

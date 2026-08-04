@@ -41,6 +41,7 @@ import pytest
 
 from mote.contracts.model import CanonicalToolCall, LLMResponse
 from mote.product.agents.factory import CodingAgentFactory
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent.component_keys import ROUTER
 
 # ---------------------------------------------------------------------------
@@ -210,7 +211,9 @@ def build_role(
         role_schema=schema,
         wiring=AgentWiring.for_context(
             context,
-            dependencies=CodingAgentFactory(paths=paths).dependencies(
+            dependencies=CodingAgentFactory(
+                model_checkpoint_policy=approved_model_checkpoint_policy(), paths=paths
+            ).dependencies(
                 deps=None,
                 output_contract=output_contract or text_output_contract(),
                 toolsets=builtin_toolsets(),

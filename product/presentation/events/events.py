@@ -33,6 +33,7 @@ from pydantic import BaseModel
 
 from mote.contracts.activity import ActivityKind, ActivityNodeState, ActivityOutcome, ActivityTopology
 from mote.contracts.artifact import ArtifactRef
+from mote.contracts.events.scope import ScopePath
 from mote.contracts.tool.identity import ToolInvocationIdentity
 
 # Discriminator constants (aligned with ``AgentEvent.name`` where 1:1).
@@ -92,7 +93,7 @@ class ViewEvent(BaseModel):
     # ``()`` = top level (today's exact behavior). A consumer that groups by
     # activity reads this; a flat consumer ignores it. Non-breaking by
     # construction: it defaults, so every existing ViewEvent constructs unchanged.
-    scope: tuple[object, ...] = ()
+    scope: ScopePath = ()
 
 
 class MessageBlockStarted(ViewEvent):
@@ -248,6 +249,20 @@ class ToolCallCompleted(ViewEvent):
     recovery: str = ""  # one-line remediation hint, human-facing
 
 
+@dataclass(frozen=True, slots=True)
+class UserMediaIdentity:
+    """Stable identity for one media item attached to a stored user message."""
+
+    message_id: str
+    ordinal: int
+
+    def __post_init__(self) -> None:
+        if not self.message_id:
+            raise ValueError("UserMediaIdentity.message_id must not be empty")
+        if isinstance(self.ordinal, bool) or self.ordinal < 1:
+            raise ValueError("UserMediaIdentity.ordinal must be positive")
+
+
 class MediaBlock(ViewEvent):
     """A media artifact a tool produced (image / pdf / ...) — first-class content.
 
@@ -259,7 +274,7 @@ class MediaBlock(ViewEvent):
     """
 
     kind: ClassVar[str] = MEDIA_BLOCK
-    identity: ToolInvocationIdentity
+    identity: ToolInvocationIdentity | UserMediaIdentity
     media_kind: str = "image"  # image | pdf | audio (reserved)
     ref: str = ""  # path / URL / data-uri
     mime: Optional[str] = None
@@ -546,6 +561,7 @@ __all__ = [
     "ToolCallStarted",
     "ToolCallCompleted",
     "MediaBlock",
+    "UserMediaIdentity",
     "ArtifactBlock",
     "FileDiffBlock",
     "TaskProgress",

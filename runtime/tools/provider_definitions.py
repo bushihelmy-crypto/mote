@@ -9,18 +9,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, Generic, TypeVar
 
+from mote.contracts.events.envelope import JsonValue
 from mote.contracts.tool.execution import ToolExecutionKind
 from mote.contracts.tool.protocol import CommandProtocol, NativeToolSchema, XmlToolSchema
+from mote.runtime.tools.base_tool import BaseTool
 
-CapabilityT = TypeVar("CapabilityT")
-XmlSchemaRenderer = Callable[[CapabilityT], XmlToolSchema]
-NativeSchemaRenderer = Callable[[CapabilityT], NativeToolSchema]
-ArgumentDecoder = Callable[[dict[str, Any]], dict[str, Any]]
+XmlSchemaRenderer = Callable[[BaseTool], XmlToolSchema]
+NativeSchemaRenderer = Callable[[BaseTool], NativeToolSchema]
+ArgumentDecoder = Callable[[dict[str, JsonValue]], dict[str, JsonValue]]
 
 
-def _identity_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+def _identity_arguments(arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:
     return arguments
 
 
@@ -30,13 +30,13 @@ def _prefixed_names(namespace: str, name: str, aliases: tuple[str, ...]) -> tupl
 
 
 @dataclass(frozen=True, slots=True)
-class XmlToolDefinition(Generic[CapabilityT]):
+class XmlToolDefinition:
     """One explicit registration on the XML prompt/catalog boundary."""
 
     name: str
-    capability_factory: Callable[[], CapabilityT]
-    capability_type: type
-    schema_renderer: XmlSchemaRenderer[CapabilityT]
+    capability_factory: Callable[[], BaseTool]
+    capability_type: type[BaseTool]
+    schema_renderer: XmlSchemaRenderer
     source_identity: str
     argument_decoder: ArgumentDecoder = _identity_arguments
     aliases: tuple[str, ...] = ()
@@ -55,30 +55,33 @@ class XmlToolDefinition(Generic[CapabilityT]):
     def names(self) -> tuple[str, ...]:
         return (self.name, *self.aliases)
 
-    def render(self, capability: CapabilityT) -> XmlToolSchema:
-        schema = dict(self.schema_renderer(capability))
-        schema["name"] = self.name
-        return schema  # type: ignore[return-value]
+    def render(self, capability: BaseTool) -> XmlToolSchema:
+        schema = self.schema_renderer(capability)
+        return {
+            "name": self.name,
+            "description": schema["description"],
+            "parameters": dict(schema["parameters"]),
+        }
 
-    def prefixed(self, namespace: str) -> "XmlToolDefinition[CapabilityT]":
+    def prefixed(self, namespace: str) -> "XmlToolDefinition":
         name, aliases = _prefixed_names(namespace, self.name, self.aliases)
         return replace(self, name=name, aliases=aliases)
 
-    def renamed(self, name: str) -> "XmlToolDefinition[CapabilityT]":
+    def renamed(self, name: str) -> "XmlToolDefinition":
         return replace(self, name=name)
 
-    def requiring_approval(self) -> "XmlToolDefinition[CapabilityT]":
+    def requiring_approval(self) -> "XmlToolDefinition":
         return replace(self, approval_required=True)
 
 
 @dataclass(frozen=True, slots=True)
-class NativeToolDefinition(Generic[CapabilityT]):
+class NativeToolDefinition:
     """One explicit registration on the provider-native tool boundary."""
 
     name: str
-    capability_factory: Callable[[], CapabilityT]
-    capability_type: type
-    schema_renderer: NativeSchemaRenderer[CapabilityT]
+    capability_factory: Callable[[], BaseTool]
+    capability_type: type[BaseTool]
+    schema_renderer: NativeSchemaRenderer
     source_identity: str
     argument_decoder: ArgumentDecoder = _identity_arguments
     aliases: tuple[str, ...] = ()
@@ -97,23 +100,26 @@ class NativeToolDefinition(Generic[CapabilityT]):
     def names(self) -> tuple[str, ...]:
         return (self.name, *self.aliases)
 
-    def render(self, capability: CapabilityT) -> NativeToolSchema:
-        schema = dict(self.schema_renderer(capability))
-        schema["name"] = self.name
-        return schema  # type: ignore[return-value]
+    def render(self, capability: BaseTool) -> NativeToolSchema:
+        schema = self.schema_renderer(capability)
+        return {
+            "name": self.name,
+            "description": schema["description"],
+            "input_schema": dict(schema["input_schema"]),
+        }
 
-    def prefixed(self, namespace: str) -> "NativeToolDefinition[CapabilityT]":
+    def prefixed(self, namespace: str) -> "NativeToolDefinition":
         name, aliases = _prefixed_names(namespace, self.name, self.aliases)
         return replace(self, name=name, aliases=aliases)
 
-    def renamed(self, name: str) -> "NativeToolDefinition[CapabilityT]":
+    def renamed(self, name: str) -> "NativeToolDefinition":
         return replace(self, name=name)
 
-    def requiring_approval(self) -> "NativeToolDefinition[CapabilityT]":
+    def requiring_approval(self) -> "NativeToolDefinition":
         return replace(self, approval_required=True)
 
 
-ToolDefinition = XmlToolDefinition[Any] | NativeToolDefinition[Any]
+ToolDefinition = XmlToolDefinition | NativeToolDefinition
 
 __all__ = [
     "NativeSchemaRenderer",

@@ -1,4 +1,5 @@
 """Visible diagrams.net Desktop backend driven through its native graph API."""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
+
+from pydantic import TypeAdapter
 
 from mote.contracts.ports.surface.canvas_backend import CanvasBackendCapabilities, CanvasBackendRender
 from mote.contracts.surface import (
@@ -33,6 +36,7 @@ _DRAWIO_CELL_EXTENSION = "org.diagrams.net/cell@1"
 _DRAWIO_TARGET = re.compile(r"draw\.io|diagrams\.net", re.IGNORECASE)
 _CANONICAL_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _COLOR = re.compile(r"^(?:#[0-9a-fA-F]{3,8}|[a-zA-Z]+|none)$")
+_CANVAS_ELEMENT_ADAPTER = TypeAdapter(CanvasElement)
 _GRAPH_LOOKUP = """
 const findUi = () => {
   for (const key of ['ui', 'editorUi', 'app']) {
@@ -236,8 +240,7 @@ return {enabled: graph.isEnabled(), editable: Boolean(payload)};
         self._scene = scene.model_copy(deep=True)
 
     async def snapshot_scene(self) -> CanvasDocument:
-        result = await self._graph_eval(
-            """
+        result = await self._graph_eval("""
 const model = graph.getModel();
 const parent = graph.getDefaultParent();
 const cells = graph.getChildCells(parent, true, true).map((cell) => {
@@ -261,8 +264,7 @@ const cells = graph.getChildCells(parent, true, true).map((cell) => {
 const codec = new mxCodec();
 const modelXml = mxUtils.getXml(codec.encode(model));
 return {cells, modelXml};
-"""
-        )
+""")
         cells = [_cell_from_raw(item) for item in result["cells"]]
         elements = [_element_from_cell(cell) for cell in cells]
         extensions = dict(self._scene.extensions)
@@ -455,9 +457,14 @@ return {cells, modelXml};
 
     async def _synchronize_scene(self, scene: CanvasDocument) -> None:
         extension = scene.extensions.get(_DRAWIO_EXTENSION)
-        previous = extension.get("canonical_ids", []) if isinstance(extension, dict) else []
+        previous_value = extension.get("canonical_ids", []) if isinstance(extension, dict) else []
+        previous = (
+            tuple(item for item in previous_value if isinstance(item, str)) if isinstance(previous_value, list) else ()
+        )
         current = {_raw_cell_id(element) for element in scene.elements}
-        operations = [{"op": "remove", "id": cell_id} for cell_id in previous if cell_id not in current]
+        operations: list[dict[str, Any]] = [
+            {"op": "remove", "id": cell_id} for cell_id in previous if cell_id not in current
+        ]
         operations.extend({"op": "upsert", "element": _element_payload(element)} for element in scene.elements)
         await self._apply_payload(operations)
         await self._graph_eval("graph.fit(20, false, 20, true, false, true); return true;")
@@ -635,37 +642,33 @@ def _model_xml(scene: CanvasDocument) -> str:
         background=scene.background,
     )
     root = ElementTree.SubElement(model, "root")
-    ElementTree.SubElement(root, "mxCell", id="0")
-    ElementTree.SubElement(root, "mxCell", id="1", parent="0")
+    ElementTree.SubElement(root, "mxCell", {"id": "0"})
+    ElementTree.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
     for element in scene.elements:
         payload = _element_payload(element)
-        attrs = {
-            "id": payload["id"],
-            "value": payload["label"],
-            "style": payload["style"],
+        attrs: dict[str, str] = {
+            "id": str(payload["id"]),
+            "value": str(payload["label"]),
+            "style": str(payload["style"]),
             "parent": "1",
         }
         if payload["kind"] == "edge":
             attrs["edge"] = "1"
             if payload["source"]:
-                attrs["source"] = payload["source"]
+                attrs["source"] = str(payload["source"])
             if payload["target"]:
-                attrs["target"] = payload["target"]
+                attrs["target"] = str(payload["target"])
             cell = ElementTree.SubElement(root, "mxCell", attrs)
-            geometry = ElementTree.SubElement(cell, "mxGeometry", relative="1", **{"as": "geometry"})
+            geometry = ElementTree.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
             ElementTree.SubElement(
                 geometry,
                 "mxPoint",
-                x=str(payload["x"]),
-                y=str(payload["y"]),
-                **{"as": "sourcePoint"},
+                {"x": str(payload["x"]), "y": str(payload["y"]), "as": "sourcePoint"},
             )
             ElementTree.SubElement(
                 geometry,
                 "mxPoint",
-                x=str(payload["x2"]),
-                y=str(payload["y2"]),
-                **{"as": "targetPoint"},
+                {"x": str(payload["x2"]), "y": str(payload["y2"]), "as": "targetPoint"},
             )
         else:
             attrs["vertex"] = "1"
@@ -673,11 +676,13 @@ def _model_xml(scene: CanvasDocument) -> str:
             ElementTree.SubElement(
                 cell,
                 "mxGeometry",
-                x=str(payload["x"]),
-                y=str(payload["y"]),
-                width=str(payload["width"]),
-                height=str(payload["height"]),
-                **{"as": "geometry"},
+                {
+                    "x": str(payload["x"]),
+                    "y": str(payload["y"]),
+                    "width": str(payload["width"]),
+                    "height": str(payload["height"]),
+                    "as": "geometry",
+                },
             )
     return ElementTree.tostring(model, encoding="unicode")
 
@@ -785,9 +790,8 @@ def _element_from_cell(cell: _DrawioCell) -> CanvasElement:
         kind = "rect"
     canonical_id = _canonical_cell_id(cell.id)
     text_color = style_map.get("fontColor") if kind == "text" else style_map.get("strokeColor")
-    return CanvasElement(
+    values = dict(
         id=canonical_id,
-        kind=kind,
         x=cell.x,
         y=cell.y,
         width=cell.width,
@@ -812,6 +816,8 @@ def _element_from_cell(cell: _DrawioCell) -> CanvasElement:
             }
         },
     )
+    values["kind"] = kind
+    return _CANVAS_ELEMENT_ADAPTER.validate_python(values, strict=True)
 
 
 def _style_map(style: str) -> dict[str, str]:

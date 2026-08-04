@@ -22,9 +22,13 @@ class _Provider:
     model: str
 
 
+def _orchestrator(**options):
+    return AttemptOrchestrator(provider_key=lambda provider: provider.model, **options)
+
+
 @pytest.mark.asyncio
 async def test_compress_replaces_request_state_before_next_attempt() -> None:
-    orchestrator = AttemptOrchestrator(max_wire_attempts=2)
+    orchestrator = _orchestrator(max_wire_attempts=2)
     provider = _Provider("primary")
     seen: list[list[dict]] = []
 
@@ -53,7 +57,7 @@ async def test_compress_replaces_request_state_before_next_attempt() -> None:
 
 @pytest.mark.asyncio
 async def test_rotate_credential_switches_request_local_provider_reference() -> None:
-    orchestrator = AttemptOrchestrator(max_wire_attempts=2)
+    orchestrator = _orchestrator(max_wire_attempts=2)
     provider = _Provider("primary-key-a")
     rotated = _Provider("primary-key-b")
     calls = 0
@@ -104,7 +108,7 @@ async def test_retry_honors_policy_retry_after(monkeypatch) -> None:
             raise LLMRateLimitError("slow down", retry_after=3.0)
         return active.model
 
-    result = await AttemptOrchestrator(max_wire_attempts=2).run(
+    result = await _orchestrator(max_wire_attempts=2).run(
         execute_once=execute,
         primary=_Provider("primary"),
         request=[],
@@ -116,7 +120,7 @@ async def test_retry_honors_policy_retry_after(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_fallback_switches_only_current_call_state() -> None:
-    orchestrator = AttemptOrchestrator(max_wire_attempts=2)
+    orchestrator = _orchestrator(max_wire_attempts=2)
     primary = _Provider("primary")
     fallback = _Provider("fallback")
 
@@ -149,7 +153,7 @@ async def test_fallback_switches_only_current_call_state() -> None:
 
 @pytest.mark.asyncio
 async def test_transform_replaces_request_state() -> None:
-    orchestrator = AttemptOrchestrator(max_wire_attempts=2)
+    orchestrator = _orchestrator(max_wire_attempts=2)
     provider = _Provider("primary")
     calls = 0
 
@@ -177,7 +181,7 @@ async def test_transform_replaces_request_state() -> None:
 
 @pytest.mark.asyncio
 async def test_missing_recovery_capability_aborts_without_second_attempt() -> None:
-    orchestrator = AttemptOrchestrator(max_wire_attempts=6)
+    orchestrator = _orchestrator(max_wire_attempts=6)
     provider = _Provider("primary")
     calls = 0
 
@@ -198,7 +202,7 @@ async def test_missing_recovery_capability_aborts_without_second_attempt() -> No
 
 def test_attempt_budget_must_be_positive() -> None:
     with pytest.raises(ValueError, match="positive"):
-        AttemptOrchestrator(max_wire_attempts=0)
+        _orchestrator(max_wire_attempts=0)
 
 
 def _two_attempt_budget(*, attempts_per_endpoint: int = 2) -> AttemptBudget:
@@ -226,7 +230,7 @@ async def test_exhausted_credential_chain_escalates_to_endpoint_fallback() -> No
             raise LLMAuthenticationError("bad key")
         return active.model
 
-    result = await AttemptOrchestrator(budget=_two_attempt_budget()).run(
+    result = await _orchestrator(budget=_two_attempt_budget()).run(
         execute_once=execute,
         primary=primary,
         request=[],
@@ -260,7 +264,7 @@ async def test_per_endpoint_attempt_cap_switches_without_shared_cursor() -> None
 
         return next_provider
 
-    orchestrator = AttemptOrchestrator(budget=_two_attempt_budget(attempts_per_endpoint=1))
+    orchestrator = _orchestrator(budget=_two_attempt_budget(attempts_per_endpoint=1))
     first = await orchestrator.run(
         execute_once=execute,
         primary=primary,
@@ -303,7 +307,7 @@ async def test_request_transform_budget_prevents_repeated_mutation() -> None:
         return [*request, {"role": "user", "content": "reduced"}]
 
     with pytest.raises(ContextWindowExceededError):
-        await AttemptOrchestrator(budget=budget).run(
+        await _orchestrator(budget=budget).run(
             execute_once=execute,
             primary=_Provider("primary"),
             request=[],

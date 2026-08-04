@@ -4,14 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
+from mote.contracts.model.checkpoint import ModelCheckpointPolicy
 from mote.contracts.ports.agent.composition import RoutingStrategyFactory
 from mote.kernel.execution import ExecutionEngine
 from mote.kernel.inference.base import BaseInferenceEngine
 from mote.kernel.inference.engine import InferenceEngine
 from mote.kernel.inference.prompt_builder import InferenceSubsystems
 from mote.runtime.agent.component_graph import BuildContext, ComponentKey, ComponentSpec
+
+if TYPE_CHECKING:
+    from mote.runtime.agent.component_projection import AgentComponentProjection
+    from mote.runtime.agent.role import Role
+
 from mote.runtime.agent.component_keys import (
     ARTIFACT_RESOLVER,
     COMMAND_CHANNEL,
@@ -28,7 +34,6 @@ from mote.runtime.agent.component_keys import (
     TURN_CONTEXT_BUS,
 )
 from mote.runtime.agent.components.context_provider import ContextProvider
-from mote.runtime.durable import InferenceJournal, JsonlBackend
 from mote.runtime.durable.inference_checkpoint import InferenceCheckpoint
 from mote.runtime.events.context import observe_event_sync
 from mote.runtime.models.gateway import LLMRouter
@@ -38,8 +43,10 @@ from mote.runtime.models.routing.catalog import build_route_catalog
 from mote.runtime.models.routing.policy import ClassMappedRoutingPolicy, DeterministicRoutingPolicy
 from mote.runtime.models.routing.service import RoutingService
 from mote.runtime.models.routing.state import RoleRoutingStateStore
+from mote.runtime.models.session_projection import ModelSessionProjectionStore
 from mote.runtime.output.engine import OutputEngine
 from mote.runtime.persistence.execution_transaction import RuntimeExecutionTransaction
+from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.telemetry.reporting import ThoughtReporter
 from mote.runtime.tools.snapshots import RuntimeToolSnapshotManager
 
@@ -49,6 +56,8 @@ OutputT = TypeVar("OutputT")
 @dataclass(frozen=True, slots=True)
 class CognitionComponentInputs:
     routing_strategy_factory: RoutingStrategyFactory | None = None
+    component_projection: AgentComponentProjection | None = None
+    model_checkpoint_policy: ModelCheckpointPolicy | None = None
 
 
 def cognition_component_specs(
@@ -65,7 +74,7 @@ def cognition_component_specs(
         ),
         ComponentSpec(
             TOOL_SNAPSHOT_MANAGER,
-            lambda ctx: RuntimeToolSnapshotManager(ctx.dep(EXECUTOR)),
+            _build_tool_snapshot_manager,
         ),
         ComponentSpec(
             CONTEXT_PROVIDER,
@@ -77,8 +86,22 @@ def cognition_component_specs(
         ),
         ComponentSpec(INFERENCE_ENGINE_FACTORY, _build_think_engine_factory),
         ComponentSpec(INFERENCE_SUBSYSTEMS_FACTORY, _build_think_subsystems_factory),
-        ComponentSpec(execution_engine_factory_key, _build_flow_engine_factory),
+        ComponentSpec(
+            execution_engine_factory_key,
+            lambda ctx: _build_flow_engine_factory(
+                ctx,
+                inputs.component_projection,
+                inputs.model_checkpoint_policy,
+            ),
+        ),
     ]
+
+
+def _build_tool_snapshot_manager(ctx: BuildContext["Role", object]) -> RuntimeToolSnapshotManager:
+    return RuntimeToolSnapshotManager(
+        ctx.dep(EXECUTOR),
+        composition_generation_id=(ctx.role._components.current_application_generation_id()),
+    )
 
 
 def _build_router(ctx, routing_strategy_factory: RoutingStrategyFactory | None) -> LLMRouter:
@@ -131,17 +154,29 @@ def _build_router(ctx, routing_strategy_factory: RoutingStrategyFactory | None) 
 ThinkBuilder = Callable[[BuildContext], BaseInferenceEngine]
 
 
-def _build_flow_engine(ctx: BuildContext, inference_engine: BaseInferenceEngine) -> ExecutionEngine[OutputT]:
+def _build_flow_engine(
+    ctx: BuildContext,
+    inference_engine: BaseInferenceEngine,
+    component_projection: AgentComponentProjection | None,
+    model_checkpoint_policy: ModelCheckpointPolicy | None,
+) -> ExecutionEngine[
+    OutputT
+]:  # pyright: ignore[reportInvalidTypeVarUse] -- OutputT is fixed by the typed ComponentKey factory consumer.
     role = ctx.role
     executor = ctx.dep(EXECUTOR)
     lease = role._components.current_output_lease()
-    durable_runner = None
-    if executor.durable_config.enabled and executor.durable_config.backend == "jsonl" and executor.journal is not None:
-        durable_runner = InferenceJournal(JsonlBackend(executor.journal))
+    model_gateway = ctx.dep(ROUTER).gateway
+    if component_projection is None or model_gateway is None or model_checkpoint_policy is None:
+        raise RuntimeError("Inference checkpoint requires Product workspace and ModelCall composition")
     checkpoint = InferenceCheckpoint(
-        journal_runner=durable_runner,
-        memory=ctx.dep(CONTEXT_MANAGER),
+        projections=ModelSessionProjectionStore(
+            role.state.session_id,
+            SessionWorkspace(component_projection.session_workspace_root()),
+            model_checkpoint_policy,
+        ),
+        model_calls=model_gateway,
         inference_engine=inference_engine,
+        artifact_resolver=ctx.dep(ARTIFACT_RESOLVER),
     )
     output_engine = OutputEngine(
         role.output_contract,
@@ -149,7 +184,7 @@ def _build_flow_engine(ctx: BuildContext, inference_engine: BaseInferenceEngine)
         run_id=lease.run_id,
         commit_fence=lease,
         fencing_token=lease.fencing_token,
-        drain_writes=role.context.disk_writer.drain,
+        drain_writes=role._context.disk_writer.drain,
         session_fact_sink=ctx.dep(SESSION_FACT_COMMITTER),
     )
     execution_transaction = RuntimeExecutionTransaction(
@@ -158,7 +193,7 @@ def _build_flow_engine(ctx: BuildContext, inference_engine: BaseInferenceEngine)
         memory=ctx.dep(CONTEXT_MANAGER),
         output_engine=output_engine,
         inference_checkpoint=checkpoint,
-        drain_writes=role.context.disk_writer.drain,
+        drain_writes=role._context.disk_writer.drain,
     )
     return ExecutionEngine(
         inference_engine=inference_engine,
@@ -204,9 +239,18 @@ def _build_think_engine_factory(ctx: BuildContext) -> Callable[[], BaseInference
 
 def _build_flow_engine_factory(
     ctx: BuildContext,
-) -> Callable[[], ExecutionEngine[OutputT]]:
+    component_projection: AgentComponentProjection | None,
+    model_checkpoint_policy: ModelCheckpointPolicy | None,
+) -> Callable[
+    [], ExecutionEngine[OutputT]
+]:  # pyright: ignore[reportInvalidTypeVarUse] -- OutputT is preserved by the registered ComponentKey.
     def make_flow_engine() -> ExecutionEngine[OutputT]:
-        return _build_flow_engine(ctx, ctx.dep(INFERENCE_ENGINE_FACTORY)())
+        return _build_flow_engine(
+            ctx,
+            ctx.dep(INFERENCE_ENGINE_FACTORY)(),
+            component_projection,
+            model_checkpoint_policy,
+        )
 
     return make_flow_engine
 

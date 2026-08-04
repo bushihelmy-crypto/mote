@@ -106,7 +106,7 @@ def test_public_symbol_classifier_covers_declared_package_entrypoints() -> None:
         ),
         "runtime/agent/__init__.py": {"Role"},
         "runtime/artifacts/__init__.py": {"DurableArtifactStore"},
-        "runtime/durable/__init__.py": {"make_durable_backend"},
+        "runtime/durable/__init__.py": set(),
         "runtime/events/__init__.py": {"EventFabric"},
         "runtime/inference/__init__.py": {"GatewayGenerationOwner"},
         "runtime/models/routing/__init__.py": {"build_route_catalog"},

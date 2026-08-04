@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from mote.runtime.process import ProcessDisposition, run_fixed_argv
+from mote.runtime.process import ProcessDisposition, resolve_fixed_executable, run_verified_fixed_argv
 from mote.runtime.vcs.probe import find_git_dir
 
 # How long a collected snapshot stays fresh (seconds). The collector runs once per
@@ -70,7 +70,9 @@ def _read_branch(git_dir: str) -> tuple[Optional[str], Optional[str]]:
 async def _git(cwd: str, args: tuple[str, ...]) -> Optional[str]:
     """Run ``git <args>`` in *cwd*; return stdout (stripped) or None on any failure."""
     try:
-        result = await run_fixed_argv(("git", *args), working_dir=cwd, timeout=_GIT_TIMEOUT_S)
+        result = await run_verified_fixed_argv(
+            resolve_fixed_executable("git"), args, working_dir=cwd, timeout=_GIT_TIMEOUT_S
+        )
     except Exception:  # noqa: BLE001 — best-effort; never break the prompt build
         return None
     if result.disposition is not ProcessDisposition.EXITED or result.exit_code != 0:

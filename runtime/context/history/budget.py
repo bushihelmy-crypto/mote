@@ -11,7 +11,7 @@ can be called both on stored history and on a built request.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Sequence, Union
+from typing import TYPE_CHECKING, Sequence
 
 from mote.contracts.conversation import TokenState
 
@@ -28,18 +28,17 @@ from mote.contracts.conversation.constants import (
     MODEL_CONTEXT_WINDOW_DEFAULT,
     WARNING_THRESHOLD_BUFFER_TOKENS,
 )
-from mote.contracts.conversation.messages import to_role_content_dicts
+from mote.contracts.model.invocation import CanonicalMessage
 from mote.kernel.inference.tokenization import count_message_tokens
 from mote.runtime.context.history.thresholds import ContextBudgetPolicy, evaluate_context_budget
 
-MessageLike = Union[Message, dict]
 
-
-def count_tokens(messages: Sequence[MessageLike], model: str) -> int:
+def count_tokens(messages: Sequence[Message], model: str) -> int:
     """Count tokens for *messages* under *model* (best-effort via tiktoken)."""
     if not messages:
         return 0
-    return count_message_tokens(to_role_content_dicts(messages), model=model)
+    canonical = tuple(CanonicalMessage(role=message.role, content=message.content) for message in messages)
+    return count_message_tokens(canonical, model=model)
 
 
 def context_window(model: str, *, context_tokens: int = 0) -> int:
@@ -81,7 +80,7 @@ def autocompact_threshold(model: str, *, context_tokens: int = 0) -> int:
 
 
 def evaluate(
-    messages: Sequence[MessageLike],
+    messages: Sequence[Message],
     model: str,
     *,
     autocompact_enabled: bool = True,

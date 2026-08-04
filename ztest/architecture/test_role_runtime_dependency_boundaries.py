@@ -8,6 +8,7 @@ import pytest
 
 from mote.kernel.output import text_output_contract
 from mote.product.agents.factory import CodingAgentFactory
+from mote.product.config.model_checkpoint import approved_model_checkpoint_policy
 from mote.runtime.agent.role import Role
 from mote.runtime.agent.role_state import RoleState
 from mote.runtime.agent.wiring import AgentWiring
@@ -34,7 +35,9 @@ async def test_human_binding_is_task_scoped() -> None:
     role = Role(
         name="scoped",
         wiring=AgentWiring.for_dependencies(
-            CodingAgentFactory().dependencies(deps=None, output_contract=text_output_contract())
+            CodingAgentFactory(model_checkpoint_policy=approved_model_checkpoint_policy()).dependencies(
+                deps=None, output_contract=text_output_contract()
+            )
         ),
     )
     ready = asyncio.Event()

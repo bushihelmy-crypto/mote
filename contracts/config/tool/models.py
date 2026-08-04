@@ -7,7 +7,7 @@ without importing the executor package.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Optional
 
 from pydantic import Field
 
@@ -78,7 +78,7 @@ class ToolResultLimitConfig(ConfigModel):
     compression_max_input_chars: int = COMPRESSION_MAX_INPUT_CHARS
 
 
-class RunJournalConfig(ConfigModel):
+class ToolEffectStoreConfig(ConfigModel):
     """Knobs for the EXTERNAL-tool-effect idempotency ledger (crash-replay guard).
 
     Sibling of :class:`ToolResultLimitConfig`: a pure-data, tool-execution-scope
@@ -96,7 +96,7 @@ class RunJournalConfig(ConfigModel):
 class LoopGuardConfig(ConfigModel):
     """Knobs for the tool-call loop guard (repeated-failure / no-progress detector).
 
-    Sibling of :class:`RunJournalConfig`: a pure-data, tool-execution-scope
+    Sibling of :class:`ToolEffectStoreConfig`: a pure-data, tool-execution-scope
     policy the :class:`~mote.runtime.tools.tool_executor.ToolExecutor` wires as a
     ToolResultPolicy enrichment stage.
     It watches finished calls and, when a call thrashes, appends a nudge to that
@@ -161,66 +161,18 @@ class ActivityConfig(ConfigModel):
 
 
 class TemporalConfig(ConfigModel):
-    """Connection + per-seam activity policy for the opt-in Temporal backend.
-
-    Consulted ONLY when :class:`DurableConfig` selects ``backend="temporal"``;
-    inert under the default JSONL backend. Pure data — the optional
-    ``runtime/durable/temporal`` adapter reads it to connect a client + register a
-    worker; the core schema never imports ``temporalio`` to hold this shape.
-
-    - ``server_address``: the Temporal frontend to connect to.
-    - ``namespace``: the Temporal namespace the run's workflow lives in.
-    - ``task_queue``: the queue the workflow + its activities are polled from.
-    - ``tool_activity`` / ``think_activity`` / ``timer_activity``: the per-seam
-      :class:`ActivityConfig` (retry/timeout) for the three durable seams. Each
-      defaults to a plain :class:`ActivityConfig` so a minimal config just names
-      the server + queue and inherits sane per-seam budgets.
-    """
+    """Connection and attempt policy for the Product-owned Workflow effect plane."""
 
     server_address: str = "localhost:7233"
     namespace: str = "default"
     task_queue: str = "mote"
-    tool_activity: ActivityConfig = Field(default_factory=ActivityConfig)
-    think_activity: ActivityConfig = Field(default_factory=ActivityConfig)
-    timer_activity: ActivityConfig = Field(default_factory=ActivityConfig)
-
-
-class DurableConfig(ConfigModel):
-    """Selects the durable-execution backend for the run's replay-safe steps.
-
-    Orthogonal to :class:`RunJournalConfig` (which guards EXTERNAL-tool
-    idempotency — a *correctness* concern that is never weakened): this config
-    governs whether a run's *replay-safe* steps (an LLM think turn, a LOCAL tool
-    write, a durable timer) have their result memoized so a resume can skip an
-    already-completed step instead of re-paying for it — and, when
-    ``backend="temporal"``, whether those steps are dispatched through the
-    optional Temporal backend instead of the always-on JSONL journal.
-
-    ``enabled=False`` reproduces the prior behavior byte-for-byte (no step
-    memoization; every step simply re-runs on resume). ``backend`` selects the
-    transport for the durable steps:
-
-    - ``"jsonl"`` (default, zero-dependency): the :class:`RunJournal` records a
-      started/completed/failed entry per step; a resume replays a completed
-      step's result from the journal. This is NOT a deterministic replay engine
-      — it only promises "skip completed steps + heal the crash frontier".
-    - ``"temporal"`` (opt-in): the three seams (tool / think / spawn) become
-      Temporal activities and the loop runs inside a Temporal workflow sandbox.
-      Requires the optional ``[temporal]`` extra; the core never imports
-      ``temporalio`` — only this string selects the optional backend package.
-      ``temporal`` carries that backend's connection + per-seam activity policy
-      (consulted only on this branch).
-    """
-
-    enabled: bool = True
-    backend: Literal["jsonl", "temporal"] = "jsonl"
-    temporal: TemporalConfig = Field(default_factory=TemporalConfig)
+    effect_activity: ActivityConfig = Field(default_factory=ActivityConfig)
 
 
 class ToolSearchConfig(ConfigModel):
     """Master switch for the Tool Search subsystem (deferred-tool discovery).
 
-    Sibling of :class:`ToolResultLimitConfig` / :class:`RunJournalConfig`: a
+    Sibling of :class:`ToolResultLimitConfig` / :class:`ToolEffectStoreConfig`: a
     pure-data, tool-execution-scope policy. Per-role ``RoleSchema.deferred_tools``
     declares WHICH tools are hidden-until-discovered; this ``enabled`` flag is the
     global OVERRIDE that gates whether that declaration takes effect at all.

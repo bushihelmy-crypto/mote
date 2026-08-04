@@ -30,6 +30,7 @@ from typing import Any, ClassVar, Optional
 
 from mote.contracts.authorization import PermissionDecision
 from mote.contracts.browser import BrowserProfileSnapshot
+from mote.contracts.browser.profile import BrowserProfileCommitReceipt
 from mote.contracts.model.capabilities import supports_vision
 from mote.contracts.runtime import RuntimeAccessMode
 from mote.contracts.runtime.errors import ManagedRuntimeNotFoundError
@@ -198,7 +199,9 @@ class WebBrowser(BaseTool):
     # tests) stays fully ephemeral.
     get_browser_profile: GetBrowserProfile = staticmethod(lambda: "")
     load_browser_profile: LoadBrowserProfile = staticmethod(lambda _name: None)
-    save_browser_profile: SaveBrowserProfile = staticmethod(lambda _name, _state, _revision: None)
+    save_browser_profile: SaveBrowserProfile = staticmethod(
+        lambda _name, _state, _revision: BrowserProfileCommitReceipt("", _revision, "")
+    )
     get_browser_profile_target: GetBrowserProfileTarget = staticmethod(lambda _name: "")
     # Client TLS certs (mutual-TLS logins): Playwright ``client_certificates``
     # entries; each ``passphrase`` may be a secret placeholder expanded at
@@ -502,7 +505,7 @@ class WebBrowser(BaseTool):
             )
             return ToolResult(
                 output="[screenshot of the active tab; shown below]",
-                media=[ToolMedia(kind="image", mime="image/png", artifact=artifact)],
+                media=(ToolMedia(kind="image", mime="image/png", artifact=artifact),),
                 payload=json_tool_payload({"type": "screenshot", "bytes": len(png)}),
             )
         if action == "eval":

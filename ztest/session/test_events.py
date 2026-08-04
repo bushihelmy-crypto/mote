@@ -99,7 +99,7 @@ def test_session_meta_event_line():
 
 
 def test_session_meta_requires_current_identity() -> None:
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="payload fields must be exactly"):
         SessionMetaEvent.from_payload({"session_id": "legacy"})
 
 
@@ -345,7 +345,7 @@ def test_output_lifecycle_events_roundtrip():
 
 
 def test_output_event_rejects_legacy_payload_shape():
-    with pytest.raises(ValueError, match="fields must be exactly"):
+    with pytest.raises(ValueError, match="fields are not canonical"):
         OutputCommittedEvent.from_payload(
             {
                 "candidate_id": "legacy-candidate",

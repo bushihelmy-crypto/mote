@@ -91,7 +91,7 @@ class BrowserRuntimeDriver:
         storage_state = self._storage_state
         if storage_state is None and restore is not None:
             candidate = restore.storage_state
-            thawed = thaw_json(candidate) if candidate is not None else None
+            thawed = thaw_json(dict(candidate)) if candidate is not None else None
             storage_state = thawed if isinstance(thawed, dict) else None
         session = BrowserSession(**self._session_kwargs)
         self._session = session

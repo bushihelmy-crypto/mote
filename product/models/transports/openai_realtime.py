@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
@@ -69,7 +69,7 @@ class OpenAIRealtimeTransport:
         socket = await self._connection.session.ws_connect(
             _realtime_url(self._base_url, model),
             headers=headers,
-            timeout=ClientWSTimeout(ws_close=remaining),
+            timeout=replace(ClientWSTimeout(), ws_receive=remaining),
             autoclose=False,
             autoping=True,
             compress=0,

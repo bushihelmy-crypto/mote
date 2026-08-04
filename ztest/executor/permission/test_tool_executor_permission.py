@@ -7,6 +7,7 @@ Confirms (a) with no PermissionConfig the executor behaves exactly as before
 and the user's approval is routed through the Role's ``request_approval``
 capability.
 """
+
 from __future__ import annotations
 
 import os
@@ -17,6 +18,7 @@ from typing import Any
 import pytest
 
 from mote.contracts.authorization import PermissionDecision
+from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity, tool_arguments_digest
 from mote.product.toolsets.builtin.edit import Edit
 from mote.product.toolsets.builtin.read import Read
 from mote.product.toolsets.builtin.search import Search
@@ -31,6 +33,18 @@ from mote.runtime.tools.tool_executor import ToolExecutor
 from mote.runtime.tools.tool_pipeline import AuthorizeStage, ToolExecution
 
 pytestmark = pytest.mark.asyncio
+
+
+def invocation_identity(call_id: str, arguments: dict[str, object]) -> ToolInvocationIdentity:
+    return ToolInvocationIdentity(
+        invocation_id=ToolInvocationId(call_id),
+        attempt_ordinal=ToolAttemptOrdinal(1),
+        definition_identity="mote.test.tool/v1",
+        catalog_generation=1,
+        arguments_digest=tool_arguments_digest(arguments),
+        owner_id="test-agent",
+        run_id="test-run",
+    )
 
 
 class SpyTool(BaseTool):
@@ -186,7 +200,7 @@ class TestFilesystemPermissionTargets:
         execution = ToolExecution(
             name=tool.name,
             args=args,
-            result_id="canonical-path-call",
+            identity=invocation_identity("canonical-path-call", args),
             tool=tool,
         )
 
@@ -198,14 +212,14 @@ class TestFilesystemPermissionTargets:
         stage = authorize_stage(
             PermissionConfig(
                 mode="bypass",
-                sandbox=SandboxConfig(mode="workspace-write"),
+                sandbox=SandboxConfig(),
             ),
             cwd=str(tmp_path),
         )
         execution = ToolExecution(
             name=tool.name,
             args={},
-            result_id="empty-target-call",
+            identity=invocation_identity("empty-target-call", {}),
             tool=tool,
         )
 

@@ -9,7 +9,7 @@ from mote.product.agents.catalog import AgentCatalog
 from mote.product.agents.defaults import DEFAULT_DEFERRED_TOOLS, DEFAULT_TOOLS
 from mote.product.agents.factory import CodingAgentFactory, RootAgentRequest
 from mote.product.config.adapters.mcp import MCP_CONFIG_FILE_NAME, load_mcp_servers
-from mote.product.config.adapters.permissions import load_permission_rules
+from mote.product.config.adapters.permissions import build_product_permission_config, load_permission_rules
 from mote.product.extensions.sources import ExtensionKind, ExtensionSourcePolicy
 from mote.product.paths import RuntimePaths, mote_layered_files
 from mote.runtime.agent import Role
@@ -89,8 +89,10 @@ def build_product_agent(
             )
         )
     else:
-        permissions = load_permission_rules(
-            mote_layered_files("settings.local.json", cwd, user_config_root=paths.user_config_root)
+        permissions = build_product_permission_config(
+            load_permission_rules(
+                mote_layered_files("settings.local.json", cwd, user_config_root=paths.user_config_root)
+            )
         )
         file_watch = FileWatchConfig(
             enabled=True,

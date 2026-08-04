@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from mote.contracts.events.envelope import EventEnvelope, JsonValue
+from mote.contracts.events.envelope import EventEnvelope, JsonValue, thaw_json
 from mote.contracts.events.file.facts import FileTransactionCommittedEvent
 from mote.contracts.events.telemetry import DiagnosticsEvent
 from mote.contracts.ports.events.telemetry import TelemetryEmitter
@@ -29,7 +29,10 @@ class LspService:
 
     async def handle(self, envelope: EventEnvelope[Mapping[str, JsonValue]]) -> None:
         """Synchronize exact versions from one committed File Operations fact."""
-        event = FileTransactionCommittedEvent.from_payload(dict(envelope.payload))
+        payload = thaw_json(dict(envelope.payload))
+        if not isinstance(payload, dict):
+            raise TypeError("committed FileOps event payload must be an object")
+        event = FileTransactionCommittedEvent.from_payload(payload)
         for path in event.paths:
             await self.file_saved(path)
         await self._publish_diagnostics()
@@ -75,28 +78,16 @@ class LspService:
             return ""
 
     async def document_symbols(self, path: str) -> list:
-        """The file's symbol table via LSP (Layer B; ``[]`` on any failure)."""
-        try:
-            return await self._manager.document_symbols(path)
-        except Exception as exc:  # noqa: BLE001 — best-effort query
-            logger.debug(f"LspService: document_symbols for {path} failed: {exc}")
-            return []
+        """The file's symbol table via LSP; failures remain typed query errors."""
+        return await self._manager.document_symbols(path)
 
     async def definition(self, path: str, line: int, character: int) -> list:
         """Definition sites for the symbol at a position (``[]`` on any failure)."""
-        try:
-            return await self._manager.definition(path, line, character)
-        except Exception as exc:  # noqa: BLE001 — best-effort query
-            logger.debug(f"LspService: definition for {path} failed: {exc}")
-            return []
+        return await self._manager.definition(path, line, character)
 
     async def references(self, path: str, line: int, character: int) -> list:
         """Reference (call) sites for the symbol at a position (``[]`` on any failure)."""
-        try:
-            return await self._manager.references(path, line, character)
-        except Exception as exc:  # noqa: BLE001 — best-effort query
-            logger.debug(f"LspService: references for {path} failed: {exc}")
-            return []
+        return await self._manager.references(path, line, character)
 
     async def shutdown(self) -> None:
         """Tear down all managed language servers."""

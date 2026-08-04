@@ -9,6 +9,7 @@ from typing import Any
 from mote.contracts.artifact import ArtifactRef
 from mote.contracts.conversation import Message
 from mote.contracts.model.turn import ModelTurn
+from mote.contracts.tool.arguments import ToolArguments
 from mote.contracts.tool.result import FileChange, ToolMedia
 
 
@@ -62,7 +63,7 @@ class DecodeResult:
 class ExecutedCommand:
     action_id: str | None
     name: str
-    arguments: dict[str, Any]
+    arguments: ToolArguments
     output: str = ""
     success: bool = True
     settled: bool = False

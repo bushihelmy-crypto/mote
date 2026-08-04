@@ -57,8 +57,11 @@ def build_table(tsv: str) -> Optional["Table"]:
 
 
 class FoldNoteSource(Protocol):
-    full_ref: Optional[str]
-    hidden_lines: int
+    @property
+    def full_ref(self) -> Optional[str]: ...
+
+    @property
+    def hidden_lines(self) -> int: ...
 
 
 def tool_body_syntax(event: ToolCallStarted) -> Optional["Syntax"]:

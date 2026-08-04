@@ -107,11 +107,17 @@ class ApplicationShutdownTimedOut:
 
 
 __all__ = [
-    name
-    for name in globals()
-    if name.startswith("Application")
-    or name.startswith("Generation")
-    or name.startswith("Retired")
-    or name.startswith("Inference")
-    or name.startswith("Composition")
+    "ApplicationActivationRequested",
+    "ApplicationActivationCommitted",
+    "ApplicationActivationRejected",
+    "ApplicationActivationStale",
+    "ApplicationActivationCasConflict",
+    "ApplicationReadinessFailed",
+    "ApplicationShutdownTimedOut",
+    "RetiredGenerationCapacityReached",
+    "GenerationDrainCompleted",
+    "GenerationDrainTimedOut",
+    "InferenceTargetExpired",
+    "InferenceTargetCapacityReached",
+    "CompositionCloseFailed",
 ]

@@ -37,7 +37,7 @@ class _ErasedTelemetryBinding:
     spec: TelemetrySubscriptionSpec
     handler: TelemetryHandler[object]
     sync_handler: SyncTelemetryHandler[object] | None = None
-    event_type: type[object] | None = None
+    event_token: _TelemetryTypeToken[object] | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,19 @@ class AllTelemetryBinding:
 EventT = TypeVar("EventT")
 
 
+class _TelemetryTypeToken(Generic[EventT]):
+    """Owner-created nominal witness for one exact event/handler binding."""
+
+    __slots__ = ("event_type", "_identity")
+
+    def __init__(self, event_type: type[EventT]) -> None:
+        self.event_type = event_type
+        self._identity = object()
+
+    def accepts(self, event: object) -> bool:
+        return type(event) is self.event_type
+
+
 @dataclass(frozen=True)
 class _TypedTelemetryBinding(Generic[EventT]):
     spec: TelemetrySubscriptionSpec
@@ -63,11 +76,12 @@ class _TypedTelemetryBinding(Generic[EventT]):
     sync_handler: SyncTelemetryHandler[EventT] | None = None
 
     def erase(self) -> _ErasedTelemetryBinding:
+        token = _TelemetryTypeToken(self.event_type)
         return _ErasedTelemetryBinding(
             self.spec,
             cast(TelemetryHandler[object], self.handler),
             cast(SyncTelemetryHandler[object], self.sync_handler),
-            cast(type[object], self.event_type),
+            cast(_TelemetryTypeToken[object], token),
         )
 
 
@@ -209,7 +223,7 @@ class _TelemetryWorker:
     def publish(self, event: object, *, synchronous: bool) -> TelemetryPutResult:
         if self._state not in {TelemetryState.RUNNING, TelemetryState.DEGRADED}:
             return TelemetryPutResult.DROPPED
-        if self.binding.event_type is not None and type(event) is not self.binding.event_type:
+        if self.binding.event_token is not None and not self.binding.event_token.accepts(event):
             return TelemetryPutResult.DROPPED
         return self._mailbox.put(_TelemetryItem(event=event, synchronous=synchronous))
 

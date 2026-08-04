@@ -158,5 +158,5 @@ async def test_closed_port_short_circuits_to_reject():
 # ── control affordances are inert (server owns the run task) ─────────────────
 def test_interrupt_and_steer_are_noops():
     port = AcpPort("x", session_id="s")
-    assert port.signal_interrupt(None) is None
-    assert port.submit_steer(None, "later") is None
+    assert port.signal_interrupt(None).disposition.value == "ignored"
+    assert port.submit_steer(None, "later").disposition.value == "ignored"

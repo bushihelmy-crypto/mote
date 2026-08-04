@@ -18,6 +18,7 @@ from mote.contracts.tool.errors import ToolError
 from mote.contracts.workflow.identity import WorkflowDefinitionId, WorkflowRunId, WorkflowRunReference
 from mote.orchestration.workflows.durable import WorkflowRunPhase
 from mote.product.workflows.agent_context import resolve_agent_workflows
+from mote.product.workflows.agent_service import WorkflowResumePlan
 from mote.runtime.tools.base_tool import BaseTool
 
 # Messages aligned with the design doc (§9)
@@ -131,64 +132,12 @@ class ResumeTasks(BaseTool):
         from_nodes = _as_list(from_node)
         skip_nodes = _as_list(skip_node)
 
-        gm = meta.graph_meta
-        graph = gm.graph_ref if gm else None
-        state = meta.state_snapshot
-        # Authoritative per-node records (truth source for what is already done).
-        # Falls back to the completed_nodes set for tasks saved without run_state.
-        run_state = meta.run_state
-
-        # Apply overrides to the graph state before resuming. Validate keys
-        # against the state's declared input fields and reject unknown ones —
-        # silently dropping a mistyped key would let the LLM believe an override
-        # took effect when it did not.
-        if overrides and state is not None:
-            valid_fields = set(getattr(type(state), "model_fields", {}) or {})
-            unknown = [k for k in overrides if k not in valid_fields]
-            if unknown:
-                raise ToolError(
-                    _MSG_UNKNOWN_OVERRIDE.format(
-                        keys=", ".join(sorted(unknown)),
-                        valid=", ".join(sorted(valid_fields)) or "(none declared)",
-                    )
-                )
-            for k, v in overrides.items():
-                setattr(state, k, v)
-
-        # Validate node names against the graph
-        if graph is not None:
-            available = list(graph._nodes.keys())
-            for n in from_nodes + skip_nodes:
-                if n not in graph._nodes:
-                    raise ToolError(_MSG_NODE_NOT_FOUND.format(node_name=n, available=available))
-
-        # Feasibility: a re-run node needs its declared input sources satisfied.
-        if from_nodes and graph is not None:
-            completed = run_state.completed_names() if run_state is not None else set(meta.completed_nodes)
-            missing = _missing_upstreams(graph, from_nodes, skip_nodes, completed)
-            if missing:
-                detail = "; ".join(f"'{n}' (needs {ups})" for n, ups in missing.items())
-                raise ToolError(_MSG_INFEASIBLE.format(detail=detail))
-
-        # Build the Workflow-owned deferred result.
-        if skip_nodes and from_nodes and graph and state:
-            workflow_result = graph.resume_skip_and_from(
-                state=state, skip_nodes=skip_nodes, from_nodes=from_nodes, run_state=run_state
+        try:
+            await workflows.resume_plan(
+                reference,
+                WorkflowResumePlan(tuple(from_nodes), tuple(skip_nodes), overrides),
             )
-        elif skip_nodes and graph and state:
-            workflow_result = graph.resume_skip(state=state, skip_nodes=skip_nodes, run_state=run_state)
-        elif from_nodes and graph and state:
-            workflow_result = graph.resume(state=state, from_nodes=from_nodes, run_state=run_state)
-        elif graph is not None and gm is not None and gm.initial_params is not None:
-            # Recompile from the authoritative graph definition. No stored
-            # continuation/factory participates in durable resume.
-            merged_params = {**gm.initial_params, **(overrides or {})}
-            workflow_result = await graph.compile()(**merged_params)
-        else:
-            raise ToolError(f"Workflow run {run_id} has no graph definition — cannot resume.")
-
-        # Resume through the durable Workflow owner. The run identity remains
-        # stable; no BackgroundTask TaskId, attempt, or pool registry participates.
-        workflows.resume(reference, workflow_result)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise ToolError(str(exc)) from exc
 
         return _MSG_RESUMED.format(run_id=run_id)

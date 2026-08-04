@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Coroutine
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from mote.contracts.workflow.definition_source import WorkflowDefinitionSource
+
+if TYPE_CHECKING:
+    from mote.orchestration.workflows.definition import WorkflowExecutable
+    from mote.orchestration.workflows.types import GraphRunState
+
+DeferredResultT = TypeVar("DeferredResultT")
+WorkflowPollFactory = Callable[[], Awaitable[DeferredResultT]]
 
 
 class WorkflowExecutionMode(str, Enum):
@@ -18,31 +26,37 @@ class WorkflowExecutionMode(str, Enum):
 @dataclass
 class WorkflowRunMetadata:
     request_id: str = ""
-    graph_ref: Any = None
-    initial_params: dict | None = None
-    run_state: Any = None
-    state: Any = None
+    executable: "WorkflowExecutable | None" = None
+    stage_summary: str = ""
+    initial_params: Mapping[str, object] | None = None
+    run_state: "GraphRunState | None" = None
     from_nodes: tuple[str, ...] = ()
     skip_nodes: tuple[str, ...] = ()
     definition_source: WorkflowDefinitionSource | None = None
+    # Durable checkpoint/frontier projection.  Resume authorities must use
+    # these committed facts, never a live graph object.
+    checkpoint: bytes | None = None
+    pending_frontier: tuple[str, ...] = ()
+    run_revision: int | None = None
+    execution_fence: int | None = None
 
 
 @dataclass
-class WorkflowDeferredResult:
+class WorkflowDeferredResult(Generic[DeferredResultT]):
     mode: WorkflowExecutionMode = WorkflowExecutionMode.FOREGROUND
-    result: Any = None
-    poll_factory: Callable[[], Coroutine] | None = field(default=None, repr=False)
+    result: DeferredResultT | None = None
+    poll_factory: WorkflowPollFactory[DeferredResultT] | None = field(default=None, repr=False)
     command_name: str = ""
     graph_meta: WorkflowRunMetadata | None = field(default=None, repr=False)
 
     @classmethod
     def background(
         cls,
-        poll_factory: Callable[[], Coroutine],
+        poll_factory: WorkflowPollFactory[DeferredResultT],
         *,
         command_name: str,
         graph_meta: WorkflowRunMetadata | None = None,
-    ) -> "WorkflowDeferredResult":
+    ) -> "WorkflowDeferredResult[DeferredResultT]":
         return cls(
             mode=WorkflowExecutionMode.BACKGROUND,
             poll_factory=poll_factory,
@@ -53,12 +67,12 @@ class WorkflowDeferredResult:
     @classmethod
     def hybrid(
         cls,
-        result: Any,
-        poll_factory: Callable[[], Coroutine],
+        result: DeferredResultT,
+        poll_factory: WorkflowPollFactory[DeferredResultT],
         *,
         command_name: str,
         graph_meta: WorkflowRunMetadata | None = None,
-    ) -> "WorkflowDeferredResult":
+    ) -> "WorkflowDeferredResult[DeferredResultT]":
         return cls(
             mode=WorkflowExecutionMode.HYBRID,
             result=result,
@@ -72,4 +86,5 @@ __all__ = [
     "WorkflowDeferredResult",
     "WorkflowExecutionMode",
     "WorkflowRunMetadata",
+    "WorkflowPollFactory",
 ]

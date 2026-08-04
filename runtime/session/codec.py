@@ -35,7 +35,7 @@ from mote.runtime.session.events import (
     SessionEvent,
 )
 
-SESSION_FACT_SCHEMA_VERSION = 1
+SESSION_FACT_SCHEMA_VERSION = 2
 SESSION_STREAM_PREFIX = "session/"
 
 _FILEOPS_EVENT_TYPES = frozenset(

@@ -11,7 +11,7 @@ from mote.contracts.events.tool import ToolsChangedEvent
 from mote.contracts.tool import CommandProtocol
 from mote.kernel.execution.run_context import RunContext
 from mote.runtime.tools.base_tool import BaseTool, ToolCapabilityProvider
-from mote.runtime.tools.mcp.lifecycle import McpCandidate, McpLifecycle
+from mote.runtime.tools.mcp.lifecycle import McpCandidate, McpCleanupDisposition, McpLifecycle
 from mote.runtime.tools.provider import (
     NativeToolset,
     ToolsetCompositionError,
@@ -185,12 +185,12 @@ class ToolLifecycle(Generic[AgentDepsT]):
             seen_ids.add(id(tool))
             await self._cleanup_tool_session(
                 tool,
-                getattr(tool, "name", type(tool).__name__),
+                tool.name,
             )
         if names:
             self._catalog.remove(names)
 
-    def register_native(self, definition: NativeToolDefinition[Any], capability: BaseTool) -> None:
+    def register_native(self, definition: NativeToolDefinition, capability: BaseTool) -> None:
         self.prepare()
         capability.bind(self._session_id, role=self._role)
         bound = ExecutableToolBinding(definition, capability)
@@ -204,7 +204,7 @@ class ToolLifecycle(Generic[AgentDepsT]):
     def dynamic_toolset_instructions(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(block for toolset in self._toolsets for block in toolset.dynamic_instruction_blocks))
 
-    def register_xml(self, definition: XmlToolDefinition[Any], capability: BaseTool) -> None:
+    def register_xml(self, definition: XmlToolDefinition, capability: BaseTool) -> None:
         self.prepare()
         capability.bind(self._session_id, role=self._role)
         bound = ExecutableToolBinding(definition, capability)
@@ -265,13 +265,15 @@ class ToolLifecycle(Generic[AgentDepsT]):
         cleanup_failures: list[tuple[str, BaseException]] = []
         for tool in old_tools:
             try:
-                await self._cleanup_tool_session(tool, getattr(tool, "name", type(tool).__name__))
+                await self._cleanup_tool_session(tool, tool.name)
             except Exception as exc:
-                cleanup_failures.append((getattr(tool, "name", type(tool).__name__), exc))
-        try:
-            await self._mcp_lifecycle.cleanup_owner(previous_owner)
-        except Exception as exc:
-            cleanup_failures.append(("mcp-owner", exc))
+                cleanup_failures.append((tool.name, exc))
+        receipt = await self._mcp_lifecycle.settle_prior(
+            previous_owner,
+            generation=max(candidate.generation - 1, 0),
+        )
+        if receipt.disposition is McpCleanupDisposition.CLEANUP_FAILED:
+            cleanup_failures.append(("mcp-owner", RuntimeError(receipt.detail)))
         if announce:
             await self._announce(
                 sorted(old_name_set - new_name_set),
@@ -302,10 +304,8 @@ class ToolLifecycle(Generic[AgentDepsT]):
             context=context,
         )
 
-    async def _cleanup_tool_session(self, tool: Any, name: str) -> None:
-        result = tool.cleanup_session(self._session_id)
-        if inspect.isawaitable(result):
-            await result
+    async def _cleanup_tool_session(self, tool: ExecutableToolBinding, name: str) -> None:
+        await tool.cleanup_session(self._session_id)
 
     async def cleanup(self) -> None:
         failures: list[tuple[str, BaseException]] = []
@@ -318,7 +318,7 @@ class ToolLifecycle(Generic[AgentDepsT]):
         for tool in tuple(self._catalog.iter_unique()):
             if id(tool) not in seen_ids:
                 seen_ids.add(id(tool))
-                name = getattr(tool, "name", type(tool).__name__)
+                name = tool.name
                 try:
                     await self._cleanup_tool_session(tool, name)
                 except Exception as exc:

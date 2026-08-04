@@ -14,13 +14,14 @@ per-test ``CapRole`` through its ``RuntimeHost``, so there is no process-global
 singleton to leak across tests; each test still tears its terminal down to free
 the subprocess.
 """
+
 from __future__ import annotations
 
 import pytest
 
+from mote.contracts.tool.errors import ToolError
 from mote.product.toolsets.builtin.terminal import Terminal
 from mote.runtime.interactive.terminal.driver import HeadTailBuffer, TerminalRuntimeDriver
-from mote.runtime.tools.tool_result import ToolError
 
 from .conftest import CapRole, bind, run
 

@@ -68,13 +68,8 @@ def test_enqueue_raw_message_modes():
 
 
 def test_dump_load_roundtrip():
-    mailbox = Mailbox("agent-1")
-    mailbox.enqueue_communication(make_mail("/root", "/root/worker", "one", False))
-    mailbox.enqueue_communication(make_mail("/root/worker", "/root", "two", True))
-    restored = Mailbox.load(mailbox.dump(), expected_owner_agent_id="agent-1")
-    drained = restored.drain_for_turn()
-    assert [m.content for m in drained] == ["one", "two"]
-    assert restored.has_trigger_turn() is False  # drained already
+    assert not hasattr(Mailbox, "dump")
+    assert not hasattr(Mailbox, "load")
 
 
 def test_mailbox_deduplicates_pending_output_publication():

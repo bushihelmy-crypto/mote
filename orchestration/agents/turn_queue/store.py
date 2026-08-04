@@ -61,10 +61,20 @@ class DurableTurnQueueStore:
         with self._locked():
             return self._read()
 
-    def accept(self, request: TurnAcceptanceRequest) -> TurnAdmissionReceipt:
+    def prepare_acceptance(self, request: TurnAcceptanceRequest, *, lease: LeaseEpoch) -> TurnAdmissionReceipt:
         if request.identity.queue_id != self._queue_id:
             raise ValueError("turn acceptance belongs to another queue")
         with self._locked():
+            try:
+                self._lease_coordinator.assert_current(lease.subject, lease.fencing_token)
+            except LeaseFencedError:
+                return TurnAdmissionReceipt(
+                    TurnAdmissionDisposition.STALE_FENCE, request.identity.request_id, self._queue_id, None
+                )
+            except LeaseCoordinatorUnavailableError:
+                return TurnAdmissionReceipt(
+                    TurnAdmissionDisposition.OWNER_LOST, request.identity.request_id, self._queue_id, None
+                )
             snapshot = self._read()
             existing = next(
                 (item for item in snapshot.items if item.identity.request_id == request.identity.request_id),
@@ -91,12 +101,13 @@ class DurableTurnQueueStore:
                 config_generation=request.config_generation,
                 revision=1,
                 priority=request.priority,
-                state=TurnQueueState.ACCEPTED,
+                state=TurnQueueState.PREPARED,
                 accepted_at=request.accepted_at,
                 deadline=request.deadline,
                 attempt=0,
                 maximum_attempts=request.maximum_attempts,
                 next_eligible_at=None,
+                payload_digest=request.payload_digest,
             )
             committed = TurnQueueSnapshot(
                 queue_id=self._queue_id,
@@ -112,6 +123,46 @@ class DurableTurnQueueStore:
                 request.identity.request_id,
                 self._queue_id,
                 item.revision,
+            )
+
+    def commit_acceptance(
+        self, *, request_id: str, expected_item_revision: int, lease: LeaseEpoch
+    ) -> TurnMutationReceipt:
+        """Publish an eligible turn only after Delivery bound the complete batch."""
+        with self._locked():
+            fenced = self._fence_receipt(request_id, lease)
+            if fenced is not None:
+                return fenced
+            snapshot = self._read()
+            item = next((value for value in snapshot.items if value.identity.request_id == request_id), None)
+            if item is None:
+                return TurnMutationReceipt(TurnMutationDisposition.NOT_FOUND, self._queue_id, request_id, None, None)
+            if item.state is TurnQueueState.ACCEPTED:
+                return TurnMutationReceipt(
+                    TurnMutationDisposition.APPLIED, self._queue_id, request_id, item.revision, item.state
+                )
+            if item.state is not TurnQueueState.PREPARED or item.revision != expected_item_revision:
+                return TurnMutationReceipt(
+                    TurnMutationDisposition.REVISION_CONFLICT,
+                    self._queue_id,
+                    request_id,
+                    item.revision,
+                    item.state,
+                )
+            committed_item = replace(item, revision=item.revision + 1, state=TurnQueueState.ACCEPTED)
+            self._write(
+                replace(
+                    snapshot,
+                    revision=snapshot.revision + 1,
+                    items=tuple(committed_item if value is item else value for value in snapshot.items),
+                )
+            )
+            return TurnMutationReceipt(
+                TurnMutationDisposition.APPLIED,
+                self._queue_id,
+                request_id,
+                committed_item.revision,
+                committed_item.state,
             )
 
     def claim(
@@ -232,7 +283,7 @@ class DurableTurnQueueStore:
                 claimed,
             )
 
-    def settle_claim(
+    def prepare_execution_settlement(
         self,
         *,
         request_id: str,
@@ -284,8 +335,9 @@ class DurableTurnQueueStore:
             settled = replace(
                 item,
                 revision=item.revision + 1,
-                state=terminal_state,
-                claim=None,
+                state=TurnQueueState.EXECUTION_SETTLEMENT_PREPARED,
+                claim=replace(claim, queue_revision=item.revision + 1),
+                settlement_state=terminal_state,
                 terminal_reason=terminal_reason,
             )
             self._write(
@@ -301,6 +353,63 @@ class DurableTurnQueueStore:
                 request_id,
                 settled.revision,
                 settled.state,
+            )
+
+    def commit_execution_settlement(
+        self,
+        *,
+        request_id: str,
+        expected_item_revision: int,
+        lease: LeaseEpoch,
+    ) -> TurnMutationReceipt:
+        with self._locked():
+            fenced = self._fence_receipt(request_id, lease)
+            if fenced is not None:
+                return fenced
+            snapshot = self._read()
+            item = next((value for value in snapshot.items if value.identity.request_id == request_id), None)
+            if item is None:
+                return TurnMutationReceipt(TurnMutationDisposition.NOT_FOUND, self._queue_id, request_id, None, None)
+            if item.state.terminal:
+                return TurnMutationReceipt(
+                    TurnMutationDisposition.ALREADY_TERMINAL,
+                    self._queue_id,
+                    request_id,
+                    item.revision,
+                    item.state,
+                )
+            if (
+                item.state is not TurnQueueState.EXECUTION_SETTLEMENT_PREPARED
+                or item.revision != expected_item_revision
+                or item.settlement_state not in {TurnQueueState.SUCCEEDED, TurnQueueState.FAILED}
+            ):
+                return TurnMutationReceipt(
+                    TurnMutationDisposition.REVISION_CONFLICT,
+                    self._queue_id,
+                    request_id,
+                    item.revision,
+                    item.state,
+                )
+            terminal = replace(
+                item,
+                revision=item.revision + 1,
+                state=item.settlement_state,
+                claim=None,
+                settlement_state=None,
+            )
+            self._write(
+                replace(
+                    snapshot,
+                    revision=snapshot.revision + 1,
+                    items=tuple(terminal if value is item else value for value in snapshot.items),
+                )
+            )
+            return TurnMutationReceipt(
+                TurnMutationDisposition.APPLIED,
+                self._queue_id,
+                request_id,
+                terminal.revision,
+                terminal.state,
             )
 
     def settle_unclaimed(
@@ -579,6 +688,7 @@ def _matches_acceptance(item: TurnQueueItem, request: TurnAcceptanceRequest) -> 
         and item.accepted_at == request.accepted_at
         and item.deadline == request.deadline
         and item.maximum_attempts == request.maximum_attempts
+        and item.payload_digest == request.payload_digest
     )
 
 

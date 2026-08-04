@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 """Unit tests for langgraph-style state channels (:mod:`...bggraph.channels`).
 
-Covers reducer detection (2-positional-arg callables, builtin guard), reducer
-derivation from ``Annotated[T, reducer]`` metadata, and the merge semantics of
+Covers explicit reducer binding, reducer derivation from ``Annotated[T, Reducer]``
+metadata, and the merge semantics of
 :func:`apply_updates` (last-value vs reducer-merged).
 """
+
 from __future__ import annotations
 
 import operator
@@ -13,49 +14,19 @@ from typing import Annotated
 
 import pytest
 
-from mote.orchestration.workflows import GraphState
-from mote.orchestration.workflows.channels import _is_reducer, apply_updates, derive_reducers
-
-
-class TestIsReducer:
-    def test_two_arg_lambda_is_reducer(self):
-        assert _is_reducer(lambda a, b: a + b)
-
-    def test_operator_add_is_reducer(self):
-        # operator.add introspects fine and exposes 2 positional params.
-        assert _is_reducer(operator.add)
-
-    def test_one_arg_callable_not_reducer(self):
-        assert not _is_reducer(lambda a: a)
-
-    def test_three_arg_callable_not_reducer(self):
-        assert not _is_reducer(lambda a, b, c: a)
-
-    def test_non_callable_not_reducer(self):
-        assert not _is_reducer(42)
-        assert not _is_reducer("nope")
-
-    def test_non_introspectable_builtin_guarded(self):
-        # Some C builtins raise from inspect.signature → treated as non-reducer.
-        # ``len`` is 1-arg anyway; the guard is exercised by builtins whose
-        # signature cannot be read. Use a class whose signature probe raises.
-        class Weird:
-            def __call__(self, *a):  # pragma: no cover - never invoked
-                return a
-
-        # A plain instance with *args is variadic, not 2 positional → not a reducer.
-        assert not _is_reducer(Weird())
+from mote.orchestration.workflows import GraphState, Reducer
+from mote.orchestration.workflows.channels import apply_updates, derive_reducers
 
 
 class TestDeriveReducers:
     def test_annotated_reducer_field_detected(self):
         class S(GraphState):
-            items: Annotated[list, operator.add] = []
+            items: Annotated[list, Reducer(operator.add)] = []
             name: str = ""
 
         reducers = derive_reducers(S)
         assert "items" in reducers
-        assert reducers["items"] is operator.add
+        assert reducers["items"].merge(["a"], ["b"]) == ["a", "b"]
         assert "name" not in reducers
 
     def test_plain_fields_have_no_reducer(self):
@@ -70,9 +41,9 @@ class TestDeriveReducers:
         r2 = lambda a, b: b  # noqa: E731
 
         class S(GraphState):
-            items: Annotated[list, r1, r2] = []
+            items: Annotated[list, Reducer(r1), Reducer(r2)] = []
 
-        assert derive_reducers(S)["items"] is r1
+        assert derive_reducers(S)["items"].merge(["a"], ["b"]) == ["a", "b"]
 
 
 class TestApplyUpdates:
@@ -88,7 +59,7 @@ class TestApplyUpdates:
 
     def test_reducer_merges(self):
         class S(GraphState):
-            items: Annotated[list, operator.add] = []
+            items: Annotated[list, Reducer(operator.add)] = []
 
         s = S()
         reducers = derive_reducers(S)
@@ -102,19 +73,19 @@ class TestApplyUpdates:
             return (cur or []) + upd
 
         class S(GraphState):
-            items: Annotated[list, merge] = []
+            items: Annotated[list, Reducer(merge)] = []
 
         s = S()
         apply_updates(s, {"items": ["x"]}, derive_reducers(S))
         assert s.items == ["x"]
 
-    def test_undeclared_key_lands_via_extra_allow(self):
+    def test_undeclared_key_is_rejected(self):
         class S(GraphState):
             pass
 
         s = S()
-        apply_updates(s, {"node_a": "result"}, {})
-        assert s.node_a == "result"
+        with pytest.raises(ValueError, match="Object has no attribute"):
+            apply_updates(s, {"node_a": "result"}, {})
 
     def test_empty_updates_noop(self):
         class S(GraphState):

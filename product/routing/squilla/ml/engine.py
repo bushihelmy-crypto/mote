@@ -15,8 +15,8 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from mote.product.routing.squilla.ml.backend_loader import ApprovedRoutingBackendLoader, RoutingInferenceCore
 from mote.product.routing.squilla.ml.config import default_model_dir, load_runtime_config
+from mote.product.routing.squilla.ml.inference.core import InferenceCore
 from mote.product.routing.squilla.ml.inference.types import InferenceRequest, InferenceResult
 from mote.runtime.telemetry.logging import logger
 
@@ -30,15 +30,13 @@ class SquillaMLEngine:
         config: Optional[dict] = None,
         *,
         use_aux_head: Optional[bool] = None,
-        backend_loader: ApprovedRoutingBackendLoader | None = None,
     ):
         self.model_dir = Path(model_dir) if model_dir else default_model_dir()
         self.config = config if config is not None else load_runtime_config(self.model_dir)
         if use_aux_head is None:
             use_aux_head = bool(self.config.get("v4", {}).get("aux_head_inference", False))
         self.use_aux_head = use_aux_head
-        self._backend_loader = backend_loader or ApprovedRoutingBackendLoader()
-        self._core: RoutingInferenceCore | None = None
+        self._core: InferenceCore | None = None
         self._loaded = False  # have we attempted a load yet?
         self._available = False  # did the load succeed?
         self._closed = False
@@ -58,13 +56,12 @@ class SquillaMLEngine:
             if not self.model_dir.is_dir():
                 return
             try:
-                core_type = self._backend_loader.load()
-                core = core_type.from_model_dir(
+                core = InferenceCore.from_model_dir(
                     str(self.model_dir),
                     self.config,
                     use_aux_head=self.use_aux_head,
                 )
-                if not isinstance(core, RoutingInferenceCore):
+                if not isinstance(core, InferenceCore):
                     raise TypeError("routing backend returned an invalid inference core")
                 self._core = core
                 self._available = True

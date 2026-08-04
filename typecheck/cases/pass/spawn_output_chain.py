@@ -11,6 +11,6 @@ async def preserve_output(
     definition: SpawnableAgentDefinition[ReviewReport],
     control: AgentControl,
 ) -> ChildAgentHandle[ReviewReport]:
-    plan: SpawnPlan[ReviewReport] = SpawnPlan(definition=definition)
+    plan: SpawnPlan[ReviewReport] = SpawnPlan(request_id="review-request", definition=definition)
     handle: ChildAgentHandle[ReviewReport] = await control.spawn_agent(plan)
     return handle

@@ -18,12 +18,13 @@ def test_external_effect_intent_receipt_and_in_doubt_are_explicit() -> None:
 def test_temporal_effect_plane_has_one_product_owner_and_no_closure_entry() -> None:
     bootstrap = (ROOT / "product/composition/bootstrap.py").read_text(encoding="utf-8")
     effects = (ROOT / "product/workflows/temporal_effects.py").read_text(encoding="utf-8")
-    backend = (ROOT / "runtime/durable/temporal/_backend.py").read_text(encoding="utf-8")
+    runtime = (ROOT / "runtime/durable/temporal/runtime.py").read_text(encoding="utf-8")
     cognition = (ROOT / "runtime/agent/components/cognition.py").read_text(encoding="utf-8")
     assert "attach_temporal_effect_plane" in bootstrap
     assert "id=effect.effect_id" in effects
-    assert "async def run_step(" not in backend
-    assert "async def run_activity(" not in backend
+    assert "async def run_step(" not in runtime
+    assert "async def run_activity(" not in runtime
+    assert not (ROOT / "runtime/durable/temporal/_backend.py").exists()
     assert "make_durable_backend" not in cognition
     assert not (ROOT / "runtime/durable/plugins.py").exists()
 

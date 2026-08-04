@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, TypedDict
+from typing import TypedDict
+
+from mote.contracts.events.envelope import JsonValue
 
 
 class CommandProtocol(str, Enum):
@@ -18,7 +20,7 @@ class XmlToolSchema(TypedDict):
 
     name: str
     description: str
-    parameters: dict[str, Any]
+    parameters: dict[str, JsonValue]
 
 
 class NativeToolSchema(TypedDict):
@@ -26,7 +28,7 @@ class NativeToolSchema(TypedDict):
 
     name: str
     description: str
-    input_schema: dict[str, Any]
+    input_schema: dict[str, JsonValue]
 
 
 class ToolsetProtocolError(TypeError):

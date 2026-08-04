@@ -25,12 +25,12 @@ def role_raise_decorator(func):
             return await func(self, *args, **kwargs)
         except KeyboardInterrupt as exc:
             if self.state.latest_observed_msg:
-                self.context_manager.delete(self.state.latest_observed_msg)
+                self._context_manager.delete(self.state.latest_observed_msg)
             raise Exception(traceback.format_exc(limit=None)) from exc
         except Exception as exc:
             if self.state.latest_observed_msg:
                 logger.exception("Role execution failed; removing the newest observed message for recovery")
-                self.context_manager.delete(self.state.latest_observed_msg)
+                self._context_manager.delete(self.state.latest_observed_msg)
             if isinstance(exc, MoteError):
                 raise
             if isinstance(exc, RetryError):

@@ -66,14 +66,20 @@ from mote.contracts.agent.errors import AgentLimitReached, AgentNotFound, AgentN
 from mote.contracts.agent.lineage import LineageRecord, SpawnAdvanceDisposition, SpawnLifecycle, SpawnRequest
 from mote.contracts.agent.policy import SpawnIntent
 from mote.contracts.agent.runtime_identity import AgentId, CancellationEpoch, IncarnationGeneration, LineageRevision
-from mote.contracts.conversation import Message, UserMessage
+from mote.contracts.conversation import Message, UserMessage, load_message
 from mote.contracts.events.agent import AgentLifecycleEvent
 from mote.contracts.ports.agent.budget import AgentBudgetPort
 from mote.contracts.ports.agent.control import ChildReleaseDisposition, ChildReleaseReceipt
+from mote.contracts.ports.agent.delivery import (
+    AgentDeliveryCommand,
+    AgentDeliveryCommandDisposition,
+    AgentDeliveryCommandReceipt,
+)
 from mote.contracts.ports.agent.spawn_policy import SpawnPolicyExtensionSpec
 from mote.contracts.ports.agent.team_roster import TeamRosterMember
 from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOverflow, TelemetrySubscriptionSpec
 from mote.contracts.ports.runtime.lease import LeaseCoordinator, LeaseEpoch
+from mote.contracts.ports.workflow.delivery import WorkflowAgentDeliveryCompositionPort
 from mote.contracts.ports.workflow.governance import WorkflowGovernanceCompositionPort
 from mote.contracts.workflow.admission import (
     ClaimWorkflowCreateAdmission,
@@ -93,9 +99,11 @@ from mote.contracts.workflow.authority import (
 from mote.contracts.workflow.governance import WorkflowGovernanceCancelRequest, WorkflowGovernanceSnapshotVerification
 from mote.orchestration.agents.cancellation import SubtreeCancellationCoordinator
 from mote.orchestration.agents.capacity import LogicalCapacityProjection
+from mote.orchestration.agents.control_context import bind_workflow_caller_control
 from mote.orchestration.agents.execution.turn_scheduler import EventDrivenScheduler
 from mote.orchestration.agents.identity.path import AgentPath
 from mote.orchestration.agents.identity.registry import AgentMetadata, AgentRegistry, next_agent_spawn_depth
+from mote.orchestration.agents.ingress.reconcile import AgentIngressReconciler, AgentIngressReconcileResult
 from mote.orchestration.agents.lifecycle.admission import build_spawn_admission_policy
 from mote.orchestration.agents.lifecycle.handle import ChildAgentHandle
 from mote.orchestration.agents.lifecycle.runtime import AgentRuntime, AgentStatus, is_final
@@ -114,7 +122,6 @@ from mote.orchestration.agents.residency.store import ResidencyStore
 from mote.orchestration.agents.turn_queue.limiter import AgentExecutionLimiter
 from mote.orchestration.agents.turn_queue.scheduling import RootTurnWeight, TurnSchedulingConfig
 from mote.orchestration.agents.turn_queue.store import DurableTurnQueueStore
-from mote.orchestration.workflows.control_context import bind_workflow_caller_control
 from mote.runtime.agent.base import BaseRole
 from mote.runtime.agent.control import set_control
 from mote.runtime.agent.incarnation import AgentIncarnationError, AgentIncarnationFactory
@@ -167,13 +174,14 @@ class AgentControl:
         incarnation_factory: AgentIncarnationFactory | None = None,
         residency_lease_coordinator: LeaseCoordinator,
         lineage_path: Path,
-        turn_queue_capacity: int | None = None,
+        turn_queue_capacity: int,
         root_turn_weights: tuple[tuple[str, int], ...] = (),
         budget: AgentBudgetPort | None = None,
         budget_policy: AgentBudgetPolicy | None = None,
         child_token_reservation: int | None = None,
         child_cost_micro_usd_reservation: int | None = None,
         workflow_governance: WorkflowGovernanceCompositionPort | None = None,
+        workflow_delivery: WorkflowAgentDeliveryCompositionPort | None = None,
         watch_interval: float = 0.01,
     ):
         self.session_id = session_id
@@ -226,39 +234,29 @@ class AgentControl:
         turn_clock = SystemClock()
         turn_queue_subject = f"agent-turn-queue:{self.session_id or 'application'}"
         turn_queue_owner = f"agent-turn-scheduler:{uuid.uuid4().hex}"
-        turn_queue_lease = (
-            residency_lease_coordinator.acquire(turn_queue_subject, turn_queue_owner, 30.0)
-            if turn_queue_capacity is not None
-            else None
-        )
-        turn_queue_store = (
-            DurableTurnQueueStore(
-                lineage_path.with_name("agent-turn-queue.json"),
-                queue_id=turn_queue_subject,
-                capacity=turn_queue_capacity,
-                lease_coordinator=residency_lease_coordinator,
-            )
-            if turn_queue_capacity is not None
-            else None
+        turn_queue_lease = residency_lease_coordinator.acquire(turn_queue_subject, turn_queue_owner, 30.0)
+        turn_queue_store = DurableTurnQueueStore(
+            lineage_path.with_name("agent-turn-queue.json"),
+            queue_id=turn_queue_subject,
+            capacity=turn_queue_capacity,
+            lease_coordinator=residency_lease_coordinator,
         )
         self._turn_queue_lease = turn_queue_lease
+        self._turn_queue_store = turn_queue_store
         self._scheduler = EventDrivenScheduler(
             limiter=self._limiter,
             control_binder=self._turn_control_binding,
             pending_flush=self._flush_pending_deliveries,
             delivery_ack=self._ack_deliveries,
+            delivery_bind=self._bind_deliveries,
             durable_store=turn_queue_store,
             durable_lease=turn_queue_lease,
-            scheduling_config=(
-                TurnSchedulingConfig(
-                    1,
-                    tuple(RootTurnWeight(root_id, weight) for root_id, weight in root_turn_weights),
-                )
-                if turn_queue_store is not None
-                else None
+            scheduling_config=TurnSchedulingConfig(
+                1,
+                tuple(RootTurnWeight(root_id, weight) for root_id, weight in root_turn_weights),
             ),
-            now=turn_clock.now if turn_queue_store is not None else None,
-            process_instance_id=turn_queue_owner if turn_queue_store is not None else "",
+            now=turn_clock.now,
+            process_instance_id=turn_queue_owner,
             root_owner_id=self.session_id or "application",
         )
         self._residency = Residency(
@@ -293,6 +291,10 @@ class AgentControl:
         self._workflow_governance_registered = workflow_governance is not None
         if workflow_governance is not None:
             workflow_governance.register_agent_governance(AgentId(self._lineage_root_id), self, self)
+        self._workflow_delivery = workflow_delivery
+        self._workflow_delivery_registered = workflow_delivery is not None
+        if workflow_delivery is not None:
+            workflow_delivery.register_agent_delivery(AgentId(self._lineage_root_id), self)
         if self.session_id is not None:
             self._registry.register_root_agent(self.session_id)
             for record in self._lineage.records():
@@ -346,7 +348,7 @@ class AgentControl:
         # drops — it is at worst deferred (back-pressure).
         self._pending = PendingDeliveryQueue()
         for record in self._delivery_store.pending():
-            message = Message.load(record.message_payload)
+            message = load_message(record.message_payload)
             if message is None:
                 raise ValueError("durable delivery message is invalid")
             self._pending.park(
@@ -1289,8 +1291,20 @@ class AgentControl:
             lease=self._delivery_lease,
         )
 
-    def _claim_delivery(self, delivery_id: str, generation: int) -> None:
-        self._delivery_store.claim(delivery_id, generation, lease=self._delivery_lease)
+    def _bind_deliveries(
+        self,
+        agent_id: str,
+        delivery_ids: tuple[str, ...],
+        turn_request_id: str,
+        payload_digest: str,
+    ) -> None:
+        self._delivery_store.bind_to_turn(
+            delivery_ids,
+            turn_request_id=turn_request_id,
+            target_generation=self._current_delivery_generation(agent_id),
+            expected_payload_digest=payload_digest,
+            lease=self._delivery_lease,
+        )
 
     def _current_delivery_generation(self, agent_id: str) -> int:
         lifecycle = self._residency.lifecycle_snapshot(agent_id)
@@ -1298,18 +1312,42 @@ class AgentControl:
             raise AgentNotFound(agent_id)
         return lifecycle.incarnation_generation
 
+    def current_generation(self, agent_id: str) -> int:
+        """Return the canonical active incarnation generation for ingress recovery."""
+        return self._current_delivery_generation(agent_id)
+
+    def reconcile_ingress(self) -> AgentIngressReconcileResult:
+        if self._turn_queue_store is None or self._turn_queue_lease is None:
+            raise RuntimeError("Agent ingress recovery requires the durable Product turn composition")
+        return AgentIngressReconciler(
+            deliveries=self._delivery_store,
+            turns=self._turn_queue_store,
+            generations=self,
+            delivery_lease=self._delivery_lease,
+            turn_lease=self._turn_queue_lease,
+        ).reconcile()
+
     def _ack_deliveries(self, agent_id: str, delivery_ids: tuple[str, ...]) -> None:
         generation = self._current_delivery_generation(agent_id)
         for delivery_id in delivery_ids:
             self._delivery_store.ack(delivery_id, generation, lease=self._delivery_lease)
 
-    def dispatch_automation(self, target: str, content: str) -> Optional[AgentRuntime]:
-        """Map an automation command onto the public agent delivery surface."""
-        return self.send_input(
-            target,
-            UserMessage(content=content),
+    def dispatch(self, command: AgentDeliveryCommand) -> AgentDeliveryCommandReceipt:
+        """Commit one typed Product command through canonical durable ingress."""
+        message = UserMessage(id=command.source_id, content=command.content)
+        self.send_input(
+            command.target_agent_id,
+            message,
             mode=DeliveryMode.TRIGGER_TURN,
         )
+        delivery_id = AgentDeliveryStore.identity(command.target_agent_id, message)
+        record = next(record for record in self._delivery_store.records() if record.delivery_id == delivery_id)
+        disposition = (
+            AgentDeliveryCommandDisposition.ALREADY_SETTLED
+            if record.state in {AgentDeliveryState.ACKED, AgentDeliveryState.DEAD_LETTER}
+            else AgentDeliveryCommandDisposition.ACCEPTED
+        )
+        return AgentDeliveryCommandReceipt(disposition, delivery_id)
 
     def send_input(
         self,
@@ -1346,7 +1384,6 @@ class AgentControl:
                 ),
             )
             return runtime
-        self._claim_delivery(record.delivery_id, self._current_delivery_generation(agent_id))
 
         def deliver(target: AgentRuntime) -> None:
             target.mailbox.enqueue(message, mode=mode, delivery_id=record.delivery_id)
@@ -1398,7 +1435,6 @@ class AgentControl:
                 ),
             )
             return runtime
-        self._claim_delivery(record.delivery_id, self._current_delivery_generation(agent_id))
 
         def deliver(target: AgentRuntime) -> None:
             target.mailbox.enqueue(message, mode=mode, delivery_id=record.delivery_id)
@@ -1720,7 +1756,6 @@ class AgentControl:
     def _deliver_now(self, runtime: AgentRuntime, agent_id: str, delivery: PendingDelivery) -> None:
         """Enqueue an already-loaded parked *delivery* into *runtime*'s mailbox."""
         generation = self._current_delivery_generation(agent_id)
-        self._claim_delivery(delivery.delivery_id, generation)
         if delivery.is_communication:
             comm = delivery.communication
             assert comm is not None, "is_communication delivery must carry a communication"
@@ -1856,6 +1891,10 @@ class AgentControl:
             assert self._workflow_governance is not None
             self._workflow_governance.unregister_agent_governance(AgentId(self._lineage_root_id))
             self._workflow_governance_registered = False
+        if self._workflow_delivery_registered:
+            assert self._workflow_delivery is not None
+            self._workflow_delivery.unregister_agent_delivery(AgentId(self._lineage_root_id), self)
+            self._workflow_delivery_registered = False
         for task in self._watchers:
             if not task.done():
                 task.cancel()

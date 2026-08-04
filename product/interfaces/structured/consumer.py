@@ -20,6 +20,7 @@ from typing import Any
 
 from mote.product.presentation.consumer import BaseConsumer
 from mote.product.presentation.events import STRUCTURED_CAPS, Capabilities
+from mote.product.presentation.events.catalog import require_view_event
 from mote.product.presentation.events.events import ViewEvent
 
 
@@ -39,10 +40,11 @@ class StructuredConsumer(BaseConsumer):
         event here — so a stream delta (sync) and a tool result (async) are both
         emitted as one JSON line, in arrival order.
         """
-        payload = {"kind": ev.kind}
+        declaration = require_view_event(ev)
+        payload = {"kind": declaration.kind, "generation": declaration.generation}
         # pydantic BaseModel -> dict; ``kind`` is a ClassVar so model_dump omits it.
         payload.update(ev.model_dump())
-        self._out.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+        self._out.write(json.dumps(payload, ensure_ascii=False) + "\n")
         flush = getattr(self._out, "flush", None)
         if flush is not None:
             flush()

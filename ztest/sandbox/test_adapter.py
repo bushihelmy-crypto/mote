@@ -7,6 +7,7 @@ into a runtime ``SandboxPolicy`` / ``SandboxRuntime``: writable-root passthrough
 forced-read-only metadata overrides, and a wired runtime whose policy provider
 reflects live guard state.
 """
+
 from __future__ import annotations
 
 import os
@@ -18,7 +19,7 @@ from mote.runtime.tools.permission.sandbox.guard import SandboxGuard
 
 
 def _guard(cwd: str) -> SandboxGuard:
-    cfg = SandboxConfig(mode="workspace-write")
+    cfg = SandboxConfig()
     return SandboxGuard(cfg, get_cwd=lambda: cwd)
 
 
@@ -77,7 +78,7 @@ class TestSecretMaskedDirs:
 
 class TestBuildRuntime:
     def test_runtime_config_passthrough(self, tmp_path):
-        cfg = SandboxRuntimeConfig(enabled=True, backend="none", network="open", harden_process=True)
+        cfg = SandboxRuntimeConfig(profile="isolated-compute", network="off", harden_process=True)
         rt = build_runtime(
             cfg,
             get_cwd=lambda: str(tmp_path),
@@ -92,7 +93,7 @@ class TestBuildRuntime:
 
     def test_session_grant_visible_next_call(self, tmp_path):
         guard = _guard(str(tmp_path))
-        cfg = SandboxRuntimeConfig(enabled=True, backend="none", network="open")
+        cfg = SandboxRuntimeConfig(profile="isolated-compute", network="off")
         rt = build_runtime(
             cfg,
             get_cwd=lambda: str(tmp_path),
@@ -107,7 +108,7 @@ class TestBuildRuntime:
         assert os.path.realpath(str(extra)) in roots
 
     def test_seccomp_flag_threads_through(self, tmp_path):
-        cfg = SandboxRuntimeConfig(enabled=True, backend="none", network="open", seccomp=False)
+        cfg = SandboxRuntimeConfig(profile="isolated-compute", network="off", seccomp=False)
         rt = build_runtime(
             cfg,
             get_cwd=lambda: str(tmp_path),
@@ -118,9 +119,8 @@ class TestBuildRuntime:
 
     def test_resource_limits_thread_through(self, tmp_path):
         cfg = SandboxRuntimeConfig(
-            enabled=True,
-            backend="none",
-            network="open",
+            profile="isolated-compute",
+            network="off",
             memory_max="512M",
             pids_max=64,
             cpu_quota="200%",
@@ -141,7 +141,7 @@ class TestBuildRuntime:
     def test_resource_guard_adjustment_visible_next_call(self, tmp_path):
         from mote.runtime.tools.permission.sandbox.resource_guard import ResourceGuard
 
-        cfg = SandboxRuntimeConfig(enabled=True, backend="none", network="open", memory_max="4G")
+        cfg = SandboxRuntimeConfig(profile="isolated-compute", network="off", memory_max="4G")
         rguard = ResourceGuard(cfg)
         rt = build_runtime(
             cfg,

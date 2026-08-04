@@ -259,7 +259,7 @@ async def test_read_only_denies_before_remote_and_releases_reservation(tmp_path)
     policy = build_tool_call_policy(
         PermissionConfig(
             mode="dontAsk",
-            sandbox=SandboxConfig(mode="read-only"),
+            sandbox=SandboxConfig(profile="isolated-compute"),
         ),
         role=role,
         require_permission=True,

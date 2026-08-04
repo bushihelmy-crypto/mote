@@ -7,15 +7,20 @@ against a real subprocess: lazy launch on first relevant edit, diagnostics回流
 (error appears, then resolves), routing by extension, the disabled/no-server
 no-ops, and clean shutdown.
 """
+
 from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timezone
 
 import pytest
 
+from mote.contracts.events.envelope import EventEnvelope, EventId, EventType, StreamId
+from mote.contracts.events.file.facts import FileTransactionCommittedEvent
+from mote.contracts.events.telemetry import DiagnosticsEvent
+from mote.contracts.file.identity import NameIdentity, PresentVersion, TargetIdentity
 from mote.runtime.config.lsp import LspConfig, LspServerConfig
-from mote.runtime.events import DiagnosticsEvent, FileMutatedEvent
 from mote.runtime.lsp.buffer import DiagnosticsBuffer
 from mote.runtime.lsp.service import LspService
 from mote.ztest.telemetry import InlineTelemetry
@@ -23,6 +28,29 @@ from mote.ztest.telemetry import InlineTelemetry
 aio = pytest.mark.asyncio
 
 _FAKE = os.path.join(os.path.dirname(__file__), "fake_lsp_server.py")
+
+
+def _committed(path: str, *, sequence: int = 1) -> EventEnvelope:
+    timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    version = PresentVersion(
+        NameIdentity("name", "test"),
+        TargetIdentity("target", "test"),
+        1,
+        1,
+        "0" * 64,
+        "1" * 64,
+    )
+    fact = FileTransactionCommittedEvent(f"tx-{sequence}", (path,), (version,))
+    return EventEnvelope(
+        EventId(f"event-{sequence}"),
+        EventType(FileTransactionCommittedEvent.type),
+        1,
+        StreamId("session/test"),
+        sequence,
+        timestamp,
+        timestamp,
+        fact.payload(),
+    )
 
 
 def _config(extensions=(".py",), enabled=True):
@@ -118,11 +146,11 @@ async def test_failed_server_not_retried(tmp_path):
     )
     svc = LspService(bad, str(tmp_path))
     try:
-        await svc.file_saved(str(f))  # launch fails -> remembered as dead
-        assert svc.drain_diagnostics() == ""
-        # Second edit: no crash, still inert.
-        await svc.file_saved(str(f))
-        assert svc.drain_diagnostics() == ""
+        with pytest.raises(RuntimeError, match="unavailable"):
+            await svc.file_saved(str(f))
+        # The failed generation remains unavailable and never becomes an empty success.
+        with pytest.raises(RuntimeError, match="unavailable"):
+            await svc.file_saved(str(f))
     finally:
         await svc.shutdown()
 
@@ -139,13 +167,13 @@ async def test_shutdown_idempotent(tmp_path):
 
 @aio
 async def test_handle_file_mutated_delegates_to_file_saved(tmp_path):
-    # As a telemetry handler, FileMutatedEvent routes through handle() to
+    # As a reliable event handler, the committed FileOps fact routes through handle() to
     # file_saved() — same diagnostics回流 as a direct file_saved call.
     f = tmp_path / "mod.py"
     f.write_text("x = ERROR\n")
     svc = LspService(_config(), str(tmp_path))
     try:
-        outcome = await svc.handle(FileMutatedEvent(path=str(f), tool="Write"))
+        outcome = await svc.handle(_committed(str(f)))
         assert outcome is None  # observation subscriber returns nothing
         block = svc.drain_diagnostics()
         assert "<lsp_diagnostics>" in block
@@ -158,7 +186,8 @@ async def test_handle_file_mutated_delegates_to_file_saved(tmp_path):
 async def test_handle_ignores_non_file_mutated_events(tmp_path):
     svc = LspService(_config(), str(tmp_path))
     try:
-        assert await svc.handle(object()) is None  # not a FileMutatedEvent
+        with pytest.raises(AttributeError):
+            await svc.handle(object())  # type: ignore[arg-type]
         assert svc.drain_diagnostics() == ""
     finally:
         await svc.shutdown()
@@ -168,7 +197,8 @@ async def test_handle_ignores_non_file_mutated_events(tmp_path):
 async def test_handle_ignores_empty_path(tmp_path):
     svc = LspService(_config(), str(tmp_path))
     try:
-        assert await svc.handle(FileMutatedEvent(path="", tool="Write")) is None
+        with pytest.raises(ValueError):
+            await svc.handle(_committed(""))
         assert svc.drain_diagnostics() == ""
     finally:
         await svc.shutdown()
@@ -185,9 +215,9 @@ async def test_handle_emits_diagnostics_event_to_buffer(tmp_path):
     buffer = DiagnosticsBuffer()
     telemetry = InlineTelemetry()
     svc = LspService(_config(), str(tmp_path), telemetry=telemetry)
-    telemetry.handlers.extend((svc, buffer))
+    telemetry.handlers.append(buffer)
     try:
-        await telemetry.emit(FileMutatedEvent(path=str(f), tool="Write"))
+        await svc.handle(_committed(str(f)))
         block = buffer.drain_diagnostics()
         assert "<lsp_diagnostics>" in block
         assert "fake error token found" in block
@@ -213,7 +243,7 @@ async def test_emitted_event_carries_paths(tmp_path):
     telemetry = InlineTelemetry(_Spy())
     svc = LspService(_config(), str(tmp_path), telemetry=telemetry)
     try:
-        await svc.handle(FileMutatedEvent(path=str(f), tool="Write"))
+        await svc.handle(_committed(str(f)))
         assert len(seen) == 1
         assert seen[0].paths == [str(f)]
         assert seen[0].block
@@ -229,7 +259,7 @@ async def test_no_emit_without_telemetry(tmp_path):
     f.write_text("x = ERROR\n")
     svc = LspService(_config(), str(tmp_path))
     try:
-        await svc.handle(FileMutatedEvent(path=str(f), tool="Write"))
+        await svc.handle(_committed(str(f)))
         # Nothing emitted; the registry still holds the changed set for a pull.
         assert "fake error token found" in svc.drain_diagnostics()
     finally:
@@ -243,13 +273,13 @@ async def test_resolved_diagnostics_flow_through_bus(tmp_path):
     buffer = DiagnosticsBuffer()
     telemetry = InlineTelemetry()
     svc = LspService(_config(), str(tmp_path), telemetry=telemetry)
-    telemetry.handlers.extend((svc, buffer))
+    telemetry.handlers.append(buffer)
     try:
-        await telemetry.emit(FileMutatedEvent(path=str(f), tool="Write"))
+        await svc.handle(_committed(str(f)))
         assert "fake error token found" in buffer.drain_diagnostics()
         # Fix the file -> server clears -> "resolved" surfaces once via the bus.
         f.write_text("x = 1\n")
-        await telemetry.emit(FileMutatedEvent(path=str(f), tool="Write"))
+        await svc.handle(_committed(str(f), sequence=2))
         block2 = buffer.drain_diagnostics()
         assert "resolved" in block2
         assert buffer.drain_diagnostics() == ""

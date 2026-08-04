@@ -6,7 +6,7 @@ non-blocking. Consumers read incrementally via ``get_delta(from_offset)`` or gra
 tail with ``get_tail(max_bytes)``.
 
 This module is standalone — it does **not** modify ``BackgroundTaskPool`` or
-``TaskMeta``.
+the owner-private task state.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from typing import Callable, Optional, Union
 
 from mote.contracts.ports.task.operations import TaskOutputLocationPort
 from mote.contracts.session.identity import SessionId
+from mote.contracts.task.models import TaskId
 from mote.orchestration.background_tasks.constants import (
     DEFAULT_MAX_READ_BYTES,
     MAX_TASK_OUTPUT_BYTES,
@@ -40,9 +41,9 @@ class DiskTaskOutput:
 
     def __init__(
         self,
-        task_id: str,
+        task_id: TaskId,
         output_dir: Union[str, Path],
-        on_cap: Optional[Callable[[str], None]] = None,
+        on_cap: Optional[Callable[[TaskId], None]] = None,
     ) -> None:
         self.task_id = task_id
         # *output_dir* is the already-resolved ``task_outputs/`` space for this
@@ -264,14 +265,14 @@ class TaskOutputStore:
     def __init__(
         self,
         base_dir: Union[str, Path, None] = None,
-        session_id: str = "",
         *,
+        session_id: SessionId,
         store: Optional[TaskOutputLocationPort] = None,
     ) -> None:
         self._store = store if store is not None else SessionWorkspace(base_dir)
         self._session_id = session_id
-        self._outputs: dict[str, DiskTaskOutput] = {}
-        self._on_cap: Optional[Callable[[str], None]] = None
+        self._outputs: dict[TaskId, DiskTaskOutput] = {}
+        self._on_cap: Optional[Callable[[TaskId], None]] = None
 
     @property
     def store(self) -> TaskOutputLocationPort:
@@ -284,10 +285,10 @@ class TaskOutputStore:
         return self._store
 
     @property
-    def session_id(self) -> str:
+    def session_id(self) -> SessionId:
         return self._session_id
 
-    def set_on_cap(self, callback: Callable[[str], None]) -> None:
+    def set_on_cap(self, callback: Callable[[TaskId], None]) -> None:
         """Set a callback invoked when any task's output hits the disk cap.
 
         The callback receives the ``task_id``.  Typical usage::
@@ -296,33 +297,33 @@ class TaskOutputStore:
         """
         self._on_cap = callback
 
-    def init_output(self, task_id: str) -> DiskTaskOutput:
+    def init_output(self, task_id: TaskId) -> DiskTaskOutput:
         """Create and register a new task output."""
         if task_id in self._outputs:
             raise ValueError(f"Task output already exists: {task_id}")
-        output_dir = self._store.output_directory(SessionId(self._session_id))
+        output_dir = self._store.output_directory(self._session_id)
         output = DiskTaskOutput(task_id, output_dir, on_cap=self._on_cap)
         self._outputs[task_id] = output
         return output
 
-    def get_output_path(self, task_id: str) -> str | None:
+    def get_output_path(self, task_id: TaskId) -> str | None:
         """Return the disk path for a task's output file, or None if unknown."""
         output = self._outputs.get(task_id)
         return output.file_path if output is not None else None
 
-    def _get(self, task_id: str) -> DiskTaskOutput:
+    def _get(self, task_id: TaskId) -> DiskTaskOutput:
         try:
             return self._outputs[task_id]
         except KeyError:
             raise KeyError(f"Unknown task_id: {task_id}")
 
-    def append(self, task_id: str, data: Union[bytes, str]) -> None:
+    def append(self, task_id: TaskId, data: Union[bytes, str]) -> None:
         """Append data to a task's output."""
         self._get(task_id).append(data)
 
     async def get_delta(
         self,
-        task_id: str,
+        task_id: TaskId,
         from_offset: int,
         max_bytes: int = DEFAULT_MAX_READ_BYTES,
     ) -> tuple[bytes, int]:
@@ -331,29 +332,29 @@ class TaskOutputStore:
 
     async def get_tail(
         self,
-        task_id: str,
+        task_id: TaskId,
         max_bytes: int = DEFAULT_MAX_READ_BYTES,
     ) -> bytes:
         """Tail read from a task's output."""
         return await self._get(task_id).get_tail(max_bytes)
 
-    async def flush(self, task_id: str) -> None:
+    async def flush(self, task_id: TaskId) -> None:
         """Settle all output accepted for one task without closing its stream."""
         output = self._outputs.get(task_id)
         if output is not None:
             await output.flush()
 
-    def get_size(self, task_id: str) -> int:
+    def get_size(self, task_id: TaskId) -> int:
         """Get the output size for a task."""
         return self._get(task_id).get_size()
 
-    async def evict(self, task_id: str) -> None:
+    async def evict(self, task_id: TaskId) -> None:
         """Close the drain loop but keep the disk file."""
         output = self._outputs.pop(task_id, None)
         if output is not None:
             await output.close()
 
-    async def cleanup(self, task_id: str) -> None:
+    async def cleanup(self, task_id: TaskId) -> None:
         """Delete both in-memory state and disk file for a task."""
         output = self._outputs.pop(task_id, None)
         if output is not None:

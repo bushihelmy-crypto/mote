@@ -9,8 +9,23 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum
 from typing import TypeAlias
 
-CloseResult: TypeAlias = Awaitable[None] | None
-CloseCallback: TypeAlias = Callable[[], CloseResult]
+SyncCloseCallback: TypeAlias = Callable[[], None]
+AsyncCloseCallback: TypeAlias = Callable[[], Awaitable[None]]
+CloseCallback: TypeAlias = SyncCloseCallback | AsyncCloseCallback
+
+
+def _bind_close(close: CloseCallback) -> AsyncCloseCallback:
+    """Classify a close callback once, before it enters lifecycle execution."""
+
+    if inspect.iscoroutinefunction(close):
+        return close
+
+    async def invoke_sync() -> None:
+        result = close()
+        if result is not None:
+            raise TypeError("synchronous lifecycle close callback returned a value")
+
+    return invoke_sync
 
 
 class LifecycleState(str, Enum):
@@ -54,6 +69,13 @@ class LifecycleResource:
     close: CloseCallback
 
 
+@dataclass(frozen=True, slots=True)
+class _BoundLifecycleResource:
+    name: str
+    phase: int
+    close: AsyncCloseCallback
+
+
 class LifecycleStack:
     """Own resources and close them by phase, LIFO within each phase.
 
@@ -64,7 +86,7 @@ class LifecycleStack:
     """
 
     def __init__(self) -> None:
-        self._resources: dict[str, LifecycleResource] = {}
+        self._resources: dict[str, _BoundLifecycleResource] = {}
         self._state = LifecycleState.OPEN
         self._close_task: asyncio.Task[None] | None = None
 
@@ -84,9 +106,11 @@ class LifecycleStack:
             raise ValueError("lifecycle resource name must not be empty")
         if normalized in self._resources:
             raise ValueError(f"lifecycle resource {normalized!r} is already registered")
-        if normalized != resource.name:
-            resource = LifecycleResource(normalized, resource.phase, resource.close)
-        self._resources[normalized] = resource
+        self._resources[normalized] = _BoundLifecycleResource(
+            normalized,
+            resource.phase,
+            _bind_close(resource.close),
+        )
 
     def register_close(self, name: str, close: CloseCallback, *, phase: int) -> None:
         self.register(LifecycleResource(name=name, phase=phase, close=close))
@@ -108,9 +132,7 @@ class LifecycleStack:
             failures: list[ResourceCloseFailure] = []
             for resource in resources:
                 try:
-                    result = resource.close()
-                    if inspect.isawaitable(result):
-                        await result
+                    await resource.close()
                 except Exception as exc:  # close every sibling before surfacing the phase
                     failures.append(ResourceCloseFailure(resource.name, exc))
                 else:
@@ -122,10 +144,12 @@ class LifecycleStack:
 
 __all__ = [
     "CloseCallback",
+    "AsyncCloseCallback",
     "LifecycleCloseError",
     "LifecyclePhase",
     "LifecycleResource",
     "LifecycleStack",
     "LifecycleState",
     "ResourceCloseFailure",
+    "SyncCloseCallback",
 ]

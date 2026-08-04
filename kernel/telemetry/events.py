@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from uuid import uuid4
 
-from mote.contracts.events.telemetry import SpanEndEvent, SpanStartEvent
+from mote.contracts.events.telemetry import SpanEndEvent, SpanStartEvent, SpanStatus
 from mote.kernel.telemetry.context import current_trace_id
 
 KernelTelemetryEvent = SpanStartEvent | SpanEndEvent
@@ -66,11 +66,11 @@ async def span(label: str, *, attributes: dict | None = None) -> AsyncIterator[s
         )
     )
     token = _current_span.set(span_id)
-    status, error = "ok", ""
+    status, error = SpanStatus.OK, ""
     try:
         yield span_id
     except BaseException as exc:
-        status, error = "error", f"{type(exc).__name__}: {exc}"
+        status, error = SpanStatus.ERROR, f"{type(exc).__name__}: {exc}"
         raise
     finally:
         _current_span.reset(token)
