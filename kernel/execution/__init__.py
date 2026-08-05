@@ -14,10 +14,10 @@ from mote.kernel.execution.events import (
     RunSucceeded,
 )
 from mote.kernel.execution.result import ExecutionResult
-from mote.kernel.execution.state import CandidateSelection, ExecutionState, ExecutionTurn, NoModelTurn
+from mote.kernel.execution.state import ExecutionState, ExecutionTurn, NoModelTurn, PendingCandidate
 
 __all__ = [
-    "CandidateSelection",
+    "PendingCandidate",
     "ExecutionEngine",
     "BudgetVerdict",
     "ExecutionContext",

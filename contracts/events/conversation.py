@@ -23,6 +23,8 @@ PROMPT_REJECTED = "prompt_rejected"
 
 POST_COMPACT = "post_compact"
 
+TURN_CONTEXT_COLLECTED = "turn_context_collected"
+
 
 @dataclass
 class MessageAppendedEvent:
@@ -65,6 +67,19 @@ class UserPromptSubmitEvent:
     prompt: str = ""
 
     name: ClassVar[str] = USER_PROMPT_SUBMIT
+
+
+@dataclass(frozen=True, slots=True)
+class TurnContextCollectedEvent:
+    """Request-only turn context collected for the current model invocation.
+
+    This in-process observation lets presentation show the exact ephemeral
+    reminder sent to the model without changing its request-only lifecycle.
+    """
+
+    content: str
+
+    name: ClassVar[str] = TURN_CONTEXT_COLLECTED
 
 
 @dataclass(frozen=True)

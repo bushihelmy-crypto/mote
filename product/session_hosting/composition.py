@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import TypeVar
 
@@ -34,20 +35,22 @@ def compose_resident_agent(
 ) -> tuple[AgentControl, AgentRuntime[OutputT]]:
     """Create, register and bind the sole control plane for a root Agent."""
 
-    residency_dir.mkdir(parents=True, exist_ok=True)
-    activate_empty_agent_ingress(residency_dir)
+    root_scope = hashlib.sha256(role.session_id.encode("utf-8")).hexdigest()
+    control_dir = residency_dir / root_scope
+    control_dir.mkdir(parents=True, exist_ok=True)
+    activate_empty_agent_ingress(control_dir)
 
-    residency_leases = FileLeaseCoordinator(residency_dir / "residency-leases.json")
+    residency_leases = FileLeaseCoordinator(control_dir / "residency-leases.json")
     control = AgentControl(
         session_id=role.session_id,
         store=ResidencyStore(
-            base_dir=str(residency_dir),
+            base_dir=str(control_dir),
             sessions_base_dir=str(sessions_dir),
             lease_coordinator=residency_leases,
             writer=writer,
         ),
         residency_lease_coordinator=residency_leases,
-        lineage_path=residency_dir / "agent-lineage.json",
+        lineage_path=control_dir / "agent-lineage.json",
         max_logical_agents=governance.logical_agents,
         max_resident_incarnations=governance.resident_incarnations,
         max_concurrent_turns=governance.concurrent_turns,

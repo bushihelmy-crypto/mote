@@ -148,6 +148,7 @@ def test_plain_renders_system_reminder():
     out = buf.getvalue()
     assert NOTE in out
     assert "Git status · Files changed on disk" in out
+    assert "[persistent]" in out
 
 
 def test_plain_renders_conversation_compacted():

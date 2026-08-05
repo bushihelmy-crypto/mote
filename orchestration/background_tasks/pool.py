@@ -8,7 +8,7 @@ Notification design (built around a ``<task-notification>`` envelope):
     Each completion pushes a ``BackgroundTaskNotification`` (subclass of
     ``UserMessage``) that carries both a human-readable ``content`` string
     **and** machine-readable structured fields (``task_id``, ``command_name``,
-    ``status``, ``result``).  Downstream code can use ``is_bg_notification()``
+    ``status``, ``result``). Downstream code uses its canonical contract type.
     to filter these without parsing free text.
 """
 
@@ -23,7 +23,6 @@ from xml.sax.saxutils import escape as _escape_xml
 
 from mote.contracts.config.tool import ToolResultLimitConfig
 from mote.contracts.conversation import CauseBy, MessagePriority
-from mote.contracts.ports.task.operations import BackgroundWakeReason
 from mote.contracts.task.lifecycle import (
     BackgroundTaskAcceptance,
     BackgroundTaskAdmissionClosed,
@@ -35,8 +34,8 @@ from mote.contracts.task.lifecycle import (
     LocalTaskReference,
 )
 from mote.contracts.task.models import AttemptId, TaskId
+from mote.contracts.task.notification import BackgroundTaskNotification
 from mote.orchestration.background_tasks.model import (
-    BackgroundTaskNotification,
     PollFactory,
     TaskAttemptSettlement,
     TaskSnapshot,
@@ -369,35 +368,6 @@ class BackgroundTaskPool:
         except asyncio.TimeoutError:
             # wait_for cancelled the future; _discard_waiter has dropped it.
             return False
-
-    async def wait_any(self, timeout: float = 120.0) -> BackgroundWakeReason:
-        """Block until a background task finishes, a new message arrives in
-        the msg_buffer, or *timeout* expires.
-
-        Returns:
-            ``"task_done"``    — at least one background task completed.
-            ``"new_message"``  — msg_buffer received a new message (user input,
-                                 external event, etc.).
-            ``"timeout"``      — neither happened within the time limit.
-        """
-        done_waiter = self._next_completion()
-        msg_waiter = asyncio.create_task(self._msg_buffer.wait_for_message())
-
-        try:
-            done, _pending = await asyncio.wait(
-                {done_waiter, msg_waiter},
-                timeout=timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        finally:
-            done_waiter.cancel()
-            msg_waiter.cancel()
-
-        if not done:
-            return "timeout"
-        if done_waiter in done:
-            return "task_done"
-        return "new_message"
 
     @property
     def pending_count(self) -> int:

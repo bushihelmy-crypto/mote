@@ -798,13 +798,13 @@ def _generation_artifact(
             pricing_revision="pricing-v1",
         ),
         governance_plugins=(),
-        required_wire_contract_range=(3, 2),
+        required_wire_contract_range=(2, 3),
         activation_policy=GenerationActivationPolicy(
             deployment=DeploymentKind(deployment),
             activate_immediately=activate_immediately,
         ),
         min_reader_version=2,
-        min_writer_version=3,
+        min_writer_version=2,
         persistence_schemas=(
             VersionBinding(identity="receipt", revision="1"),
             VersionBinding(identity="usage", revision="1"),

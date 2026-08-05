@@ -41,6 +41,19 @@ class MutationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class InferenceCompleted:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceStopped:
+    pass
+
+
+InferenceDisposition = InferenceCompleted | InferenceStopped
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionRecoveryFrontier:
     revision: int
     model_call_id: str = ""
@@ -51,7 +64,6 @@ class ExecutionRecoveryFrontier:
     capability_fingerprint: str = ""
     projection_compatibility_key: str = ""
     tool_snapshot_id: str = ""
-    staged_output_id: str = ""
     terminal_committed: bool = False
     cancelled: bool = False
 
@@ -112,6 +124,9 @@ __all__ = [
     "ExecutionRecoveryFrontier",
     "InferenceCheckpointState",
     "InferenceCheckpointAttemptState",
+    "InferenceCompleted",
+    "InferenceDisposition",
+    "InferenceStopped",
     "MutationResult",
     "MutationStatus",
 ]

@@ -13,6 +13,7 @@ T = TypeVar("T")
 # to asyncio's process-wide default executor. ThreadPoolExecutor owns and joins
 # these workers at interpreter shutdown.
 _DISK_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mote-disk")
+_COMPLETION_POLL_SECONDS = 0.001
 
 
 async def run_disk_io(fn: Callable[..., T], /, *args, **kwargs) -> T:
@@ -22,7 +23,7 @@ async def run_disk_io(fn: Callable[..., T], /, *args, **kwargs) -> T:
     # event-loop policies can lose the cross-thread completion callback during
     # loop teardown. Cooperative polling keeps completion owned by this loop.
     while not future.done():
-        await asyncio.sleep(0)
+        await asyncio.sleep(_COMPLETION_POLL_SECONDS)
     return future.result()
 
 

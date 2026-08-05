@@ -15,6 +15,7 @@ Execution model (langgraph transitions, **not** static topological DAG):
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 from collections import defaultdict
 from collections.abc import Mapping
@@ -22,6 +23,8 @@ from typing import TYPE_CHECKING, Optional
 
 from pydantic import TypeAdapter, ValidationError
 
+from mote.contracts.conversation import AIMessage, CauseBy
+from mote.contracts.events.envelope import thaw_json
 from mote.contracts.foundation.errors.codes import RecoveryAction
 from mote.contracts.model.turn import FinalCandidateAction
 from mote.contracts.output import RunKind
@@ -373,7 +376,19 @@ async def _commit_finish_result(graph: "WorkflowBuilder", result: object, run_st
                 for issue in evaluation.issues
             ],
         )
-    committed = await engine.commit()
+    validated = engine.validated_candidate
+    if validated is None:
+        raise RuntimeError("accepted Workflow output has no validated candidate")
+    message = AIMessage(
+        content=json.dumps(
+            thaw_json(validated.encoded_value),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        cause_by=CauseBy.RUN_COMMAND,
+    )
+    committed = await engine.commit_final(message)
     return committed.value
 
 

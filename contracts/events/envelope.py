@@ -72,7 +72,7 @@ def thaw_json(value: JsonValue) -> JsonValue:
 
     if isinstance(value, Mapping):
         return {key: thaw_json(item) for key, item in value.items()}
-    if isinstance(value, tuple):
+    if isinstance(value, (list, tuple)):
         return [thaw_json(item) for item in value]
     return value
 

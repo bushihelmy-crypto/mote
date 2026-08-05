@@ -7,7 +7,6 @@ from mote.contracts.async_work.identity import LocalBackgroundTaskReference
 from mote.contracts.ports.task.operations import (
     BackgroundMessageSink,
     BackgroundTaskBuildContext,
-    BackgroundWakeReason,
     LocalAsyncWorkAdapter,
 )
 from mote.contracts.session.identity import SessionId
@@ -72,9 +71,6 @@ class AgentBackgroundTasks:
     @property
     def pending_count(self) -> int:
         return self._pool.pending_count
-
-    async def wait_any(self, timeout: float = 120.0) -> BackgroundWakeReason:
-        return await self._pool.wait_any(timeout)
 
     async def wait_for_completion(self, timeout: float | None = None) -> bool:
         return await self._pool.wait_for_completion(timeout)

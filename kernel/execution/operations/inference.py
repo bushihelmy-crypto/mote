@@ -9,7 +9,14 @@ from typing import Generic, TypeVar
 from uuid import uuid4
 
 from mote.contracts.conversation import UserMessage
-from mote.contracts.execution.models import InferenceCheckpointState, MutationStatus
+from mote.contracts.conversation.codec import encode_message
+from mote.contracts.execution.models import (
+    InferenceCheckpointState,
+    InferenceCompleted,
+    InferenceDisposition,
+    InferenceStopped,
+    MutationStatus,
+)
 from mote.contracts.model.inference import InferenceAttemptFence
 from mote.contracts.ports.conversation.turn_context_bus import TurnContextCollector
 from mote.contracts.ports.execution.checkpoint import InferenceCheckpointPort
@@ -54,11 +61,11 @@ class InferenceService(Generic[OutputT]):
         self._turn_context_bus = turn_context_bus
         self._get_cwd = get_cwd
 
-    async def infer(self) -> bool:
+    async def infer(self) -> InferenceDisposition:
         if not self._is_active():
-            return False
+            return InferenceStopped()
         if await self._checkpoint.reinstate():
-            return True
+            return InferenceCompleted()
         async with span("inference"):
             resumed = self._checkpoint.resume()
             model_call_id = resumed.model_call_id if resumed is not None else uuid4().hex
@@ -122,15 +129,21 @@ class InferenceService(Generic[OutputT]):
                     request_fingerprint=checkpoint_state.request_fingerprint,
                 )
                 transferred = True
+                # InferenceCompleted is a semantic completion receipt, not an
+                # acknowledgement that a background coroutine was merely
+                # launched.  Downstream graph nodes read the result and consume
+                # its durable ModelCall checkpoint, so both must be settled
+                # before this disposition can be published.
+                await self._inference_engine.join()
             finally:
                 if not transferred:
                     await self._context_provider.release_inference_target(target)
-        return True
+        return InferenceCompleted()
 
     @staticmethod
     def _request_fingerprint(request: InferenceRequest) -> str:
         payload = {
-            "messages": [message.model_dump(mode="json") for message in request.req],
+            "messages": [encode_message(message) for message in request.req],
             "system_prompt": request.system_prompt,
             "tools": request.tool_specs,
             "schema_fingerprint": request.schema_fingerprint,

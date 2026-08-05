@@ -39,6 +39,8 @@ class Palette:
     ERROR = "#ab2b3f"  # red — failed result / error
     WARNING = "#966c1e"  # amber — approval / warning notice
     DIM = "#a8a8a8"  # secondary text, folded affordance, usage line (brightened)
+    REMINDER_PERSISTENT = "#8a8a8a"  # muted gray — durable turn context
+    REMINDER_TEMPORARY = "#9b82b5"  # muted violet contrast — ephemeral turn context
     DIFF_ADD = "#69db7c"  # diff added line — bright fg on the add bar
     DIFF_DEL = "#ffa8b4"  # diff removed line — bright fg on the del bar
     # Filled diff bars: a dark tinted background spans the

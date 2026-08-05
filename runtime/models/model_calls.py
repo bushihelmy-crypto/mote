@@ -11,7 +11,7 @@ from typing import Any
 from mote.contracts.artifact import ArtifactRef
 from mote.contracts.conversation import Message
 from mote.contracts.conversation.fields import IMAGES, PDFS
-from mote.contracts.events.envelope import JsonValue
+from mote.contracts.events.envelope import JsonValue, freeze_json, thaw_json
 from mote.contracts.model.inference import FinalizedGenerateRequest
 from mote.contracts.model.invocation import (
     CanonicalMessage,
@@ -195,7 +195,7 @@ def _canonical_messages_from(
     return tuple(messages), needs_vision, needs_pdf
 
 
-def canonical_tool(tool: dict) -> CanonicalToolDefinition:
+def canonical_tool(tool: Mapping[str, Any]) -> CanonicalToolDefinition:
     nested = tool.get("function")
     if isinstance(nested, dict):
         name = nested.get("name", "")
@@ -208,7 +208,11 @@ def canonical_tool(tool: dict) -> CanonicalToolDefinition:
     return CanonicalToolDefinition(
         name=name,
         description=description,
-        input_schema=schema,
+        # Tool catalogs deliberately expose deeply immutable Mapping values.
+        # Pydantic's JsonValue union validates containers before the contract's
+        # after-validator can freeze them, so project the already validated JSON
+        # into its ordinary wire representation at this adapter boundary.
+        input_schema=thaw_json(freeze_json(schema, path="tool input schema")),
         defer_loading=bool(tool.get("defer_loading")),
     )
 

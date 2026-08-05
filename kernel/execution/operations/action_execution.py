@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from mote.contracts.conversation import AIMessage, CauseBy, Message
+from mote.contracts.events.envelope import thaw_json
 from mote.contracts.execution.models import MutationResult, MutationStatus
 from mote.contracts.model.inference import InferenceResult
 from mote.contracts.model.turn import ModelTurn
@@ -15,6 +16,7 @@ from mote.contracts.tool.catalog import (
     ToolExecutionOutcome,
     ToolExecutionPort,
 )
+from mote.contracts.tool.result import JsonToolPayload
 from mote.kernel.commands.channel import CommandChannel, join_command_outputs
 from mote.kernel.commands.contracts import ExecutedCommand
 from mote.kernel.execution.context import ExecutionContext
@@ -82,7 +84,7 @@ class ActionExecutionService:
             if checkpoint:
                 call_projection = await channel.project_call(content, executed)
                 self._require_applied(
-                    await self._transaction.record_model_turn(
+                    await self._transaction.record_effect_intent(
                         self._transaction.context(f"{operation_prefix}:model-turn"),
                         call_projection,
                     )
@@ -129,9 +131,9 @@ class ActionExecutionService:
                             entry.success = False
                     projection = await channel.project_results(executed)
                     self._require_applied(
-                        await self._transaction.record_tool_results(
+                        await self._transaction.settle_effect_batch(
                             self._transaction.context(f"{operation_prefix}:tool-results"),
-                            (projection,),
+                            projection,
                         )
                     )
                 raise
@@ -140,20 +142,21 @@ class ActionExecutionService:
             if checkpoint:
                 projection = await channel.project_results(executed)
                 self._require_applied(
-                    await self._transaction.record_tool_results(
+                    await self._transaction.settle_effect_batch(
                         self._transaction.context(f"{operation_prefix}:tool-results"),
-                        (projection,),
+                        projection,
                     )
                 )
             else:
                 projection = await channel.project_turn(content, executed)
                 self._require_applied(
-                    await self._transaction.record_tool_results(
+                    await self._transaction.record_local_action_batch(
                         self._transaction.context(f"{operation_prefix}:complete-turn"),
-                        (projection,),
+                        projection,
                     )
                 )
-            await self._inference_engine.join()
+            if not self._inference_engine.done:
+                await self._inference_engine.join()
             return AIMessage(
                 content=channel.react_result(outputs),
                 sent_from=self._context().name,
@@ -177,7 +180,9 @@ class ActionExecutionService:
         entry.file_changes = list(result.file_changes)
         entry.retention = result.retention
         entry.resource_path = result.resource_path
-        entry.data = result.data
+        entry.data = (
+            thaw_json(result.payload.value) if isinstance(result.payload, JsonToolPayload) else result.execution_value
+        )
         entry.settled = True
 
 

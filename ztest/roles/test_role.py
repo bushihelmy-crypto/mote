@@ -1641,6 +1641,11 @@ class TestMessaging:
         assert MESSAGE_ROUTE_TO_SELF not in msg.send_to
         assert msg.sent_from == any_to_str(r)
 
+    def test_publish_without_targets_drops(self):
+        r = Role(name="Alice")
+        r.publish_message(Message(content="x"))
+        assert r.is_idle
+
     def test_publish_to_own_name_buffers_locally(self):
         r = Role(name="Alice")
         msg = Message(content="x", send_to={"Alice"})
@@ -1661,6 +1666,16 @@ class TestMessaging:
         msg = Message(content="x", send_to={"Bob"})
         r.publish_message(msg)
         assert env.published == [msg]
+
+    def test_publish_to_self_and_other_routes_each_target_once(self):
+        r = Role(name="Alice")
+        env = FakeEnv()
+        r.bind_routing(env)
+        msg = Message(content="x", send_to={"Alice", "Bob"})
+        r.publish_message(msg)
+        assert not r.is_idle
+        assert len(env.published) == 1
+        assert env.published[0].send_to == {"Bob"}
 
     def test_publish_falsy_noop(self):
         r = Role(name="Alice")

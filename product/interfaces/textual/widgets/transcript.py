@@ -45,6 +45,7 @@ from mote.product.presentation.rich_rendering.builders import (
     render_image,
     render_result_detail,
     session_table,
+    system_reminder_text,
     task_progress_text,
     tool_body_syntax,
     tool_completed_text,
@@ -618,10 +619,7 @@ class SystemReminderRow(SelectableStatic):
     """
 
     def __init__(self, ev: Any, **kwargs: Any) -> None:
-        text = Text()
-        text.append(NOTE + " ", style=Palette.DIM)
-        text.append_text(linkify(getattr(ev, "text", "") or "", base_style=Palette.DIM))
-        super().__init__(text, **kwargs)
+        super().__init__(system_reminder_text(ev), **kwargs)
 
 
 class ConversationCompactedRow(SelectableStatic):

@@ -8,7 +8,7 @@ from rich.style import Style
 
 from mote.product.i18n import keys as K
 from mote.product.i18n import t
-from mote.product.presentation.events import ConversationCompacted
+from mote.product.presentation.events import ConversationCompacted, SystemReminder, SystemReminderLifetime
 from mote.product.presentation.rich_rendering.builders._rich import Text
 from mote.product.presentation.rich_rendering.builders.common import bullet_row
 from mote.product.presentation.rich_rendering.palette import COMPACT, PROMPT_SYMBOL, Palette
@@ -61,6 +61,19 @@ def conversation_compacted_text(event: ConversationCompacted) -> "Text":
     return line
 
 
+def system_reminder_text(event: SystemReminder) -> "Text":
+    if event.lifetime is SystemReminderLifetime.TEMPORARY:
+        color, label = Palette.REMINDER_TEMPORARY, "temporary"
+    else:
+        color, label = Palette.REMINDER_PERSISTENT, "persistent"
+    style = f"dim {color}"
+    line = Text()
+    line.append("⚑ ", style=style)
+    line.append_text(linkify(event.text or "", base_style=style))
+    line.append(f" [{label}]", style=style)
+    return line
+
+
 def compaction_summary_text(
     summary: str,
     *,
@@ -85,5 +98,6 @@ __all__ = [
     "compaction_summary_text",
     "conversation_compacted_text",
     "linkify",
+    "system_reminder_text",
     "user_message_row",
 ]

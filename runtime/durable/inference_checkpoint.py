@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from mote.contracts.artifact import ArtifactResolutionPolicy, ArtifactSensitivity
+from mote.contracts.events.model import InferenceCheckpointConsumedEvent
 from mote.contracts.execution.models import InferenceCheckpointAttemptState, InferenceCheckpointState
 from mote.contracts.model.failover import ModelCallState
 from mote.contracts.model.inference import InferenceResult
@@ -127,6 +128,42 @@ class InferenceCheckpoint:
             self._projections.require_owner_action(model_call_id)
             raise RuntimeError("ModelCall result is not durably committed or cannot project to Session")
         self._projections.commit_intent(model_call_id, output)
+
+    async def prepare_consumption(self, operation_id: str) -> InferenceCheckpointConsumedEvent:
+        await self.record_result()
+        model_call_id = self._model_call_id
+        state = self._state
+        if model_call_id is None or state is None:
+            raise RuntimeError("inference checkpoint consumption has no active ModelCall")
+        return InferenceCheckpointConsumedEvent(
+            model_call_id=model_call_id,
+            inference_attempt_id=state.inference_attempt_id,
+            inference_fencing_token=state.inference_fencing_token,
+            operation_id=operation_id,
+        )
+
+    def acknowledge_consumption(self, event: InferenceCheckpointConsumedEvent) -> None:
+        if self._model_call_id != event.model_call_id:
+            raise RuntimeError("inference checkpoint consumption identity mismatch")
+        self.discard()
+
+    def reconcile_consumed(self, events: tuple[InferenceCheckpointConsumedEvent, ...]) -> None:
+        """Finish ledger acknowledgement after a crash following the atomic Session commit."""
+        for event in events:
+            record = self._projections.get(event.model_call_id)
+            if record is None:
+                raise RuntimeError("consumed inference checkpoint has no projection record")
+            checkpoint = record.checkpoint
+            if (
+                checkpoint.inference_attempt_id != event.inference_attempt_id
+                or checkpoint.inference_fencing_token != event.inference_fencing_token
+            ):
+                raise RuntimeError("consumed inference checkpoint identity or fence mismatch")
+            if record.state is ModelSessionProjectionState.ACKNOWLEDGED:
+                continue
+            if record.state is not ModelSessionProjectionState.INTENT_COMMITTED:
+                raise RuntimeError("consumed inference checkpoint has no committed projection intent")
+            self._projections.acknowledge(event.model_call_id)
 
     def discard(self) -> None:
         model_call_id = self._take()

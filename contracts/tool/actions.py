@@ -20,7 +20,7 @@ class ToolCallAction(BaseModel):
     name: str
     arguments: ToolArguments = Field(default_factory=dict)
 
-    @field_validator("arguments", mode="before")
+    @field_validator("arguments")
     @classmethod
     def _freeze_arguments(cls, value: object) -> ToolArguments:
         return freeze_tool_arguments(value)

@@ -7,12 +7,12 @@ import pytest
 from mote.contracts.conversation import UserMessage
 from mote.kernel.execution.graph import NodeId, build_react_graph, build_review_refine_graph
 from mote.kernel.execution.graph.nodes import (
+    AwaitQuiescenceNode,
     BudgetNode,
     InferenceNode,
     ObserveNode,
     RestoreNode,
     ValidateOutputNode,
-    WaitBackgroundNode,
 )
 
 from .conftest import FakeChannel, FakeExecutor, FakeThinkEngine
@@ -65,7 +65,7 @@ async def test_built_in_graphs_share_domain_nodes_and_runner_contract(make_engin
         NodeId.BUDGET: BudgetNode,
         NodeId.THINK: InferenceNode,
         NodeId.VALIDATE_OUTPUT: ValidateOutputNode,
-        NodeId.WAIT_BACKGROUND: WaitBackgroundNode,
+        NodeId.AWAIT_QUIESCENCE: AwaitQuiescenceNode,
     }
 
     assert NodeId.ACT in react.nodes and NodeId.ACT not in review.nodes

@@ -147,7 +147,7 @@ class PlainTerminalConsumer(BaseConsumer):
         self._print(ev.text)
 
     def on_system_reminder(self, ev: Any) -> None:
-        self._print(f"{NOTE} {getattr(ev, 'text', '') or ''}")
+        self._print(f"{NOTE} {ev.text} [{ev.lifetime.value}]")
 
     def on_conversation_compacted(self, ev: Any) -> None:
         count = getattr(ev, "message_count", 0) or 0

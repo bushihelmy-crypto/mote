@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from mote.contracts.conversation import AIMessage
 from mote.contracts.events.conversation import PromptRejectedEvent
-from mote.contracts.events.output import OutputCommittedEvent
+from mote.contracts.events.output import FinalOutputCommittedEvent
 from mote.contracts.events.session import TurnEndEvent
 from mote.contracts.events.task import TaskProgressEvent
 from mote.contracts.events.tool import ToolInvocationStartedEvent
@@ -13,7 +14,7 @@ from mote.runtime.session.event_policy import ROLLOUT_EVENT_TYPES, is_rollout_ev
 
 
 def test_rollout_policy_selects_facts_without_changing_their_types():
-    assert is_rollout_event(OutputCommittedEvent())
+    assert is_rollout_event(FinalOutputCommittedEvent(message=AIMessage(content="done")))
     assert is_rollout_event(
         PromptRejectedEvent(
             prompt_digest="sha256:deadbeef",
@@ -24,7 +25,7 @@ def test_rollout_policy_selects_facts_without_changing_their_types():
     )
     assert is_rollout_event(TurnEndEvent())
     assert not hasattr(TurnEndEvent, "outcome_type")
-    assert not hasattr(OutputCommittedEvent, "outcome_type")
+    assert not hasattr(FinalOutputCommittedEvent, "outcome_type")
 
 
 def test_non_persisted_events_remain_available_to_other_observers():
@@ -53,4 +54,4 @@ def test_non_persisted_events_remain_available_to_other_observers():
 
 def test_rollout_policy_has_no_duplicate_or_instance_order_semantics():
     assert isinstance(ROLLOUT_EVENT_TYPES, frozenset)
-    assert len(ROLLOUT_EVENT_TYPES) == 15
+    assert len(ROLLOUT_EVENT_TYPES) == 12

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from mote.contracts.events.agent import BudgetEvent
-from mote.contracts.events.conversation import ContextCompactedEvent, MessageAppendedEvent
+from mote.contracts.events.conversation import ContextCompactedEvent, MessageAppendedEvent, TurnContextCollectedEvent
 from mote.contracts.events.model import (
     LLMStreamCommittedEvent,
     LLMStreamDeltaEvent,
@@ -12,7 +12,7 @@ from mote.contracts.events.model import (
     LLMStreamInterruptedEvent,
     ModelAttemptFinishedEvent,
 )
-from mote.contracts.events.output import OutputCommittedEvent, OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
+from mote.contracts.events.output import FinalOutputCommittedEvent, OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
 from mote.contracts.events.session import RuntimeDurabilityChangedEvent
 from mote.contracts.events.task import ActivityCompletedEvent, ActivityStartedEvent, TaskProgressEvent
 from mote.contracts.events.tool import ToolCallFinishedEvent, ToolInvocationStartedEvent
@@ -21,13 +21,14 @@ PresentationInputEvent = (
     BudgetEvent
     | ContextCompactedEvent
     | MessageAppendedEvent
+    | TurnContextCollectedEvent
     | LLMStreamCommittedEvent
     | LLMStreamDeltaEvent
     | LLMStreamDiscardedEvent
     | LLMStreamEndEvent
     | LLMStreamInterruptedEvent
     | ModelAttemptFinishedEvent
-    | OutputCommittedEvent
+    | FinalOutputCommittedEvent
     | OutputSnapshotEvent
     | OutputSnapshotInvalidatedEvent
     | RuntimeDurabilityChangedEvent
@@ -42,13 +43,14 @@ PRESENTATION_INPUT_TYPES: tuple[type[PresentationInputEvent], ...] = (
     BudgetEvent,
     ContextCompactedEvent,
     MessageAppendedEvent,
+    TurnContextCollectedEvent,
     LLMStreamCommittedEvent,
     LLMStreamDeltaEvent,
     LLMStreamDiscardedEvent,
     LLMStreamEndEvent,
     LLMStreamInterruptedEvent,
     ModelAttemptFinishedEvent,
-    OutputCommittedEvent,
+    FinalOutputCommittedEvent,
     OutputSnapshotEvent,
     OutputSnapshotInvalidatedEvent,
     RuntimeDurabilityChangedEvent,

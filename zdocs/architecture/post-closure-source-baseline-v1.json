@@ -1,12 +1,12 @@
 {
-  "base_revision": "94731e866f2d47782a41e038a444719b625f28f8",
+  "base_revision": "5c09f92f9e0565efc9b543473d6e770244399b1d",
   "kind": "source_baseline",
-  "manifest_identity": "sha256:cd01820408badac0f6a27796b2e036f3603d03e001c0950ba7d1a85c4f6c89ba",
+  "manifest_identity": "sha256:c9648a3b33f6b15868b9381fc6be0186077eb172854cfdd008d4c679035d2d95",
   "schema": "post-closure-governance-v1",
   "source_sets": {
     "agents": "sha256:9e0d09b328517efb85faca557bcd9036827e5f00036eab9e0d6b0869fcdbacda",
-    "production": "sha256:bda3b81c4a41c4005e0211176092a348b90eb5ceab7ab91daf8f014d35f549c2",
+    "production": "sha256:49aa0641594f30d9a80e3cf1dbac2cd0bbfddd585c3aae1fa12df924f42177b9",
     "requirements": "sha256:3bf6cd5e312c4998074cae196e0cc3dd3f50c85c57ffbd10792271265d9a6aa9",
-    "tests": "sha256:e73edd98b72bdb3d7da91b40809c522b4ba48d477d901f6a843ce3749583cfe8"
+    "tests": "sha256:ae96f98ffb8b2e5aefbbbbc03e442c432254b8f6bfdaab27d730761a2c5c21f6"
   }
 }

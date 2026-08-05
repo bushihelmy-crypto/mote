@@ -6,8 +6,10 @@ from collections.abc import Callable
 from typing import Generic, TypeVar
 
 from mote.contracts.conversation import AIMessage, CauseBy, MessagePriority
+from mote.contracts.execution.models import InferenceCompleted
 from mote.contracts.model.turn import ModelTurn
 from mote.contracts.output.errors import OutputCorrectionExhaustedError
+from mote.contracts.ports.conversation.message_activity import MessageActivity
 from mote.contracts.ports.task.operations import BackgroundTaskService
 from mote.kernel.commands import CommandChannel
 from mote.kernel.execution.context import ExecutionContext
@@ -18,7 +20,7 @@ from mote.kernel.execution.operations.inference import InferenceService
 from mote.kernel.execution.operations.observation import ObservationService
 from mote.kernel.execution.operations.output import OutputOperation
 from mote.kernel.execution.result import ExecutionResult
-from mote.kernel.execution.state import CandidateSelection, ExecutionState, NoModelTurn
+from mote.kernel.execution.state import ExecutionState, NoModelTurn, PendingCandidate
 from mote.kernel.inference.base import BaseInferenceEngine
 
 OutputT = TypeVar("OutputT")
@@ -48,7 +50,7 @@ class RestoreNode(ExecutionNode, Generic[OutputT]):
 class ObserveNode(ExecutionNode, Generic[OutputT]):
     node_id = NodeId.OBSERVE
     effect_kind = EffectKind.LEDGERED
-    allowed_targets = frozenset({NodeId.BUDGET})
+    allowed_targets = frozenset({NodeId.BUDGET, NodeId.AWAIT_QUIESCENCE})
 
     def __init__(
         self,
@@ -63,11 +65,21 @@ class ObserveNode(ExecutionNode, Generic[OutputT]):
         state: ExecutionState[OutputT],
     ) -> Transition | End[ExecutionResult[OutputT] | None]:
         if not state.initial_observe_complete:
-            if not await self._observation.observe():
-                return End(None)
+            observed = await self._observation.observe()
+            if not observed.observed_count:
+                state.requested_end = None
+                return Transition(NodeId.AWAIT_QUIESCENCE)
             state.initial_observe_complete = True
-            self._set_active(True)
-        elif await self._observation.observe(max_priority=MessagePriority.NEXT, interjection=True):
+            if observed.user_message_count:
+                self._set_active(True)
+        else:
+            observed = await self._observation.observe(max_priority=MessagePriority.NEXT, interjection=True)
+            if not observed.observed_count:
+                if state.continue_inference:
+                    state.continue_inference = False
+                    return Transition(NodeId.BUDGET)
+                return Transition(NodeId.AWAIT_QUIESCENCE)
+        if observed.user_message_count:
             self._set_active(True)
         return Transition(NodeId.BUDGET)
 
@@ -75,7 +87,7 @@ class ObserveNode(ExecutionNode, Generic[OutputT]):
 class BudgetNode(ExecutionNode, Generic[OutputT]):
     node_id = NodeId.BUDGET
     effect_kind = EffectKind.PURE
-    allowed_targets = frozenset({NodeId.THINK})
+    allowed_targets = frozenset({NodeId.THINK, NodeId.AWAIT_QUIESCENCE})
 
     def __init__(
         self,
@@ -98,7 +110,11 @@ class BudgetNode(ExecutionNode, Generic[OutputT]):
                 sent_from=self._context().name,
                 cause_by=CauseBy.RUN_COMMAND,
             )
-            return End(ExecutionResult(presentation=state.response, committed_output=state.committed_output))
+            state.requested_end = ExecutionResult(
+                presentation=state.response,
+                committed_output=state.committed_output,
+            )
+            return Transition(NodeId.AWAIT_QUIESCENCE)
         if self._advance_turn is not None:
             self._advance_turn()
         return Transition(NodeId.THINK)
@@ -107,31 +123,31 @@ class BudgetNode(ExecutionNode, Generic[OutputT]):
 class InferenceNode(ExecutionNode, Generic[OutputT]):
     node_id = NodeId.THINK
     effect_kind = EffectKind.REPLAYABLE
-    allowed_targets = frozenset({NodeId.INTERPRET, NodeId.WAIT_BACKGROUND})
+    allowed_targets = frozenset({NodeId.INTERPRET, NodeId.AWAIT_QUIESCENCE})
 
     def __init__(
         self,
         inference: InferenceService,
         current_channel: Callable[[], CommandChannel],
         inference_engine: BaseInferenceEngine,
-        get_bg_pool: Callable[[], BackgroundTaskService | None],
     ) -> None:
         self._inference = inference
         self._current_channel = current_channel
         self._inference_engine = inference_engine
-        self._get_bg_pool = get_bg_pool
 
     async def run(
         self,
         state: ExecutionState[OutputT],
     ) -> Transition | End[ExecutionResult[OutputT] | None]:
-        if await self._inference.infer():
+        disposition = await self._inference.infer()
+        if isinstance(disposition, InferenceCompleted):
             state.turn = await self._current_channel().model_turn(self._inference_engine.result)
             return Transition(NodeId.INTERPRET)
-        bg_pool = self._get_bg_pool()
-        if bg_pool and bg_pool.has_pending():
-            return Transition(NodeId.WAIT_BACKGROUND)
-        return End(ExecutionResult(presentation=state.response, committed_output=state.committed_output))
+        state.requested_end = ExecutionResult(
+            presentation=state.response,
+            committed_output=state.committed_output,
+        )
+        return Transition(NodeId.AWAIT_QUIESCENCE)
 
 
 class ActNode(ExecutionNode, Generic[OutputT]):
@@ -150,6 +166,7 @@ class ActNode(ExecutionNode, Generic[OutputT]):
             raise RuntimeError("action phase requires a model turn")
         state.response = await self._actions.execute(state.turn)
         state.turn = NoModelTurn()
+        state.continue_inference = True
         return Transition(NodeId.OBSERVE)
 
 
@@ -165,9 +182,9 @@ class ValidateOutputNode(ExecutionNode, Generic[OutputT]):
         self,
         state: ExecutionState[OutputT],
     ) -> Transition | End[ExecutionResult[OutputT] | None]:
-        if not isinstance(state.turn, CandidateSelection):
+        if not isinstance(state.turn, PendingCandidate):
             raise RuntimeError("output validation requires a candidate selection")
-        candidate = state.turn.turn.final_candidates[state.turn.candidate_index]
+        candidate = state.turn.candidate
         evaluation = await self._outputs.evaluate(candidate)
         candidate = candidate.model_copy(update={"candidate_id": evaluation.candidate_id})
         if not evaluation.accepted:
@@ -179,31 +196,52 @@ class ValidateOutputNode(ExecutionNode, Generic[OutputT]):
                     issues=evaluation.issues,
                 )
             state.turn = NoModelTurn()
+            state.continue_inference = True
             return Transition(NodeId.OBSERVE)
-        state.response = await self._outputs.accept(candidate)
-        state.committed_output = await self._outputs.commit()
+        state.response, state.committed_output = await self._outputs.validate_and_commit(candidate)
         return End(ExecutionResult(presentation=state.response, committed_output=state.committed_output))
 
 
-class WaitBackgroundNode(ExecutionNode, Generic[OutputT]):
-    node_id = NodeId.WAIT_BACKGROUND
+class AwaitQuiescenceNode(ExecutionNode, Generic[OutputT]):
+    node_id = NodeId.AWAIT_QUIESCENCE
     effect_kind = EffectKind.WAITABLE
-    allowed_targets = frozenset({NodeId.OBSERVE})
+    allowed_targets = frozenset({NodeId.OBSERVE, NodeId.VALIDATE_OUTPUT})
 
     def __init__(
         self,
+        inbox_activity: Callable[[], MessageActivity],
         get_bg_pool: Callable[[], BackgroundTaskService | None],
     ) -> None:
+        self._inbox_activity = inbox_activity
         self._get_bg_pool = get_bg_pool
 
     async def run(
         self,
         state: ExecutionState[OutputT],
     ) -> Transition | End[ExecutionResult[OutputT] | None]:
-        bg_pool = self._get_bg_pool()
-        if bg_pool and bg_pool.has_pending():
-            await bg_pool.wait_any()
-        return Transition(NodeId.OBSERVE)
+        inbox = self._inbox_activity()
+        while True:
+            before = inbox.activity_snapshot()
+            if before.pending:
+                self._invalidate_candidate(state)
+                return Transition(NodeId.OBSERVE)
+            pool = self._get_bg_pool()
+            snapshot = pool.pin_snapshot(owner=pool.owner) if pool is not None else None
+            if snapshot is not None and snapshot.pin_count:
+                await inbox.wait_for_activity(before.generation)
+                self._invalidate_candidate(state)
+                return Transition(NodeId.OBSERVE)
+            after = inbox.activity_snapshot()
+            if after.pending or after.generation != before.generation:
+                continue
+            if isinstance(state.turn, PendingCandidate):
+                return Transition(NodeId.VALIDATE_OUTPUT)
+            return End(state.requested_end)
+
+    @staticmethod
+    def _invalidate_candidate(state: ExecutionState[OutputT]) -> None:
+        state.turn = NoModelTurn()
+        state.requested_end = None
 
 
 __all__ = [
@@ -214,5 +252,5 @@ __all__ = [
     "RestoreNode",
     "InferenceNode",
     "ValidateOutputNode",
-    "WaitBackgroundNode",
+    "AwaitQuiescenceNode",
 ]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -88,6 +89,14 @@ from mote.runtime.models.failover.orchestrator import AttemptOrchestrator, Attem
 from mote.runtime.models.failover.planner import FailoverPlanner
 from mote.runtime.models.failover.runtime_state import ModelRuntimeGeneration
 from mote.runtime.models.inference_attempt_executor import RuntimeAttemptFailure
+
+
+def _json_fallback(value: object) -> object:
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(f"model invocation contains a non-JSON value: {type(value).__name__}")
+
+
 from mote.runtime.resilience.admission import AdmissionRejectedError, AdmissionResult, ResourceAdmissionController
 from mote.runtime.resilience.failover.classification import classify_failure
 
@@ -483,7 +492,7 @@ class RuntimeModelGateway:
                     credential_slot_id=target.credential_slot_id,
                     model=target.endpoint.model,
                     provider=target.endpoint.provider,
-                    input=invocation.input.model_dump(mode="json"),
+                    input=invocation.input.model_dump(mode="json", fallback=_json_fallback),
                     timeout_seconds=timeout_seconds,
                     parent_span_id=invocation.trace.parent_span_id,
                     trace_id=invocation.trace.trace_id,
@@ -518,7 +527,7 @@ class RuntimeModelGateway:
                             endpoint=target.endpoint,
                             credential_slot_id=target.credential_slot_id,
                             credential_version=target.binding.credential_version,
-                            invocation=current_invocation.model_dump(mode="json"),
+                            invocation=current_invocation.model_dump(mode="json", fallback=_json_fallback),
                             deadline=CrossProcessDeadline(
                                 deadline_utc=now + timedelta(seconds=timeout_seconds),
                                 remaining_seconds_at_send=timeout_seconds,

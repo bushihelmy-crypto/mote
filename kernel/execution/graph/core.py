@@ -23,7 +23,7 @@ class NodeId(str, Enum):
     INTERPRET = "interpret"
     ACT = "act"
     VALIDATE_OUTPUT = "validate_output"
-    WAIT_BACKGROUND = "wait_background"
+    AWAIT_QUIESCENCE = "await_quiescence"
 
 
 class EffectKind(str, Enum):
@@ -64,8 +64,7 @@ class AgentNode(Protocol[StateT_contra, ResultT]):
     effect_kind: EffectKind
     allowed_targets: frozenset[NodeId]
 
-    async def run(self, state: StateT_contra) -> Transition | End[ResultT]:
-        ...
+    async def run(self, state: StateT_contra) -> Transition | End[ResultT]: ...
 
 
 class GraphStructureError(ValueError):
@@ -117,11 +116,13 @@ class GraphRunner(Generic[StateT, ResultT]):
         *,
         max_steps: int = 100_000,
         on_transition: Callable[[NodeId, NodeId], Awaitable[None]] | None = None,
-        execute_node: Callable[
-            [AgentNode[StateT, ResultT], StateT],
-            Awaitable[Transition | End[ResultT]],
-        ]
-        | None = None,
+        execute_node: (
+            Callable[
+                [AgentNode[StateT, ResultT], StateT],
+                Awaitable[Transition | End[ResultT]],
+            ]
+            | None
+        ) = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be positive")

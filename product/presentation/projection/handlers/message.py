@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.contracts.events.conversation import MessageAppendedEvent
+from mote.contracts.events.conversation import MessageAppendedEvent, TurnContextCollectedEvent
 from mote.contracts.events.model import (
     LLMStreamCommittedEvent,
     LLMStreamDeltaEvent,
@@ -20,6 +20,7 @@ from mote.product.presentation.events.events import (
     MessageBlockDelta,
     MessageBlockStarted,
     SystemReminder,
+    SystemReminderLifetime,
     ViewEvent,
 )
 from mote.product.presentation.input_events import PresentationInputEvent
@@ -84,6 +85,9 @@ class MessageProjectionState:
             return []
         if isinstance(event, MessageAppendedEvent):
             return self._project_message(event)
+        if isinstance(event, TurnContextCollectedEvent):
+            summary = _summarize_reminder(event.content)
+            return [SystemReminder(text=summary, lifetime=SystemReminderLifetime.TEMPORARY)] if summary else []
         return None
 
     def _project_message(self, event: MessageAppendedEvent) -> list[ViewEvent]:
@@ -95,7 +99,7 @@ class MessageProjectionState:
             if _is_system_reminder(content):
                 summary = _summarize_reminder(content)
                 if summary:
-                    return [SystemReminder(text=summary)]
+                    return [SystemReminder(text=summary, lifetime=SystemReminderLifetime.PERSISTENT)]
             return []
         content = message.content
         streamed = self._streaming

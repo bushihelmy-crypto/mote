@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+
+from mote.contracts.events.envelope import freeze_json, thaw_json
 
 
-def serialize_tool_call_args(args: Any) -> str:
+def serialize_tool_call_args(args: object) -> str:
     """Serialize tool arguments to the canonical wire JSON string.
 
     Strings pass through unchanged because persisted-argument envelopes are
@@ -14,7 +15,10 @@ def serialize_tool_call_args(args: Any) -> str:
     message projection, large-argument persistence, and compaction spilling.
     """
 
-    return args if isinstance(args, str) else json.dumps(args or {})
+    if isinstance(args, str):
+        return args
+    frozen = freeze_json(args or {}, path="tool call arguments")
+    return json.dumps(thaw_json(frozen))
 
 
 __all__ = ["serialize_tool_call_args"]

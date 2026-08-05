@@ -76,6 +76,60 @@ class _NoArtifactResolver:
         raise AssertionError("flow fake does not externalize Model output")
 
 
+class FakeInferenceCheckpoint:
+    def __init__(self):
+        from mote.contracts.execution.models import InferenceCheckpointState
+
+        self.state = InferenceCheckpointState(
+            model_call_id="flow-model-call",
+            inference_attempt_id="flow-attempt",
+            inference_fencing_token=1,
+        )
+
+    async def reinstate(self):
+        return False
+
+    def resume(self):
+        return None
+
+    def begin_call(self, state):
+        self.state = state
+
+    def refresh(self, state):
+        self.state = state
+
+    def mark_wire_started(self):
+        return None
+
+    def discard(self):
+        return None
+
+    def abort(self):
+        return None
+
+    async def prepare_consumption(self, operation_id):
+        from mote.contracts.events.model import InferenceCheckpointConsumedEvent
+
+        state = self.state
+        return InferenceCheckpointConsumedEvent(
+            state.model_call_id,
+            state.inference_attempt_id,
+            state.inference_fencing_token,
+            operation_id,
+        )
+
+    def acknowledge_consumption(self, event):
+        return None
+
+
+class FakeSessionFactSink:
+    async def commit_facts(self, events):
+        self.events = events
+
+    async def commit_fact(self, event):
+        await self.commit_facts((event,))
+
+
 class FakeThinkEngine:
     """Duck-typed BaseInferenceEngine exposing only what the loop reads."""
 
@@ -83,6 +137,7 @@ class FakeThinkEngine:
         self.result = _Result(content)
         self.start_calls: list[dict] = []
         self.join_calls = 0
+        self._done = False
         self.model_call_id = "fake-model-call"
         # Results adopted via the durable reinstate path (skip-the-LLM resume).
         self.reinstated: list = []
@@ -103,6 +158,7 @@ class FakeThinkEngine:
         attempt=None,
         **_kwargs,
     ):
+        self._done = False
         self.model_call_id = model_call_id
         self.start_calls.append(
             {
@@ -120,9 +176,15 @@ class FakeThinkEngine:
         # mark done (no task) so the loop reads it without re-paying the model.
         self.result = result
         self.reinstated.append(result)
+        self._done = True
 
     async def join(self) -> None:
         self.join_calls += 1
+        self._done = True
+
+    @property
+    def done(self) -> bool:
+        return self._done
 
 
 class FakeChannel:
@@ -221,10 +283,8 @@ class FakeResult:
     terminate: bool = False
     retention: str | None = None
     resource_path: str | None = None
-    # Structured payload the loop forwards onto the executed entry (only
-    # SearchTools' {tool_references} is read downstream; None for every other
-    # tool). Mirrors ToolResult.data.
-    data: Any = None
+    payload: object | None = None
+    execution_value: object | None = None
 
 
 class FakeExecutor:
@@ -291,6 +351,9 @@ class FakeMemory:
         msgs = [m for m in messages if m is not None]
         self.add_batch_calls.append(list(msgs))
         self.messages.extend(msgs)
+
+    def apply_committed_messages(self, messages) -> None:
+        self.messages.extend(messages)
 
 
 class FakeLLM:
@@ -380,12 +443,14 @@ class FakeBgPool:
     """Duck-typed BackgroundPool.
 
     ``pending`` is the number of times ``has_pending()`` should report busy;
-    each ``wait_any()`` decrements it (so a parked loop eventually drains).
+    each pin snapshot delivers one inbox notification (so a parked loop drains).
     """
 
     def __init__(self, pending: int = 0):
         self.pending = pending
-        self.wait_any_calls = 0
+        self.wait_calls = 0
+        self.buffer = None
+        self.owner = object()
 
     def has_pending(self) -> bool:
         return self.pending > 0
@@ -394,10 +459,18 @@ class FakeBgPool:
     def pending_count(self) -> int:
         return self.pending
 
-    async def wait_any(self) -> None:
-        self.wait_any_calls += 1
+    def pin_snapshot(self, *, owner):
+        from types import SimpleNamespace
+
+        from mote.contracts.conversation import UserMessage
+
+        pin_count = self.pending
         if self.pending > 0:
             self.pending -= 1
+            self.wait_calls += 1
+            assert self.buffer is not None
+            self.buffer.push(UserMessage("background task completed"))
+        return SimpleNamespace(pin_count=pin_count)
 
 
 class FakeOutputEngine:
@@ -408,22 +481,24 @@ class FakeOutputEngine:
         self.candidates = []
         self.commit_calls = 0
         self.staged_output = None
+        self.validated_candidate = None
+        self.committed_output = None
 
     @property
     def has_restored_terminal_output(self):
         return False
 
     async def evaluate(self, candidate):
-        from mote.contracts.output import AcceptedOutput, OutputEvaluation
+        from mote.contracts.output import OutputEvaluation, ValidatedCandidate
 
         self.candidates.append(candidate)
         candidate_id = candidate.candidate_id or "fake"
         if self.accepted:
-            self.staged_output = AcceptedOutput(
+            self.validated_candidate = ValidatedCandidate(
                 candidate_id,
                 "mote.text@1",
-                "1",
                 "sha",
+                candidate.raw,
                 candidate.raw,
             )
         return OutputEvaluation(
@@ -432,17 +507,18 @@ class FakeOutputEngine:
             value=candidate.raw if self.accepted else None,
         )
 
-    async def commit(self):
+    async def commit_final(self, message, *, companion_facts=(), fact_sink=None):
         from mote.contracts.output import CommittedOutput
 
         self.commit_calls += 1
-        assert self.staged_output is not None
-        return CommittedOutput(
-            self.staged_output.candidate_id,
+        assert self.validated_candidate is not None
+        self.committed_output = CommittedOutput(
+            self.validated_candidate.candidate_id,
             "mote.text@1",
             "sha",
-            self.staged_output.value,
+            self.validated_candidate.value,
         )
+        return self.committed_output
 
 
 # ---------------------------------------------------------------------------
@@ -522,6 +598,8 @@ def make_engine(tmp_path):
         **ctx_overrides,
     ) -> FlowBundle:
         ctx = ctx or make_flow_context(**ctx_overrides)
+        if bg_pool is not None:
+            bg_pool.buffer = ctx.msg_buffer
         inference_engine = inference_engine or FakeThinkEngine()
         channel = channel or FakeChannel()
         executor = executor or FakeExecutor()
@@ -569,14 +647,7 @@ def make_engine(tmp_path):
         engine_kwargs = {}
         if graph_builder is not None:
             engine_kwargs["graph_builder"] = graph_builder
-        checkpoint = InferenceCheckpoint(
-            projections=ModelSessionProjectionStore(
-                "flow-test", SessionWorkspace(tmp_path), approved_model_checkpoint_policy()
-            ),
-            model_calls=_NoModelCallRecovery(),
-            inference_engine=inference_engine,
-            artifact_resolver=_NoArtifactResolver(),
-        )
+        checkpoint = FakeInferenceCheckpoint()
 
         async def default_drain():
             return None
@@ -587,6 +658,7 @@ def make_engine(tmp_path):
             memory=memory,
             output_engine=output_engine,
             inference_checkpoint=checkpoint,
+            session_fact_sink=FakeSessionFactSink(),
             drain_writes=drain_writes or default_drain,
         )
         engine = ExecutionEngine(

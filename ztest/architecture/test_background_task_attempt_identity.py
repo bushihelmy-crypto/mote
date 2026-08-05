@@ -6,7 +6,7 @@ import pytest
 
 from mote.contracts.conversation import CauseBy, MessageQueue
 from mote.contracts.task.models import AttemptId
-from mote.orchestration.background_tasks.model import BackgroundTaskNotification
+from mote.contracts.task.notification import BackgroundTaskNotification
 from mote.orchestration.background_tasks.pool import BackgroundTaskPool
 from mote.orchestration.background_tasks.status import BackgroundTaskStatus
 

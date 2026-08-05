@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mote.contracts.events.output import OutputCommittedEvent, OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
+from mote.contracts.events.output import FinalOutputCommittedEvent, OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
 from mote.contracts.events.session import RuntimeDurabilityChangedEvent
 from mote.product.presentation.events.events import (
     OutputCommitted,
@@ -34,7 +34,7 @@ def project_output_event(event: PresentationInputEvent) -> Optional[list[ViewEve
                 reason=event.reason,
             )
         ]
-    if isinstance(event, OutputCommittedEvent):
+    if isinstance(event, FinalOutputCommittedEvent):
         return [
             OutputCommitted(
                 run_id=event.run_id,

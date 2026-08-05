@@ -277,6 +277,12 @@ class LeaseHandle:
 
     async def adopt(self, lease: LeaseEpoch) -> "LeaseHandle":
         """Manage an epoch already acquired by the same coordinator owner."""
+
+        return self.adopt_nowait(lease)
+
+    def adopt_nowait(self, lease: LeaseEpoch) -> "LeaseHandle":
+        """Adopt an epoch and start its heartbeat in the running event loop."""
+
         if self.lease is not None or self._heartbeat is not None:
             raise RuntimeError("lease handle is already active")
         if lease.subject != self.subject or lease.owner_id != self.owner_id:

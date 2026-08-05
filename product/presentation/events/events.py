@@ -27,6 +27,7 @@ contract is shared across every host that renders for a person — terminal / We
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, ClassVar, List, Optional
 
 from pydantic import BaseModel
@@ -476,6 +477,11 @@ class TranscriptCleared(ViewEvent):
     kind: ClassVar[str] = TRANSCRIPT_CLEARED
 
 
+class SystemReminderLifetime(str, Enum):
+    PERSISTENT = "persistent"
+    TEMPORARY = "temporary"
+
+
 class SystemReminder(ViewEvent):
     """A framework-injected ``<system-reminder>`` block, surfaced to the human.
 
@@ -490,6 +496,7 @@ class SystemReminder(ViewEvent):
 
     kind: ClassVar[str] = SYSTEM_REMINDER
     text: str = ""
+    lifetime: SystemReminderLifetime = SystemReminderLifetime.PERSISTENT
 
 
 class ConversationCompacted(ViewEvent):
@@ -578,6 +585,7 @@ __all__ = [
     "RuntimeDurabilityStatus",
     "TranscriptCleared",
     "SystemReminder",
+    "SystemReminderLifetime",
     "ConversationCompacted",
     "ActivityStarted",
     "ActivityCompleted",

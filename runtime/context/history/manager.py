@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, cast
 
 import mote.runtime.context.history.budget as budget
 from mote.contracts.conversation import ContextManagerConfig, FoldState, LLMCallContext
+from mote.contracts.conversation.codec import decode_message, encode_message
 from mote.contracts.conversation.fields import CACHE_INTENT, CACHE_INTENT_EPHEMERAL_TAIL
 from mote.contracts.events.conversation import (
     HistoryEditedEvent,
@@ -343,9 +344,20 @@ class ContextManager:
             await self._telemetry.emit(event)
 
     async def add_batch(self, messages) -> None:
-        """Append several messages, skipping falsy entries (old ``add_batch``)."""
-        for m in messages:
-            await self.add(m)
+        """Atomically append one semantic message batch."""
+        committed = [message for message in messages if message is not None]
+        if not committed:
+            return
+        events = tuple(MessageAppendedEvent(message=message) for message in committed)
+        if self._session_fact_sink is not None:
+            await self._session_fact_sink.commit_facts(events)
+        self._context.messages.extend(committed)
+        if self._telemetry is not None:
+            for event in events:
+                await self._telemetry.emit(event)
+
+    def apply_committed_messages(self, messages: tuple[Message, ...]) -> None:
+        self._context.messages.extend(messages)
 
     def delete(self, message: Message) -> None:
         """Remove a message if present (old ``Memory.delete``; used on recovery).
@@ -486,7 +498,7 @@ class ContextManager:
             reason=ReductionReason.THRESHOLD,
         )
         transcript = Transcript.from_messages(
-            [message.model_copy(deep=True) for message in self._context.messages],
+            [decode_message(encode_message(message)) for message in self._context.messages],
             compactable=self._current_compactable(),
         )
         outcome = await self._engine.reduce(

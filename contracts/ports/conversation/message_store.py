@@ -31,6 +31,10 @@ class MessageStore(Protocol):
         """Append several messages, skipping falsy entries."""
         ...
 
+    def apply_committed_messages(self, messages: tuple["Message", ...]) -> None:
+        """Advance memory after a containing session fact was durably committed."""
+        ...
+
     def delete(self, message: "Message") -> None:
         """Remove a message if present (no-op when absent)."""
         ...

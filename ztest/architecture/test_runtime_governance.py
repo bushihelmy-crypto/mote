@@ -179,7 +179,6 @@ def test_governance_public_surfaces_are_owner_scoped() -> None:
         "BackgroundTaskServiceFactory",
         "BackgroundTaskSnapshot",
         "LocalAsyncWorkAdapter",
-        "BackgroundWakeReason",
         "TaskOutputLocationPort",
         "TaskResultRegistry",
     ]

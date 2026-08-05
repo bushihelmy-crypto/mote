@@ -112,8 +112,14 @@ class SessionLog:
     def lifecycle_generation(self) -> int:
         return self._stream_ownership.lifecycle_generation
 
+    async def start_writer(self) -> None:
+        await self._stream_ownership.start()
+
     def release_writer(self) -> None:
         self._stream_ownership.release()
+
+    async def close_writer(self) -> None:
+        await self._stream_ownership.aclose()
 
     def bind_async_sink(
         self,

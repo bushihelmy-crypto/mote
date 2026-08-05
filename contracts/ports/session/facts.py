@@ -10,15 +10,11 @@ from mote.contracts.events.conversation import (
     MessageAppendedEvent,
     PromptRejectedEvent,
 )
-from mote.contracts.events.model import ModelCallFinishedEvent, RoutingDecisionEvent
+from mote.contracts.events.model import InferenceCheckpointConsumedEvent, ModelCallFinishedEvent, RoutingDecisionEvent
 from mote.contracts.events.output import (
-    OutputAcceptedEvent,
+    FinalOutputCommittedEvent,
     OutputCandidateReceivedEvent,
-    OutputCommitStartedEvent,
-    OutputCommittedEvent,
     OutputMigratedEvent,
-    OutputPublicationQueuedEvent,
-    OutputPublishedEvent,
     OutputValidationRejectedEvent,
 )
 from mote.contracts.events.session import TurnEndEvent
@@ -27,16 +23,13 @@ from mote.contracts.ports.events.journal import AppendResult
 RolloutSourceEvent: TypeAlias = (
     MessageAppendedEvent
     | ModelCallFinishedEvent
+    | InferenceCheckpointConsumedEvent
     | ContextCompactedEvent
     | HistoryEditedEvent
     | OutputCandidateReceivedEvent
     | OutputValidationRejectedEvent
-    | OutputAcceptedEvent
-    | OutputCommitStartedEvent
     | OutputMigratedEvent
-    | OutputCommittedEvent
-    | OutputPublicationQueuedEvent
-    | OutputPublishedEvent
+    | FinalOutputCommittedEvent
     | PromptRejectedEvent
     | RoutingDecisionEvent
     | TurnEndEvent
@@ -44,6 +37,8 @@ RolloutSourceEvent: TypeAlias = (
 
 
 class SessionFactSink(Protocol):
+    async def commit_facts(self, events: tuple[RolloutSourceEvent, ...]) -> AppendResult: ...
+
     async def commit_fact(self, event: RolloutSourceEvent) -> AppendResult: ...
 
 

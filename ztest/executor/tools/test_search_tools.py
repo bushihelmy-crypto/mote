@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from mote.contracts.events.envelope import thaw_json
 from mote.contracts.tool.errors import ToolValidationError
 from mote.product.toolsets.builtin.search_tools import SearchTools
 
@@ -60,7 +61,7 @@ class TestSearch:
         assert role.revealed == {"ConvertImage"}
         # data carries the discovered names under ``tool_references`` (the seam
         # feeding ToolMessage.tool_references → the Anthropic tool_reference wire).
-        assert result.data == {"tool_references": ["ConvertImage"]}
+        assert thaw_json(result.payload.value) == {"tool_references": ["ConvertImage"]}
 
     def test_reveal_result_states_the_stateful_handoff_precondition(self):
         role = _role(INDEX)
@@ -304,7 +305,7 @@ class TestExplicitNames:
         result = _call_kw(role, names=["ConvertImage"])
         assert result.success
         assert role.revealed == {"ConvertImage"}
-        assert result.data == {"tool_references": ["ConvertImage"]}
+        assert thaw_json(result.payload.value) == {"tool_references": ["ConvertImage"]}
 
     def test_names_case_insensitive(self):
         role = _role(INDEX)

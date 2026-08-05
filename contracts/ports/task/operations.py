@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, Protocol
+from typing import Callable, Protocol
 
 from mote.contracts.async_work.command import LocalCancelReceipt
 from mote.contracts.ports.async_work.local import LocalAsyncWorkCommandPort, LocalAsyncWorkObservationPort
@@ -25,9 +25,6 @@ class BackgroundMessageSink(MessageSink, MessageActivity, Protocol):
     pass
 
 
-BackgroundWakeReason = Literal["task_done", "new_message", "timeout"]
-
-
 class BackgroundTaskService(Protocol):
     @property
     def session_id(self) -> SessionId: ...
@@ -35,8 +32,6 @@ class BackgroundTaskService(Protocol):
     def async_work_adapter(self) -> "LocalAsyncWorkAdapter": ...
 
     def has_pending(self) -> bool: ...
-
-    async def wait_any(self, timeout: float = ...) -> BackgroundWakeReason: ...
 
     @property
     def owner(self) -> BackgroundTaskOwner: ...
@@ -109,7 +104,6 @@ __all__ = [
     "BackgroundTaskServiceFactory",
     "BackgroundTaskSnapshot",
     "LocalAsyncWorkAdapter",
-    "BackgroundWakeReason",
     "TaskOutputLocationPort",
     "TaskResultRegistry",
 ]

@@ -19,12 +19,8 @@ import pytest
 from mote.contracts.conversation import MessagePriority
 from mote.contracts.session.identity import SessionId
 from mote.contracts.task.models import AttemptId
-from mote.orchestration.background_tasks import (
-    BackgroundTaskNotification,
-    BackgroundTaskPool,
-    BackgroundTaskStatus,
-    TaskType,
-)
+from mote.contracts.task.notification import BackgroundTaskNotification
+from mote.orchestration.background_tasks import BackgroundTaskPool, BackgroundTaskStatus, TaskType
 from mote.orchestration.background_tasks.constants import MAX_RESULT_LEN
 from mote.orchestration.background_tasks.operation import (
     OperationCancelled,
@@ -400,28 +396,6 @@ class TestWaiters:
     async def test_wait_for_completion_timeout_false(self, pool):
         # Idle pool, short bound -> returns False without blocking forever.
         assert await pool.wait_for_completion(timeout=0.02) is False
-
-    @pytest.mark.asyncio
-    async def test_wait_any_task_done(self, pool):
-        ev = asyncio.Event()
-        pool.submit(lambda: gated(ev, "v"), "g", timeout=None)
-        waiter = asyncio.create_task(pool.wait_any(timeout=1))
-        await asyncio.sleep(0)
-        ev.set()
-        assert await asyncio.wait_for(waiter, timeout=1) == "task_done"
-
-    @pytest.mark.asyncio
-    async def test_wait_any_new_message(self, pool, msg_buffer):
-        waiter = asyncio.create_task(pool.wait_any(timeout=1))
-        await asyncio.sleep(0)
-        from mote.contracts.conversation import UserMessage
-
-        msg_buffer.push(UserMessage(content="ping"))
-        assert await asyncio.wait_for(waiter, timeout=1) == "new_message"
-
-    @pytest.mark.asyncio
-    async def test_wait_any_timeout(self, pool):
-        assert await pool.wait_any(timeout=0.02) == "timeout"
 
 
 class TestConcurrency:

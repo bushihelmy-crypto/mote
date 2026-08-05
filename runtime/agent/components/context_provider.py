@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from mote.contracts.conversation import Message
 from mote.contracts.conversation.fields import IMAGES, PDFS
 from mote.contracts.events.agent import BudgetEvent
+from mote.contracts.events.conversation import TurnContextCollectedEvent
 from mote.contracts.model.inference import InferenceIntent, InferenceRequirements
 from mote.contracts.model.routing import RoutingMessage
 from mote.contracts.output import OutputBindingKind
@@ -100,6 +101,9 @@ class ContextProvider(BaseContextProvider):
             if request is not None and self._role.role_schema.command_protocol == "native"
             else ()
         )
+        route_supports_native_tool_search = (
+            self._role._components.router.model_route().profile.capabilities.supports_native_tool_search
+        )
         intent = InferenceIntent(
             model_call_id=model_call_id,
             requirements=InferenceRequirements(
@@ -126,9 +130,8 @@ class ContextProvider(BaseContextProvider):
                     )
                     if needed
                 ),
-                native_tool_search=any(
-                    bool(spec.get("defer_loading")) for spec in tool_specs or () if isinstance(spec, dict)
-                ),
+                native_tool_search=route_supports_native_tool_search
+                and any(bool(spec.get("defer_loading")) for spec in tool_specs if isinstance(spec, dict)),
                 resume=True,
             ),
             routing_messages=tuple((message.role, message.content) for message in routing_messages),
@@ -237,6 +240,8 @@ class ContextProvider(BaseContextProvider):
         if run_context is not None:
             await self._executor.prepare_run_step(run_context)
         ctx = await self._collect()
+        if ctx.reminders:
+            await self._role.telemetry.emit(TurnContextCollectedEvent(content=ctx.reminders))
         prompt = PromptBuilder.assemble(self._schema.system_prompt, self._schema.cmd_prompt, ctx)
 
         req = await self._context_manager.prepare_request(prompt.user_prompt)

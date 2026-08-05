@@ -9,7 +9,6 @@ DEFAULT_DEFERRED_TOOLS = (
     "WebBrowser",
     "WebSearch",
     "GenerateMedia",
-    "Skill",
     "DeviceUse",
     "Canvas",
 )

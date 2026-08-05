@@ -34,7 +34,7 @@ def test_session_discriminator_authority_is_immutable() -> None:
 
 def test_rollout_policy_is_derived_from_closed_source_union() -> None:
     assert ROLLOUT_EVENT_TYPES == frozenset(get_args(RolloutSourceEvent))
-    assert len(ROLLOUT_EVENT_TYPES) == 15
+    assert len(ROLLOUT_EVENT_TYPES) == 12
 
 
 def test_session_fact_sink_does_not_accept_object() -> None:

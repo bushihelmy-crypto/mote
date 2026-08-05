@@ -12,6 +12,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from mote.contracts.conversation import LLMCallContext, Message, MessageQueue
+from mote.contracts.events.model import InferenceCheckpointConsumedEvent
 from mote.contracts.model.inference import InferenceResult
 from mote.contracts.model.routing import RoutingSessionState
 from mote.kernel.execution.run_state import AgentRunState
@@ -86,9 +87,10 @@ class RoleState(BaseModel):
     _file_glimpsed_state: dict[str, None] = PrivateAttr(default_factory=dict)
 
     # Unfinished typed-output lifecycle folded from rollout.jsonl. Consumed once
-    # by the next loop factory; published outputs are never staged here.
+    # by the next loop factory.
     _pending_output_restore: Optional[dict] = PrivateAttr(default=None)
     _pending_graph_output_restores: dict[str, dict] = PrivateAttr(default_factory=dict)
+    _consumed_inference_checkpoints: tuple[InferenceCheckpointConsumedEvent, ...] = PrivateAttr(default=())
 
 
 class RoleStateController:
@@ -195,12 +197,16 @@ class RoleStateController:
 
     def has_pending_graph_output_restore(self, run_id: str) -> bool:
         state = self._state._pending_graph_output_restores.get(run_id)
-        return state is not None and state.get("status") in {
-            "accepted",
-            "commit_started",
-            "committed",
-            "publication_queued",
-        }
+        return state is not None and state.get("status") == "committed"
+
+    def set_consumed_inference_checkpoints(
+        self,
+        events: tuple[InferenceCheckpointConsumedEvent, ...],
+    ) -> None:
+        self._state._consumed_inference_checkpoints = events
+
+    def consumed_inference_checkpoints(self) -> tuple[InferenceCheckpointConsumedEvent, ...]:
+        return self._state._consumed_inference_checkpoints
 
     def is_active(self) -> bool:
         """Read the react-loop active signal."""

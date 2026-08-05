@@ -4,19 +4,28 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from mote.contracts.conversation import Message, MessagePriority
-from mote.contracts.conversation.fields import INTERJECTION, MESSAGE_ROUTE_TO_ALL
+from mote.contracts.conversation.fields import INTERJECTION
 from mote.contracts.execution.models import MutationStatus
 from mote.contracts.ports.execution.transaction import ExecutionTransactionPort
+from mote.contracts.task.notification import is_background_task_notification
 from mote.kernel.commands.contracts import HistoryProjection
 from mote.kernel.execution.context import ExecutionContext
 
 _INTERJECTION_TEMPLATE = "The user sent a message while you were working:\n<user_query>\n{content}\n</user_query>"
 
 
+@dataclass(frozen=True, slots=True)
+class ObservationResult:
+    observed_count: int
+    user_message_count: int
+    background_notification_count: int
+
+
 class ObservationService:
-    """Filter ingress messages and commit the selected view to history."""
+    """Commit admitted inbox messages to history."""
 
     def __init__(
         self,
@@ -36,36 +45,40 @@ class ObservationService:
         max_priority: int = MessagePriority.NEXT,
         *,
         interjection: bool = False,
-    ) -> int:
+    ) -> ObservationResult:
         ctx = self._context()
         if ctx.msg_buffer is None:
-            return 0
-        news_raw = ctx.msg_buffer.pop_all(max_priority=max_priority)
+            return ObservationResult(0, 0, 0)
+        lease = ctx.msg_buffer.reserve(max_priority=max_priority)
+        news_raw = [item.message for item in lease.items]
         if not news_raw:
-            return 0
+            ctx.msg_buffer.ack(lease)
+            return ObservationResult(0, 0, 0)
         old_messages = [] if not ctx.enable_memory else self._history_reader.get()
-        filtered = [
-            message
-            for message in news_raw
-            if (message.cause_by in ctx.watch or ctx.name in message.send_to or MESSAGE_ROUTE_TO_ALL in message.send_to)
-            and message not in old_messages
-        ]
-        committed = news_raw if ctx.observe_all else filtered
+        committed = [message for message in news_raw if message not in old_messages]
         if interjection:
             self.frame_interjections(committed)
         self._observation_index += 1
         fingerprint = hashlib.sha256("\n".join(message.id for message in committed).encode()).hexdigest()
-        result = await self._transaction.record_history(
-            self._transaction.context(f"observation:{self._observation_index}"),
-            HistoryProjection(tuple(committed), fingerprint),
-        )
+        try:
+            result = await self._transaction.record_history(
+                self._transaction.context(f"observation:{self._observation_index}"),
+                HistoryProjection(tuple(committed), fingerprint),
+            )
+        except BaseException:
+            ctx.msg_buffer.release(lease)
+            raise
         if result.status not in {
             MutationStatus.APPLIED,
             MutationStatus.ALREADY_APPLIED,
         }:
+            ctx.msg_buffer.release(lease)
             raise RuntimeError(result.reason or result.status.value)
-        self.latest_observed_message = filtered[-1] if filtered else None
-        return len(filtered)
+        ctx.msg_buffer.ack(lease)
+        self.latest_observed_message = committed[-1] if committed else None
+        background_count = sum(is_background_task_notification(message) for message in committed)
+        user_count = sum(message.is_user_message() for message in committed) - background_count
+        return ObservationResult(len(committed), user_count, background_count)
 
     @staticmethod
     def frame_interjections(messages: list[Message]) -> None:
@@ -76,4 +89,4 @@ class ObservationService:
             message.metadata[INTERJECTION] = True
 
 
-__all__ = ["ObservationService"]
+__all__ = ["ObservationResult", "ObservationService"]

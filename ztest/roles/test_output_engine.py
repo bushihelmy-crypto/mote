@@ -1,6 +1,7 @@
 import pytest
 from pydantic import BaseModel
 
+from mote.contracts.conversation import AIMessage
 from mote.contracts.model.turn import FinalCandidateAction
 from mote.contracts.output import OutputContractId
 from mote.kernel.output import (
@@ -47,7 +48,7 @@ def test_json_schema_decoder_normalizes_nested_structural_issues():
         }
     )
 
-    assert decoder.decode({"items": [1, 2]}) == {"items": [1, 2]}
+    assert decoder.decode({"items": [1, 2]}) == {"items": (1, 2)}
     with pytest.raises(OutputDecodeError) as caught:
         decoder.decode({"items": [1, "bad"]})
 
@@ -82,9 +83,10 @@ async def test_text_candidate_is_decoded_and_accepted():
     result = await engine.evaluate(FinalCandidateAction(raw="done", representation="native_text"))
     assert result.accepted is True
     assert result.value == "done"
-    assert engine.accepted_value == "done"
+    assert engine.validated_candidate is not None
+    assert engine.validated_candidate.value == "done"
 
-    await engine.commit()
+    await engine.commit_final(AIMessage(content="done"))
 
     assert engine.committed is True
     assert engine.committed_output is not None
@@ -98,7 +100,7 @@ async def test_commit_before_acceptance_is_a_typed_non_retryable_error():
     engine = OutputEngine(text_output_contract())
 
     with pytest.raises(OutputCommitStateError) as caught:
-        await engine.commit()
+        await engine.commit_final(AIMessage(content="done"))
 
     assert caught.value.code.value == "OUTPUT_COMMIT_INVALID_STATE"
     assert caught.value.retryable is False
@@ -131,8 +133,8 @@ async def test_stale_worker_cannot_commit_after_lease_takeover(tmp_path):
     await second.evaluate(FinalCandidateAction(raw="current", representation="test"))
 
     with pytest.raises(OutputCommitFencedError) as caught:
-        await first.commit()
-    committed = await second.commit()
+        await first.commit_final(AIMessage(content="stale"))
+    committed = await second.commit_final(AIMessage(content="current"))
 
     assert caught.value.code.value == "OUTPUT_COMMIT_FENCED"
     assert first.committed is False
@@ -203,23 +205,24 @@ def test_negative_correction_budget_is_rejected_at_contract_boundary():
         OutputRetryPolicy(max_corrections=-1)
 
 
-def test_restore_preserves_correction_budget():
+def test_restore_rejects_non_terminal_correction_state():
+    from mote.contracts.output.errors import OutputResumeContractMismatchError
+
     contract = OutputContract(
         OutputContractId("test", "report", "1"),
         TypeAdapterOutputDecoder(Report),
         OutputRetryPolicy(max_corrections=2),
     )
-    engine = OutputEngine(
-        contract,
-        restored_state={
-            "status": "awaiting_correction",
-            "contract_id": "test.report@1",
-            "schema_fingerprint": contract.decoder.schema.fingerprint,
-            "correction_attempts": 1,
-        },
-    )
-
-    assert engine.correction_attempts == 1
+    with pytest.raises(OutputResumeContractMismatchError):
+        OutputEngine(
+            contract,
+            restored_state={
+                "status": "awaiting_correction",
+                "contract_id": "test.report@1",
+                "schema_fingerprint": contract.decoder.schema.fingerprint,
+                "correction_attempts": 1,
+            },
+        )
 
 
 def test_restore_refuses_contract_or_schema_drift():
@@ -240,22 +243,24 @@ def test_restore_refuses_contract_or_schema_drift():
     assert caught.value.code.value == "OUTPUT_RESUME_CONTRACT_MISMATCH"
 
 
-def test_restore_decodes_accepted_value_without_revalidation():
+def test_restore_decodes_committed_value_without_revalidation():
     contract = OutputContract(OutputContractId("test", "report", "1"), TypeAdapterOutputDecoder(Report))
     engine = OutputEngine(
         contract,
         restored_state={
-            "status": "commit_started",
+            "status": "committed",
             "candidate_id": "candidate-1",
             "contract_id": "test.report@1",
             "schema_fingerprint": contract.decoder.schema.fingerprint,
             "value": {"count": 8},
             "correction_attempts": 1,
+            "message": AIMessage(content="final"),
         },
     )
 
-    assert engine.accepted is True
-    assert engine.accepted_value == Report(count=8)
+    assert engine.committed is True
+    assert engine.committed_output is not None
+    assert engine.committed_output.value == Report(count=8)
     assert engine.correction_attempts == 1
 
 
@@ -346,7 +351,7 @@ async def test_validator_pipeline_orders_stages_and_applies_correction():
         "policy",
     ]
 
-    committed = await engine.commit()
+    committed = await engine.commit_final(AIMessage(content="done"))
     assert committed.validator_provenance == engine.validator_provenance
 
 

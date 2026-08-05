@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Tests for ``ObservationService`` — the buffer → filter → commit pipeline.
+"""Tests for ``ObservationService`` — the admitted inbox → history pipeline.
 
-The loop owns observe: it pops from ``ctx.msg_buffer``, keeps the messages whose
-``cause_by`` is watched OR addressed to ``ctx.name`` (deduped against stored
-history when ``enable_memory``), commits to the memory store (all news when
-``observe_all`` else only the filtered set) and tracks ``latest_observed_msg``.
+The routing boundary admits messages before they reach ``ctx.msg_buffer``. The
+loop pops that private inbox, deduplicates against stored history, commits the
+new messages, and tracks ``latest_observed_msg``.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -28,40 +28,39 @@ def _msg(content="m", *, cause_by="", send_to=None) -> Message:
 async def test_observe_no_buffer_returns_zero(make_engine):
     b = make_engine(msg_buffer=None)
     b.engine._ctx = b.ctx
-    assert await b.engine._observation.observe() == 0
+    assert (await b.engine._observation.observe()).observed_count == 0
 
 
 @pytest.mark.asyncio
 async def test_observe_empty_buffer_returns_zero(make_engine):
     b = make_engine()
     b.engine._ctx = b.ctx
-    assert await b.engine._observation.observe() == 0
+    assert (await b.engine._observation.observe()).observed_count == 0
 
 
 @pytest.mark.asyncio
-async def test_observe_keeps_watched_cause_by(make_engine):
-    # watch set matches the message's cause_by -> kept even if not addressed.
+async def test_observe_accepts_every_admitted_inbox_message(make_engine):
     b = make_engine(watch={CauseBy.RUN_COMMAND.value}, name="Alice")
     b.engine._ctx = b.ctx
-    kept = _msg("watched", cause_by=CauseBy.RUN_COMMAND, send_to={"Someone"})
-    dropped = _msg("ignored", cause_by=CauseBy.ACTION, send_to={"Someone"})
-    b.buffer.push(kept)
-    b.buffer.push(dropped)
+    watched = _msg("watched", cause_by=CauseBy.RUN_COMMAND, send_to={"Someone"})
+    unwatched = _msg("unwatched", cause_by=CauseBy.ACTION, send_to={"Someone"})
+    b.buffer.push(watched)
+    b.buffer.push(unwatched)
 
-    assert await b.engine._observation.observe() == 1
-    assert b.engine.latest_observed_msg is kept
+    assert (await b.engine._observation.observe()).observed_count == 2
+    assert b.memory.add_batch_calls[-1] == [watched, unwatched]
+    assert b.engine.latest_observed_msg is unwatched
 
 
 @pytest.mark.asyncio
-async def test_observe_keeps_addressed_to_name(make_engine):
-    # Not watched, but addressed to ctx.name -> kept.
+async def test_observe_does_not_recheck_recipient(make_engine):
     b = make_engine(watch=set(), name="Alice")
     b.engine._ctx = b.ctx
-    addressed = _msg("for-alice", cause_by=CauseBy.ACTION, send_to={"Alice"})
-    b.buffer.push(addressed)
+    admitted = _msg("already-admitted", cause_by=CauseBy.ACTION, send_to={"Bob"})
+    b.buffer.push(admitted)
 
-    assert await b.engine._observation.observe() == 1
-    assert b.engine.latest_observed_msg is addressed
+    assert (await b.engine._observation.observe()).observed_count == 1
+    assert b.engine.latest_observed_msg is admitted
 
 
 @pytest.mark.asyncio
@@ -73,7 +72,7 @@ async def test_observe_dedup_against_stored_history(make_engine):
     await b.memory.add(seen)
     b.buffer.push(seen)
 
-    assert await b.engine._observation.observe() == 0
+    assert (await b.engine._observation.observe()).observed_count == 0
     assert b.engine.latest_observed_msg is None
 
 
@@ -86,45 +85,7 @@ async def test_observe_no_dedup_when_memory_disabled(make_engine):
     await b.memory.add(seen)
     b.buffer.push(seen)
 
-    assert await b.engine._observation.observe() == 1
-
-
-@pytest.mark.asyncio
-async def test_observe_all_commits_every_news(make_engine):
-    # observe_all=True -> add_batch receives ALL popped messages, not just filtered.
-    b = make_engine(watch=set(), name="Alice", observe_all=True)
-    b.engine._ctx = b.ctx
-    kept = _msg("kept", send_to={"Alice"})
-    other = _msg("other", send_to={"Bob"})
-    b.buffer.push(kept)
-    b.buffer.push(other)
-
-    news = await b.engine._observation.observe()
-    assert news == 1  # return value is the filtered count
-    assert b.memory.add_batch_calls[-1] == [kept, other]  # but ALL were committed
-
-
-@pytest.mark.asyncio
-async def test_observe_filtered_only_when_not_observe_all(make_engine):
-    b = make_engine(watch=set(), name="Alice", observe_all=False)
-    b.engine._ctx = b.ctx
-    kept = _msg("kept", send_to={"Alice"})
-    other = _msg("other", send_to={"Bob"})
-    b.buffer.push(kept)
-    b.buffer.push(other)
-
-    assert await b.engine._observation.observe() == 1
-    assert b.memory.add_batch_calls[-1] == [kept]
-
-
-@pytest.mark.asyncio
-async def test_observe_latest_is_none_when_nothing_passes(make_engine):
-    b = make_engine(watch=set(), name="Alice", observe_all=True)
-    b.engine._ctx = b.ctx
-    b.buffer.push(_msg("other", send_to={"Bob"}))
-
-    assert await b.engine._observation.observe() == 0
-    assert b.engine.latest_observed_msg is None
+    assert (await b.engine._observation.observe()).observed_count == 1
 
 
 @pytest.mark.asyncio
@@ -135,9 +96,9 @@ async def test_observe_respects_max_priority(make_engine):
     later = _msg("later", send_to={"Alice"})
     b.buffer.push(later, priority=MessagePriority.NEXT)
 
-    assert await b.engine._observation.observe(max_priority=MessagePriority.NOW) == 0
+    assert (await b.engine._observation.observe(max_priority=MessagePriority.NOW)).observed_count == 0
     # Pops once the bar is raised to NEXT.
-    assert await b.engine._observation.observe(max_priority=MessagePriority.NEXT) == 1
+    assert (await b.engine._observation.observe(max_priority=MessagePriority.NEXT)).observed_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +114,7 @@ async def test_observe_frames_mid_turn_user_message(make_engine):
     steer = _msg("stop and do X", send_to={"Alice"})
     b.buffer.push(steer)
 
-    assert await b.engine._observation.observe(interjection=True) == 1
+    assert (await b.engine._observation.observe(interjection=True)).observed_count == 1
     assert "The user sent a message while you were working:" in steer.content
     assert "<user_query>\nstop and do X\n</user_query>" in steer.content
     assert steer.metadata[INTERJECTION] is True
@@ -167,7 +128,7 @@ async def test_observe_initial_does_not_frame(make_engine):
     prompt = _msg("original prompt", send_to={"Alice"})
     b.buffer.push(prompt)
 
-    assert await b.engine._observation.observe() == 1
+    assert (await b.engine._observation.observe()).observed_count == 1
     assert prompt.content == "original prompt"
     assert INTERJECTION not in prompt.metadata
 
@@ -181,7 +142,7 @@ async def test_observe_frame_is_idempotent(make_engine):
     already.metadata[INTERJECTION] = True
     b.buffer.push(already)
 
-    assert await b.engine._observation.observe(interjection=True) == 1
+    assert (await b.engine._observation.observe(interjection=True)).observed_count == 1
     assert already.content == "already"
 
 
@@ -193,6 +154,6 @@ async def test_observe_does_not_frame_non_user_message(make_engine):
     note = Message("bg task done", role="tool", send_to={"Alice"})
     b.buffer.push(note)
 
-    assert await b.engine._observation.observe(interjection=True) == 1
+    assert (await b.engine._observation.observe(interjection=True)).observed_count == 1
     assert note.content == "bg task done"
     assert INTERJECTION not in note.metadata

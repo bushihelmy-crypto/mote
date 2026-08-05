@@ -108,7 +108,7 @@ class GitContextSource:
         self._pending = False
         if not self._snapshot:
             return None
-        return self._snapshot + _SNAPSHOT_FOOTER
+        return "# Git status\n" + self._snapshot + _SNAPSHOT_FOOTER
 
 
 __all__ = ["GitContextSource"]

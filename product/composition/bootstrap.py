@@ -125,6 +125,11 @@ async def activate_application_composition(
         try:
             runtime_lease = await application_lease.acquire_runtime()
             try:
+                service_call_journal = LocalServiceCallJournal(service_call_journal_root(paths.workspace_root))
+                # Validate or initialize the durable root before a reconciler task
+                # can be published.  A migration-required/corrupt root is an
+                # application activation failure, not a detached task failure.
+                await service_call_journal.pending_calls(after=None, limit=1)
                 service_gateway = builtin_service_gateway(
                     config.multimodal,
                     config.tools.web_search,
@@ -133,7 +138,7 @@ async def activate_application_composition(
                     media_providers=container.media_providers,
                     search_backends=container.search_backends,
                     admission_controller=context.model_operator,
-                    service_call_journal=LocalServiceCallJournal(service_call_journal_root(paths.workspace_root)),
+                    service_call_journal=service_call_journal,
                     activate_reconciliation=True,
                 )
                 context.service_gateway = service_gateway

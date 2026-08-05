@@ -23,6 +23,7 @@ def test_graph_assembly_fields_resolve_without_unbounded_any() -> None:
         "current_channel",
         "inference_engine",
         "set_active",
+        "inbox_activity",
         "get_bg_pool",
         "advance_turn",
     }
@@ -38,7 +39,7 @@ def test_engine_and_builtin_node_public_signatures_do_not_erase_types() -> None:
         nodes.InferenceNode.__init__,
         nodes.ActNode.__init__,
         nodes.ValidateOutputNode.__init__,
-        nodes.WaitBackgroundNode.__init__,
+        nodes.AwaitQuiescenceNode.__init__,
     ]
 
     for constructor in constructors:

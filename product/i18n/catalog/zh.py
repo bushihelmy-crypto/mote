@@ -7,6 +7,7 @@ default (zh) UX is byte-for-byte unchanged after the i18n migration. Keyed by
 the :mod:`mote.product.i18n.keys` constants; Chinese has a single CLDR plural
 category (``other``), so counts interpolate directly with no plural branching.
 """
+
 from __future__ import annotations
 
 from typing import Dict
@@ -62,7 +63,7 @@ CATALOG: Dict[str, str] = {
     K.RESULT_FAILED: "失败",
     K.RESULT_RETRYABLE: "可重试",
     # Driver
-    K.DRIVER_TOOLS_LOADED: "已加载 {count} 个工具{deferred, plural, =0{} other{（其中 # 个延迟加载）}}",
+    K.DRIVER_TOOLS_LOADED: "可用 {count} 个工具（已加载 {loaded} 个，延迟加载 {deferred} 个）",
     # Prompt input
     K.PROMPT_PLACEHOLDER: "输入消息…（/help 查看命令）",
     # Keybinding + fold hints

@@ -44,40 +44,30 @@ class OutputOperation(Generic[OutputT]):
     async def evaluate(self, candidate: FinalCandidateAction) -> OutputEvaluation[OutputT]:
         return await self._output_engine.evaluate(candidate)
 
-    async def commit(self) -> CommittedOutput[OutputT]:
-        staged = self._output_engine.staged_output
-        if staged is None:
-            raise RuntimeError("accepted output is not staged")
-        result = await self._transaction.commit_terminal_output(
-            self._transaction.context(f"{staged.candidate_id}:terminal-commit"),
-            staged.candidate_id,
-        )
-        return self._require_committed(result)
-
-    async def accept(self, candidate: FinalCandidateAction) -> Message:
+    async def validate_and_commit(self, candidate: FinalCandidateAction) -> tuple[Message, CommittedOutput[OutputT]]:
         content = self._inference_engine.result.content or ""
         self._report_think_result(self._inference_engine.result)
-        projection = await self._channel().project_output_candidate(
+        await self._channel().project_output_candidate(
             content,
             candidate,
             accepted=True,
         )
-        staged = self._output_engine.staged_output
-        if staged is None:
-            raise RuntimeError("accepted output evaluation did not produce a staged record")
-        result = await self._transaction.stage_accepted_output(
-            self._transaction.context(f"{staged.candidate_id}:accepted-stage"),
-            staged,
-            projection,
-        )
-        self._require_applied(result)
-        await self._inference_engine.join()
+        if not self._inference_engine.done:
+            await self._inference_engine.join()
         response = AIMessage(
             content=content,
             sent_from=self._context().name,
             cause_by=CauseBy.RUN_COMMAND,
         )
-        return response
+        validated = self._output_engine.validated_candidate
+        if validated is None:
+            raise RuntimeError("accepted output evaluation did not produce a validated candidate")
+        result = await self._transaction.commit_final_output(
+            self._transaction.context(f"{validated.candidate_id}:final-output"),
+            validated,
+            response,
+        )
+        return response, self._require_committed(result)
 
     async def reject(
         self,
@@ -98,26 +88,18 @@ class OutputOperation(Generic[OutputT]):
             projection,
         )
         self._require_applied(result)
-        await self._inference_engine.join()
+        if not self._inference_engine.done:
+            await self._inference_engine.join()
 
     async def restore(self) -> ExecutionResult[OutputT] | None:
         if not self._output_engine.has_restored_terminal_output:
             return None
-        accepted_value = self._output_engine.accepted_value
-        if accepted_value is None:
-            raise RuntimeError("restored terminal output has no accepted value")
-        encoded = self._output_engine.contract.decoder.encode(accepted_value)
-        content = (
-            encoded
-            if isinstance(encoded, str)
-            else json.dumps(encoded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        )
-        response = AIMessage(
-            content=content,
-            sent_from=self._context().name,
-            cause_by=CauseBy.RUN_COMMAND,
-        )
-        committed = await self.commit()
+        committed = self._output_engine.committed_output
+        if committed is None:
+            raise RuntimeError("restored terminal output has no committed value")
+        response = self._output_engine.restored_message
+        if response is None:
+            raise RuntimeError("restored terminal output has no committed message")
         return ExecutionResult(presentation=response, committed_output=committed)
 
     @staticmethod

@@ -58,10 +58,16 @@ TextRole = Role[None, str]
 # ======================================================================
 # Bootstrap / construction
 # ======================================================================
-def load_config(model: str | None = None, *, paths: RuntimePaths | None = None) -> Config:
+def load_config(
+    model: str | None = None,
+    *,
+    paths: RuntimePaths | None = None,
+    cwd: Path | None = None,
+) -> Config:
     """Load the engine config, optionally overriding the LLM model."""
     paths = paths or default_runtime_paths()
     return _load_config(
+        cwd=cwd,
         programmatic=({"llm__model": model} if model else None),
         user_config_root=paths.user_config_root,
     )
@@ -200,7 +206,7 @@ async def fork_role(role: TextRole) -> TextRole | None:
 
 
 def role_tool_count(role: TextRole) -> int:
-    """Return the built-in tool count for a role's schema.
+    """Return the Product-declared built-in tool count.
 
     The data behind the CLI's startup "flag": how many built-in tools this role
     was wired with. Read off ``role_schema`` (the declared set), so it's available
@@ -211,26 +217,17 @@ def role_tool_count(role: TextRole) -> int:
     tools surface per-turn in the ``<system-reminder>`` catalog, so they are not
     part of the one-time startup load the badge reports.
     """
-    tools = role.role_schema.tools
-    return len(set(tools))
+    return len(set(role.role_schema.tools))
 
 
 def role_deferred_tool_count(role: TextRole) -> int:
-    """How many of the loaded tools are *deferred* (hidden until searched).
+    """How many loaded tools are currently hidden and searchable.
 
-    A deferred tool is bound and dispatchable but its schema is withheld from the
-    model until discovered via ``SearchTools`` — so it counts toward the loaded
-    total, and the badge annotates how many of that total start deferred.
-
-    Respects the global tool-search master switch: when
-    ``config.tools.tool_search.enabled`` is off no tool is deferred (every one is
-    fully visible), so this reports ``0``. Missing schema / config degrades to
-    ``0`` (a fake in tests without a ``deferred_tools`` field satisfies it too).
+    The executor catalog is authoritative because it excludes tools already
+    revealed in a resumed session.  This keeps the startup badge aligned with
+    the per-turn ``Additional tools`` index.
     """
-    if not role.config.tools.tool_search.enabled:
-        return 0
-    deferred = role.role_schema.deferred_tools
-    return len(set(deferred))
+    return len(role.list_deferred_tools())
 
 
 def usage_report(role: TextRole) -> str:

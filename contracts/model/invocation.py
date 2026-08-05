@@ -7,10 +7,10 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from mote.contracts.artifact import ArtifactRef
-from mote.contracts.events.envelope import JsonValue, freeze_json
+from mote.contracts.events.envelope import JsonValue, freeze_json, thaw_json
 from mote.contracts.model.operations import ModelOperation
 from mote.contracts.model.topology import RouteId
 
@@ -39,6 +39,10 @@ class CanonicalToolCall(_FrozenContract):
             raise ValueError("tool-call arguments must be a JSON object")
         return frozen
 
+    @field_serializer("arguments")
+    def _serialize_arguments(self, value: Mapping[str, JsonValue]) -> JsonValue:
+        return thaw_json(value)
+
 
 class CanonicalMessage(_FrozenContract):
     role: str = Field(min_length=1)
@@ -63,6 +67,11 @@ class CanonicalToolDefinition(_FrozenContract):
         if not isinstance(frozen, Mapping):
             raise ValueError("tool input schema must be a JSON object")
         return frozen
+
+    @field_serializer("input_schema")
+    def _serialize_input_schema(self, value: Mapping[str, JsonValue]) -> JsonValue:
+        """Project the immutable contract into ordinary JSON at the wire edge."""
+        return thaw_json(value)
 
 
 class GenerateInput(_FrozenContract):

@@ -9,8 +9,8 @@ from mote.contracts.events.application import ApplicationReadinessFailed
 from mote.contracts.events.inference import ModelCacheDegraded
 from mote.contracts.foundation.errors.codes import ErrorCode, RecoveryAction
 from mote.contracts.foundation.errors.report import ErrorNamespace, ErrorReport
+from mote.contracts.task.notification import BackgroundTaskNotification
 from mote.contracts.tool.errors import ToolError
-from mote.orchestration.background_tasks.model import BackgroundTaskNotification
 from mote.runtime.tools.tool_result import ToolResult
 from mote.runtime.tools.tool_result_receipt import decode_tool_result_receipt, encode_tool_result_receipt
 

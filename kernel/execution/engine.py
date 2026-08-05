@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from mote.contracts.conversation import AIMessage, CauseBy, Message
 from mote.contracts.model.inference import InferenceResult
+from mote.contracts.ports.conversation.message_activity import MessageActivity
 from mote.contracts.ports.conversation.turn_context_bus import TurnContextCollector
 from mote.contracts.ports.execution.model_turn_completion import ModelTurnCompletionPolicy
 from mote.contracts.ports.execution.transaction import ExecutionOutputTransactionPort
@@ -79,7 +80,7 @@ _PUBLIC_PHASE = {
     "interpret": RunPhase.INTERPRETATION,
     "act": RunPhase.ACTION,
     "validate_output": RunPhase.OUTPUT,
-    "wait_background": RunPhase.WAIT,
+    "await_quiescence": RunPhase.WAIT,
 }
 
 
@@ -213,6 +214,7 @@ class ExecutionEngine(Generic[OutputT]):
             current_channel=lambda: self._turn_channel,
             inference_engine=self._inference_engine,
             set_active=self._set_active,
+            inbox_activity=self._inbox_activity,
             get_bg_pool=self._get_bg_pool,
             advance_turn=self._advance_turn,
         )
@@ -224,6 +226,12 @@ class ExecutionEngine(Generic[OutputT]):
             on_node_started=self._node_started,
             on_node_completed=self._node_completed,
         )
+
+    def _inbox_activity(self) -> MessageActivity:
+        buffer = self.ctx.msg_buffer
+        if buffer is None:
+            raise RuntimeError("execution message buffer is unavailable")
+        return buffer
 
     @property
     def ctx(self) -> ExecutionContext:

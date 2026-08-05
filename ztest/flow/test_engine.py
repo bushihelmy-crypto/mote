@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.contracts.conversation import CauseBy, UserMessage
+from mote.contracts.conversation import AIMessage, CauseBy, UserMessage
 from mote.kernel.execution import BudgetVerdict
 
 from .conftest import FakeBgPool, FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine
@@ -75,7 +75,7 @@ async def test_run_returns_none_without_news(make_engine):
     assert rsp is None
 
 
-async def test_resume_accepted_output_commits_without_news_or_model_call(make_engine):
+async def test_resume_committed_output_returns_without_news_or_model_call(make_engine):
     from mote.kernel.output import text_output_contract
     from mote.runtime.output.engine import OutputEngine
 
@@ -83,12 +83,13 @@ async def test_resume_accepted_output_commits_without_news_or_model_call(make_en
     engine = OutputEngine(
         contract,
         restored_state={
-            "status": "commit_started",
+            "status": "committed",
             "candidate_id": "candidate-1",
             "contract_id": "mote.text@1",
             "schema_fingerprint": contract.decoder.schema.fingerprint,
             "value": "recovered",
             "correction_attempts": 0,
+            "message": AIMessage(content="recovered"),
         },
     )
     think = FakeThinkEngine(content="must not run")
@@ -143,7 +144,8 @@ async def test_rejected_output_records_feedback_then_accepts_next_candidate(
 
     class RejectOnce:
         run_id = "reject-once-run"
-        staged_output = None
+        validated_candidate = None
+        committed_output = None
 
         def __init__(self):
             self.calls = 0
@@ -153,7 +155,7 @@ async def test_rejected_output_records_feedback_then_accepts_next_candidate(
             return False
 
         async def evaluate(self, candidate):
-            from mote.contracts.output import AcceptedOutput
+            from mote.contracts.output import ValidatedCandidate
 
             self.calls += 1
             if self.calls == 1:
@@ -163,18 +165,21 @@ async def test_rejected_output_records_feedback_then_accepts_next_candidate(
                     issues=(ValidationIssue(("count",), "int_parsing", "Expected an integer"),),
                 )
             candidate_id = candidate.candidate_id or "fake"
-            self.staged_output = AcceptedOutput(candidate_id, "test.output@1", "1", "sha", candidate.raw)
+            self.validated_candidate = ValidatedCandidate(
+                candidate_id, "test.output@1", "sha", candidate.raw, candidate.raw
+            )
             return OutputEvaluation(accepted=True, candidate_id=candidate_id, value=candidate.raw)
 
-        async def commit(self):
+        async def commit_final(self, message, *, companion_facts=(), fact_sink=None):
             from mote.contracts.output import CommittedOutput
 
-            return CommittedOutput(
-                self.staged_output.candidate_id,
+            self.committed_output = CommittedOutput(
+                self.validated_candidate.candidate_id,
                 "test.output@1",
                 "sha",
-                self.staged_output.value,
+                self.validated_candidate.value,
             )
+            return self.committed_output
 
     engine = RejectOnce()
     channel = FakeChannel(terminal=True)
@@ -262,7 +267,7 @@ async def test_run_deactivate_breaks_loop(make_engine):
 
 async def test_run_waits_on_pending_background_tasks(make_engine):
     # When think yields nothing but the bg pool is busy, the loop parks on
-    # wait_any() instead of breaking, then re-observes and continues.
+    # the inbox activity Port instead of breaking, then re-observes and continues.
     channel = FakeChannel(commands=[{"id": "t1", "command_name": "End", "args": {}}])
     executor = _DeactExecutor("End")
     bg = FakeBgPool(pending=1)
@@ -272,7 +277,7 @@ async def test_run_waits_on_pending_background_tasks(make_engine):
 
     await b.engine.run()
 
-    assert bg.wait_any_calls >= 1
+    assert bg.wait_calls >= 1
     assert bg.pending == 0  # drained
 
 

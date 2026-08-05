@@ -41,6 +41,7 @@ async def test_run_events_are_typed_ordered_and_carry_stable_summary(make_engine
         RunPhase.BUDGET,
         RunPhase.MODEL,
         RunPhase.INTERPRETATION,
+        RunPhase.WAIT,
         RunPhase.OUTPUT,
     ]
 

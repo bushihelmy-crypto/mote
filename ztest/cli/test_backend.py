@@ -188,6 +188,7 @@ def test_build_role_generic_path_smoke():
     role = _build_role(name="Tester", tools=["Read"])
     assert isinstance(role, Role)
     assert role.role_schema.name == "Tester"
+    assert role.config is not None
 
 
 # --- MCP discovery + watcher wiring on the generic (top-level) path ---------
@@ -248,15 +249,11 @@ def test_generic_role_hot_reload_does_not_add_git_root(tmp_path, monkeypatch):
 
 def test_generic_role_uses_curated_default_when_none_passed():
     role = _build_role(name="Tester")
-    # No explicit tools ⇒ RoleSchema's curated default (its declared tool
-    # surface), NOT the full registered toolbox. So the CLI reports exactly the
-    # declared set, not every registered internal control verb.
-    assert role.role_schema.tools == RoleSchema.model_fields["tools"].get_default(call_default_factory=True)
-    assert role.role_schema.deferred_tools == RoleSchema.model_fields["deferred_tools"].get_default(
-        call_default_factory=True
-    )
+    from mote.product.agents.defaults import DEFAULT_DEFERRED_TOOLS, DEFAULT_TOOLS
+
+    assert role.role_schema.tools == list(DEFAULT_TOOLS)
+    assert role.role_schema.deferred_tools == list(DEFAULT_DEFERRED_TOOLS)
     assert "Handoff" not in role.role_schema.tools
-    assert "Handoff" not in role.executor.tool_names()
 
 
 def test_generic_role_explicit_tools_are_respected():
@@ -268,33 +265,24 @@ def test_generic_role_explicit_tools_are_respected():
 def test_role_tool_count_reports_builtin_only():
     # MCP servers are on the schema but not counted — the badge reports only the
     # one-time startup tool load. Deduplicated: three names collapse to two.
-    role = SimpleNamespace(role_schema=SimpleNamespace(tools=["Read", "Write", "Read"], mcps=["fs"]))
+    role = SimpleNamespace(role_schema=SimpleNamespace(tools=["Read", "Write", "Read"]))
     assert backend.role_tool_count(role) == 2
 
 
-def test_role_tool_count_degrades_to_zero():
-    assert backend.role_tool_count(SimpleNamespace()) == 0
-    assert backend.role_tool_count(SimpleNamespace(role_schema=SimpleNamespace())) == 0
-
-
 def test_role_deferred_tool_count_reports_deduped_deferred():
-    role = SimpleNamespace(role_schema=SimpleNamespace(deferred_tools=["WebBrowser", "Agent", "WebBrowser"]))
+    role = SimpleNamespace(
+        list_deferred_tools=lambda: {"WebBrowser": "Browse", "Agent": "Delegate"},
+    )
     assert backend.role_deferred_tool_count(role) == 2
 
 
-def test_role_deferred_tool_count_zero_when_search_disabled():
-    # The global tool-search master switch off ⇒ no tool is deferred, so the badge
-    # reports zero deferred even though the schema declares some.
+def test_role_deferred_tool_count_tracks_current_unrevealed_catalog():
+    # Revealed tools have left the executor's searchable catalog, so the badge
+    # and the per-turn Additional tools index use the same count.
     role = SimpleNamespace(
-        role_schema=SimpleNamespace(deferred_tools=["WebBrowser", "Agent"]),
-        config=SimpleNamespace(tools=SimpleNamespace(tool_search=SimpleNamespace(enabled=False))),
+        list_deferred_tools=lambda: {},
     )
     assert backend.role_deferred_tool_count(role) == 0
-
-
-def test_role_deferred_tool_count_degrades_to_zero():
-    assert backend.role_deferred_tool_count(SimpleNamespace()) == 0
-    assert backend.role_deferred_tool_count(SimpleNamespace(role_schema=SimpleNamespace())) == 0
 
 
 def test_build_role_unknown_agent_type_returns_none():

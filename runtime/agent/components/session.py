@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 from uuid import uuid4
 
 from mote.contracts.conversation import UserMessage
@@ -92,10 +92,14 @@ from mote.runtime.session.subscribers import CheckpointSubscriber, TitleSubscrib
 _SESSION_PROJECTION_MAILBOX_CAPACITY = 1024
 _LSP_SUBSCRIPTION = SubscriptionIdentity("mote.lsp.confirmed-file-versions.v1")
 
+if TYPE_CHECKING:
+    from mote.contracts.ports.output.publication import OutputPublisherFactory
+
 
 @dataclass(frozen=True, slots=True)
 class SessionComponentInputs:
     secrets_root: Path | None
+    output_publisher_factory: "OutputPublisherFactory | None" = None
 
 
 def session_component_specs(inputs: SessionComponentInputs = SessionComponentInputs(None)) -> list[ComponentSpec]:
@@ -259,7 +263,11 @@ def _build_artifact_repository_bundle(ctx) -> ArtifactRepositoryBundle:
         project_root=ctx.role.state.project_root or ctx.role.get_cwd(),
     )
     repository = layout.build_repository()
-    fileops_artifacts = SessionFileOpsArtifactRoots(session_log.path.parent.parent, repository)
+    fileops_artifacts = SessionFileOpsArtifactRoots(
+        session_log.path.parent.parent,
+        repository,
+        excluded_session_ids=frozenset({ctx.role.state.session_id}),
+    )
     return layout.open(
         ownership,
         repository=repository,

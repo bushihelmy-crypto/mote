@@ -100,6 +100,7 @@ class _AgentComposition:
         hook_config = load_global_hooks(hook_sources)
         mcp_servers = tuple(load_mcp_servers(mcp_sources))
         return CodingAgentFactory(
+            config=self._config,
             model_checkpoint_policy=approved_model_checkpoint_policy(),
             toolsets_factory=self._toolsets,
             background_task_pool_builder=self._background_task_pool_builder,

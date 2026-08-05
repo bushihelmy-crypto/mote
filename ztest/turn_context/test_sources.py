@@ -67,13 +67,13 @@ class TestGitContextSource:
     def test_first_render_captures_without_telemetry_race(self, monkeypatch):
         _stub_git(monkeypatch, state=object())
         out = run(GitContextSource().render(cwd="/x"))
-        assert out is not None and out.startswith(" - Git branch: main")
+        assert out is not None and out.startswith("# Git status\n - Git branch: main")
 
     def test_initial_capture_freezes_and_renders_once(self, monkeypatch):
         _stub_git(monkeypatch, state=object())
         src = GitContextSource()
         out = run(src.render(cwd="/repo"))
-        assert out is not None and out.startswith(" - Git branch: main")
+        assert out is not None and out.startswith("# Git status\n - Git branch: main")
         # Snapshot footer makes the point-in-time contract explicit.
         assert "snapshot" in out.lower()
         # Disarms — a second cycle with no new event is silent.
@@ -113,11 +113,11 @@ class TestGitContextSource:
 
         src = GitContextSource(get_cwd=lambda: "/repo")
         first = run(src.render(cwd="/x"))
-        assert first.startswith(" - Git branch: main")
+        assert first.startswith("# Git status\n - Git branch: main")
         # A compaction re-freezes the snapshot -> next render shows the new one.
         run(src.on_model_context_rebuilt(PostCompactEvent(summary="x")))
         second = run(src.render(cwd="/x"))
-        assert second.startswith(" - Git branch: feature")
+        assert second.startswith("# Git status\n - Git branch: feature")
 
     def test_no_cwd_provider_post_compact_is_silent(self, monkeypatch):
         # PostCompact with no get_cwd provider -> capture(None) -> nothing.

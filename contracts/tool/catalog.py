@@ -8,7 +8,7 @@ from typing import Generic, Protocol, TypeVar
 
 from mote.contracts.artifact import ArtifactRef
 from mote.contracts.events.envelope import JsonValue, freeze_json
-from mote.contracts.tool.result import FileChange, ToolMedia
+from mote.contracts.tool.result import FileChange, ToolMedia, ToolPayload
 
 DispatchValueT = TypeVar("DispatchValueT", covariant=True)
 
@@ -80,10 +80,11 @@ class ToolDispatchResult(Generic[DispatchValueT]):
 class ToolExecutionOutcome(Protocol):
     output: str
     success: bool
-    data: object
-    media: list[ToolMedia]
-    artifacts: list[ArtifactRef]
-    file_changes: list[FileChange]
+    payload: ToolPayload | None
+    execution_value: object | None
+    media: tuple[ToolMedia, ...]
+    artifacts: tuple[ArtifactRef, ...]
+    file_changes: tuple[FileChange, ...]
     terminate: bool
     retention: str | None
     resource_path: str | None

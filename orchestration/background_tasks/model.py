@@ -9,9 +9,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, ClassVar, Coroutine, Generic, Optional, TypeVar
 
-from pydantic import field_validator
-
-from mote.contracts.conversation import UserMessage
 from mote.contracts.foundation.errors.report import ErrorReport
 from mote.contracts.task.models import AttemptId, TaskId
 from mote.orchestration.background_tasks.operation import OperationOutcome
@@ -24,46 +21,6 @@ class TaskType(str, Enum):
     SHELL = "shell"
     COROUTINE = "coroutine"
     AGENT = "agent"
-
-
-class BackgroundTaskNotification(UserMessage):
-    """Structured notification for background task completion.
-
-    ``error`` carries the JSON-native :meth:`ErrorReport.as_dict` form on a
-    failed task (``None`` otherwise), completing the structured-field set
-    (``task_id`` / ``status`` / ``result`` / ``error``). It is stored as a plain
-    dict (not the ``ErrorReport`` dataclass) so the notification serializes
-    cleanly into the session rollout JSONL; the rendered ``<error>`` block also
-    appears inside ``content`` for the model.
-
-    ``task_terminal`` marks the *one* whole-task outcome (success / failed /
-    timeout / cancelled / waiting-for-route) as opposed to a mid-flight node
-    event. The pool's ``deliver`` choke point uses it to guarantee exactly one
-    terminal reaches the agent per task: whichever producer (the in-graph
-    progress writer or the out-of-band ``_on_done`` callback) delivers first
-    wins, and the other's duplicate is dropped. This lets both producers call
-    ``deliver`` freely without coordinating through a shared flag.
-    """
-
-    task_id: TaskId = TaskId("")
-    attempt_id: AttemptId = field(default_factory=lambda: AttemptId(1))
-    command_name: str = ""
-    status: str = ""
-    result: Optional[str] = None
-    error: Optional[dict] = None
-    task_terminal: bool = False
-
-    @field_validator("error", mode="before")
-    @classmethod
-    def validate_error_envelope(cls, value: object) -> dict[str, object] | None:
-        if value is None:
-            return None
-        return ErrorReport.from_dict(value).as_dict()
-
-
-def is_bg_notification(msg) -> bool:
-    """Check whether *msg* is a background-task completion notification."""
-    return isinstance(msg, BackgroundTaskNotification)
 
 
 # ---------------------------------------------------------------------------

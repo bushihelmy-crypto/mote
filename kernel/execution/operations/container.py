@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
+from mote.contracts.ports.conversation.message_activity import MessageActivity
 from mote.contracts.ports.execution.model_turn_completion import ModelTurnCompletionPolicy
 from mote.contracts.ports.task.operations import BackgroundTaskService
 from mote.kernel.commands import CommandChannel
@@ -34,6 +35,7 @@ class GraphAssemblyInputs(Generic[OutputT]):
     current_channel: Callable[[], CommandChannel]
     inference_engine: BaseInferenceEngine
     set_active: Callable[[bool], None]
+    inbox_activity: Callable[[], MessageActivity]
     get_bg_pool: Callable[[], BackgroundTaskService | None]
     advance_turn: Callable[[], int] | None
 

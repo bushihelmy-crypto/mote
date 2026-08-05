@@ -7,7 +7,7 @@ import pytest
 from mote.contracts.execution.models import MutationResult, MutationStatus
 from mote.contracts.model.inference import InferenceResult
 from mote.contracts.model.turn import FinalCandidateAction
-from mote.contracts.output import AcceptedOutput, OutputEvaluation
+from mote.contracts.output import CommittedOutput, OutputEvaluation, ValidatedCandidate
 from mote.kernel.commands.contracts import HistoryProjection
 from mote.kernel.execution.operations.output import OutputOperation
 
@@ -36,10 +36,10 @@ class Transaction:
     def context(self, operation_id):
         return operation_id
 
-    async def stage_accepted_output(self, context, output, history):
+    async def commit_final_output(self, context, output, message):
         self.events.append(("complete",))
         self.events.append(("drain",))
-        return MutationResult(MutationStatus.APPLIED)
+        return CommittedOutput(output.candidate_id, output.contract_id, output.schema_fingerprint, output.value)
 
     async def reject_output(self, context, history):
         self.events.append(("complete",))
@@ -49,13 +49,15 @@ class Transaction:
 
 
 def service(events):
-    think = SimpleNamespace(result=InferenceResult(content="answer", tool_calls=None))
+    think = SimpleNamespace(result=InferenceResult(content="answer", tool_calls=None), done=False)
 
     async def join():
         events.append(("join",))
 
     think.join = join
-    output_engine = SimpleNamespace(staged_output=AcceptedOutput("candidate", "contract", "1", "schema", "answer"))
+    output_engine = SimpleNamespace(
+        validated_candidate=ValidatedCandidate("candidate", "contract", "schema", "answer", "answer")
+    )
     return OutputOperation(
         context=lambda: SimpleNamespace(name="agent"),
         channel=lambda: Channel(events),
@@ -67,17 +69,17 @@ def service(events):
 
 
 @pytest.mark.asyncio
-async def test_accept_is_durable_before_inference_checkpoint_reap():
+async def test_final_commit_is_durable_before_return():
     events = []
 
-    await service(events).accept(FinalCandidateAction(raw="answer", representation="native_text"))
+    await service(events).validate_and_commit(FinalCandidateAction(raw="answer", representation="native_text"))
 
     assert events == [
         ("report",),
         ("record", True, None),
+        ("join",),
         ("complete",),
         ("drain",),
-        ("join",),
     ]
 
 

@@ -37,6 +37,23 @@ def test_load_config_builds_typed_config(_explicit_product_config_root):
     assert cfg.models.default.model  # base config provides an llm
 
 
+def test_cli_backend_config_load_uses_selected_workspace(tmp_path, monkeypatch):
+    from mote.product.entrypoints.cli import backend
+
+    captured = {}
+
+    def fake_load_config(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(backend, "_load_config", fake_load_config)
+    workspace = tmp_path / "workspace"
+
+    backend.load_config(cwd=workspace)
+
+    assert captured["cwd"] == workspace
+
+
 def test_programmatic_override_deep_merges_over_disk(_explicit_product_config_root):
     cfg = load_config(
         programmatic={"models": {"default": {"model": "test-override-xyz"}}},

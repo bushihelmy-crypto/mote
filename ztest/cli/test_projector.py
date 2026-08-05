@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import pytest
 
+from mote.contracts.conversation import AIMessage
 from mote.contracts.events.model import LLMStreamCommittedEvent, LLMStreamDeltaEvent, LLMStreamDiscardedEvent
-from mote.contracts.events.output import OutputCommittedEvent, OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
+from mote.contracts.events.output import FinalOutputCommittedEvent, OutputSnapshotEvent, OutputSnapshotInvalidatedEvent
 from mote.contracts.events.session import RuntimeDurabilityChangedEvent
 from mote.product.i18n import keys as K
 from mote.product.i18n import t
@@ -28,6 +29,7 @@ from mote.product.presentation.events import (
     Notice,
     RuntimeDurabilityStatus,
     SystemReminder,
+    SystemReminderLifetime,
     TaskProgress,
     ToolCallCompleted,
     ToolCallStarted,
@@ -148,6 +150,35 @@ def test_system_reminder_user_message_folds_to_summary():
     assert "branch main" not in out[0].text
 
 
+def test_request_only_turn_context_folds_to_summary():
+    from mote.contracts.events.conversation import TurnContextCollectedEvent
+
+    out = ViewProjector().project(
+        TurnContextCollectedEvent(content="<system-reminder>\n# Git status\nbranch main, dirty\n</system-reminder>")
+    )
+    assert out == [SystemReminder(text="Git status", lifetime=SystemReminderLifetime.TEMPORARY)]
+
+
+def test_git_turn_context_shows_branch_and_worktree_state():
+    from mote.contracts.events.conversation import TurnContextCollectedEvent
+
+    out = ViewProjector().project(
+        TurnContextCollectedEvent(
+            content=(
+                "<system-reminder>\n# Git status\n"
+                " - Git branch: feature/x\n - Git status: dirty (2 unstaged)\n"
+                " - Recent commits:\n     abc change\n</system-reminder>"
+            )
+        )
+    )
+    assert out == [
+        SystemReminder(
+            text="Git status: branch feature/x, dirty (2 unstaged)",
+            lifetime=SystemReminderLifetime.TEMPORARY,
+        )
+    ]
+
+
 def test_system_reminder_falls_back_to_first_line_without_heading():
     # A block with no ``# heading`` uses its first non-empty line as the summary.
     p = ViewProjector()
@@ -203,7 +234,7 @@ def test_system_reminder_non_skill_bullets_not_counted():
     assert out[0].text == "Files changed on disk"
 
 
-def test_system_reminder_deferred_tools_heading_lists_names():
+def test_system_reminder_deferred_tools_heading_carries_count():
     # The deferred-tool menu block ("# Additional tools …") lists the tool NAMES
     # (not a count) so the human sees exactly what is search-to-enable — mirroring
     # how git/skill blocks surface their contents. Names come before the first
@@ -218,10 +249,10 @@ def test_system_reminder_deferred_tools_heading_lists_names():
     )
     out = p.project(ev_system_reminder(inner))
     assert isinstance(out[0], SystemReminder)
-    assert out[0].text == "Additional tools (search to enable): ConvertImage, WebSearch, RunGraph"
+    assert out[0].text == "Additional tools (search to enable) (3)"
 
 
-def test_system_reminder_split_tool_menu_lists_names():
+def test_system_reminder_split_tool_menu_carries_count():
     # The split-path menu ("# Additional tools") uses the same ``- name: desc``
     # bullets, so it lists names identically.
     p = ViewProjector()
@@ -232,7 +263,7 @@ def test_system_reminder_split_tool_menu_lists_names():
         "- Jupyter: Execute code in a notebook."
     )
     out = p.project(ev_system_reminder(inner))
-    assert out[0].text == "Additional tools: Terminal, Jupyter"
+    assert out[0].text == "Additional tools (2)"
 
 
 def test_pre_tool_headline_and_body():
@@ -985,11 +1016,12 @@ def test_output_snapshot_lifecycle_projects_without_becoming_a_message():
 
 def test_committed_output_projects_as_typed_terminal_event():
     output = ViewProjector().project(
-        OutputCommittedEvent(
+        FinalOutputCommittedEvent(
             candidate_id="candidate",
             contract_id="test.report@1",
             schema_fingerprint="sha",
             value={"count": 7},
+            message=AIMessage(content="done"),
             run_id="run-1",
             run_kind="agent",
         )

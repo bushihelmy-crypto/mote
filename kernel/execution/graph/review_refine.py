@@ -9,17 +9,17 @@ from mote.contracts.output.completion import CompletionKind
 from mote.contracts.ports.execution.model_turn_completion import ModelTurnCompletionPolicy
 from mote.kernel.execution.graph.core import AgentGraph, EffectKind, End, NodeId, Transition
 from mote.kernel.execution.graph.nodes import (
+    AwaitQuiescenceNode,
     BudgetNode,
     ExecutionNode,
     InferenceNode,
     ObserveNode,
     RestoreNode,
     ValidateOutputNode,
-    WaitBackgroundNode,
 )
 from mote.kernel.execution.operations.container import GraphAssemblyInputs
 from mote.kernel.execution.result import ExecutionResult
-from mote.kernel.execution.state import CandidateSelection, ExecutionState
+from mote.kernel.execution.state import ExecutionState, PendingCandidate
 
 OutputT = TypeVar("OutputT")
 
@@ -29,7 +29,7 @@ class ReviewInterpretNode(ExecutionNode, Generic[OutputT]):
 
     node_id = NodeId.INTERPRET
     effect_kind = EffectKind.PURE
-    allowed_targets = frozenset({NodeId.VALIDATE_OUTPUT})
+    allowed_targets = frozenset({NodeId.AWAIT_QUIESCENCE})
 
     def __init__(self, completion_policy: ModelTurnCompletionPolicy) -> None:
         self._completion_policy = completion_policy
@@ -48,8 +48,8 @@ class ReviewInterpretNode(ExecutionNode, Generic[OutputT]):
         candidate_index = completion.candidate_index
         if candidate_index is None:
             raise RuntimeError("validated completion is missing its candidate index")
-        state.turn = CandidateSelection(state.turn, candidate_index)
-        return Transition(NodeId.VALIDATE_OUTPUT)
+        state.turn = PendingCandidate(state.turn, candidate_index)
+        return Transition(NodeId.AWAIT_QUIESCENCE)
 
 
 def build_review_refine_graph(
@@ -62,10 +62,10 @@ def build_review_refine_graph(
             RestoreNode(inputs.outputs),
             ObserveNode(inputs.observation, inputs.set_active),
             BudgetNode(inputs.context_provider, inputs.context, inputs.advance_turn),
-            InferenceNode(inputs.inference, inputs.current_channel, inputs.inference_engine, inputs.get_bg_pool),
+            InferenceNode(inputs.inference, inputs.current_channel, inputs.inference_engine),
             ReviewInterpretNode(inputs.completion_policy),
             ValidateOutputNode(inputs.outputs),
-            WaitBackgroundNode(inputs.get_bg_pool),
+            AwaitQuiescenceNode(inputs.inbox_activity, inputs.get_bg_pool),
         )
     }
     return AgentGraph(start=NodeId.RESTORE, nodes=nodes)

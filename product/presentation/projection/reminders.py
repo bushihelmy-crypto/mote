@@ -31,10 +31,9 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 # "Relevant Skills") — the blocks whose summary should carry a skill *count*.
 _SKILL_HEADING_RE = re.compile(r"skill", re.IGNORECASE)
 # A deferred-tool menu heading ("Additional tools", "Additional tools (search to
-# enable)") — the block whose summary should list the tool *names* (not a count):
-# the human wants to see exactly which tools are search-to-enable, mirroring how
-# git/skill blocks surface their contents.
+# enable)") — the block whose summary carries only the number of hidden tools.
 _TOOL_HEADING_RE = re.compile(r"additional tools", re.IGNORECASE)
+_GIT_HEADING_RE = re.compile(r"^git status$", re.IGNORECASE)
 
 
 def _split_blocks(inner: str) -> List[tuple[str, List[str]]]:
@@ -107,6 +106,17 @@ def _tool_names(body: List[str]) -> List[str]:
     return names
 
 
+def _git_summary(body: List[str]) -> str:
+    facts: List[str] = []
+    for line in body:
+        text = line.strip().removeprefix("- ").strip()
+        if text.startswith("Git branch:"):
+            facts.append("branch " + text.removeprefix("Git branch:").strip())
+        elif text.startswith("Git status:"):
+            facts.append(text.removeprefix("Git status:").strip())
+    return ", ".join(facts)
+
+
 def _summarize_reminder(content: str) -> str:
     """Condense a ``<system-reminder>`` envelope to a one-line heading summary.
 
@@ -115,21 +125,21 @@ def _summarize_reminder(content: str) -> str:
     block's heading (falling back to its first non-empty line) — dropping the
     prose/JSON bodies. Two blocks enrich their heading from the body: a *skill*
     block carries the count of available skills (e.g. "Available Skills (3)"), and
-    a *deferred-tool* block ("Additional tools") lists the tool NAMES (e.g.
-    "Additional tools (search to enable): WebSearch, RunGraph") so the human sees
-    exactly which tools are search-to-enable — matching how git/skill blocks
-    surface their contents. Headings are joined with ``·``.
+    a *deferred-tool* block ("Additional tools") carries only its count. Headings
+    are joined with ``·``.
     """
     parts: List[str] = []
     for heading, body in _split_blocks(_strip_envelope(content)):
         if heading:
             label = heading
             if _TOOL_HEADING_RE.search(heading):
-                # Deferred-tool menu: list the tool NAMES (not a count) so the
-                # human sees exactly what is search-to-enable this turn.
                 names = _tool_names(body)
                 if names:
-                    label = f"{heading}: {', '.join(names)}"
+                    label = f"{heading} ({len(names)})"
+            elif _GIT_HEADING_RE.search(heading):
+                summary = _git_summary(body)
+                if summary:
+                    label = f"{heading}: {summary}"
             elif _SKILL_HEADING_RE.search(heading):
                 n = _count_skill_rows(body)
                 if n:
@@ -149,5 +159,6 @@ __all__ = [
     "_split_blocks",
     "_count_skill_rows",
     "_tool_names",
+    "_git_summary",
     "_summarize_reminder",
 ]

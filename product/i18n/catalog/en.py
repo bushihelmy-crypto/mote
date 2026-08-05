@@ -65,7 +65,7 @@ CATALOG: Dict[str, str] = {
     K.RESULT_FAILED: "failed",
     K.RESULT_RETRYABLE: "retryable",
     # Driver
-    K.DRIVER_TOOLS_LOADED: "loaded {count, plural, one{# tool} other{# tools}}"
+    K.DRIVER_TOOLS_LOADED: "{count, plural, one{# tool available} other{# tools available}} ({loaded} loaded, {deferred} deferred)"
     "{deferred, plural, =0{} other{ (# deferred)}}",
     # Prompt input
     K.PROMPT_PLACEHOLDER: "Type a message… (/help for commands)",

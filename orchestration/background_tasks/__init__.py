@@ -10,14 +10,12 @@ from __future__ import annotations
 
 from mote.orchestration.background_tasks.decorators import require_bg_complete
 from mote.orchestration.background_tasks.model import (
-    BackgroundTaskNotification,
     BackgroundTaskStatus,
     BgTaskMode,
     BgTaskResult,
     PollFactory,
     TaskSnapshot,
     TaskType,
-    is_bg_notification,
 )
 from mote.orchestration.background_tasks.monitoring.stall import StallDetector
 from mote.orchestration.background_tasks.monitoring.turn_context import BackgroundTaskContextSource
@@ -54,8 +52,6 @@ __all__ = [
     "PollFactory",
     "TaskSnapshot",
     "TaskType",
-    "BackgroundTaskNotification",
-    "is_bg_notification",
     "BackgroundTaskStatus",
     "BackgroundTaskPool",
     "auto_background",

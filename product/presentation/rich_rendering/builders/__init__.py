@@ -50,6 +50,7 @@ from mote.product.presentation.rich_rendering.builders.message import (
     compaction_summary_text,
     conversation_compacted_text,
     linkify,
+    system_reminder_text,
     user_message_row,
 )
 from mote.product.presentation.rich_rendering.builders.session import session_table
@@ -79,6 +80,7 @@ __all__ = [
     "bullet_row",
     "indent",
     "linkify",
+    "system_reminder_text",
     "render_diff",
     "render_file_change",
     "build_table",

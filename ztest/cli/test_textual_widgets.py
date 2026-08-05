@@ -1001,17 +1001,29 @@ async def test_notice_row_linkifies_bare_url():
 
 
 @pytest.mark.asyncio
-async def test_system_reminder_row_renders_note_glyph():
-    """A SystemReminder renders as a dim ⚑ note carrying the summary text."""
+async def test_system_reminder_row_renders_lifetime_label_and_color():
+    """Reminder rows distinguish persistent and temporary context visually."""
     from mote.product.interfaces.textual.style import NOTE
     from mote.product.interfaces.textual.widgets import SystemReminderRow
-    from mote.product.presentation.events import SystemReminder
+    from mote.product.presentation.events import SystemReminder, SystemReminderLifetime
+    from mote.product.presentation.rich_rendering.palette import Palette
 
     async with _Harness().run_test() as pilot:
-        row = await pilot.app.add(SystemReminderRow(SystemReminder(text="Git status · Files changed")))
-        plain = row._Static__content.plain
-        assert NOTE in plain
-        assert "Git status · Files changed" in plain
+        persistent = await pilot.app.add(SystemReminderRow(SystemReminder(text="Available Skills (10)")))
+        temporary = await pilot.app.add(
+            SystemReminderRow(
+                SystemReminder(
+                    text="Additional tools (10) · Git status: branch main, clean",
+                    lifetime=SystemReminderLifetime.TEMPORARY,
+                )
+            )
+        )
+        persistent_text = persistent._Static__content
+        temporary_text = temporary._Static__content
+        assert persistent_text.plain == f"{NOTE} Available Skills (10) [persistent]"
+        assert temporary_text.plain == (f"{NOTE} Additional tools (10) · Git status: branch main, clean [temporary]")
+        assert persistent_text.spans[0].style == f"dim {Palette.REMINDER_PERSISTENT}"
+        assert temporary_text.spans[0].style == f"dim {Palette.REMINDER_TEMPORARY}"
 
 
 @pytest.mark.asyncio

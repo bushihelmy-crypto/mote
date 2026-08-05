@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -198,3 +199,42 @@ def test_session_stream_takeover_fences_the_previous_writer(tmp_path):
     with pytest.raises(LeaseFencedError):
         with first.guard():
             pass
+
+
+def test_expired_session_stream_release_is_idempotent(tmp_path):
+    clock = [10.0]
+    coordinator = InMemoryLeaseCoordinator(clock=lambda: clock[0])
+    owner = SessionStreamOwnership(
+        tmp_path,
+        "session",
+        coordinator=coordinator,
+        owner_id="owner",
+        ttl_seconds=5,
+    )
+    with owner.guard():
+        pass
+
+    clock[0] = 16.0
+    owner.release()
+
+    successor = coordinator.acquire("session-stream:session", "successor", 5)
+    assert successor.fencing_token == 2
+
+
+@pytest.mark.asyncio
+async def test_session_stream_async_start_keeps_writer_lease_alive(tmp_path):
+    coordinator = InMemoryLeaseCoordinator()
+    owner = SessionStreamOwnership(
+        tmp_path,
+        "session",
+        coordinator=coordinator,
+        owner_id="owner",
+        ttl_seconds=0.09,
+    )
+
+    await owner.start()
+    await asyncio.sleep(0.14)
+
+    with owner.guard():
+        assert owner.lifecycle_generation == 1
+    await owner.aclose()

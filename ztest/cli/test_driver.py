@@ -57,8 +57,12 @@ class FakeRole:
         self.role_schema = SimpleNamespace(
             name=name, tools=tools or [], mcps=mcps or [], deferred_tools=deferred_tools or []
         )
+        self.config = SimpleNamespace(tools=SimpleNamespace(tool_search=SimpleNamespace(enabled=True)))
         self.telemetry = None
         self.context_manager = FakeContextManager()
+
+    def list_deferred_tools(self) -> dict[str, str]:
+        return {name: name for name in self.role_schema.deferred_tools}
 
 
 class FakeRuntime:
@@ -211,7 +215,7 @@ def test_announce_tools_flags_builtin_count():
     ev = drv._projector.delivered_sync[-1]
     assert isinstance(ev, Notice)
     assert "\u2691" in ev.text
-    assert t(K.DRIVER_TOOLS_LOADED, count=3, deferred=0) in ev.text
+    assert t(K.DRIVER_TOOLS_LOADED, count=3, loaded=3, deferred=0) in ev.text
     assert "MCP" not in ev.text
 
 
@@ -231,7 +235,7 @@ def test_announce_tools_annotates_deferred_count():
     drv._announce_tools()
     ev = drv._projector.delivered_sync[-1]
     assert isinstance(ev, Notice)
-    assert t(K.DRIVER_TOOLS_LOADED, count=3, deferred=2) in ev.text
+    assert t(K.DRIVER_TOOLS_LOADED, count=3, loaded=1, deferred=2) in ev.text
 
 
 def test_announce_tools_no_op_when_no_tools():

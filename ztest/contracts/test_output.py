@@ -6,9 +6,7 @@ from mote import contracts
 
 def test_output_contract_module_has_explicit_stable_surface():
     assert "OutputContractId" in output.__all__
-    assert "OutputEvaluationState" in output.__all__
-    assert "OutputDeliveryState" in output.__all__
-    assert "AcceptedOutput" in output.__all__
+    assert "ValidatedCandidate" in output.__all__
     assert "RunResult" in output.__all__
     assert "RunRejected" in output.__all__
     assert "RunRejectionKind" in output.__all__

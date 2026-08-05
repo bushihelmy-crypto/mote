@@ -1,8 +1,11 @@
 """Inference checkpoint lifecycle port."""
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from mote.contracts.execution.models import InferenceCheckpointState
+
+if TYPE_CHECKING:
+    from mote.contracts.events.model import InferenceCheckpointConsumedEvent
 
 
 class InferenceCheckpointPort(Protocol):
@@ -17,6 +20,10 @@ class InferenceCheckpointPort(Protocol):
     def mark_wire_started(self) -> None: ...
 
     async def record_result(self) -> None: ...
+
+    async def prepare_consumption(self, operation_id: str) -> "InferenceCheckpointConsumedEvent": ...
+
+    def acknowledge_consumption(self, event: "InferenceCheckpointConsumedEvent") -> None: ...
 
     def discard(self) -> None: ...
 

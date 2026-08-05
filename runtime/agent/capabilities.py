@@ -464,7 +464,8 @@ class RoleCapabilities:
         remaining, step_id = self._durable_timer_setup(duration)
 
         start = time.time()
-        waiters: set[asyncio.Task] = {asyncio.create_task(msg_buffer.wait_for_message())}
+        activity = msg_buffer.activity_snapshot()
+        waiters: set[asyncio.Task] = {asyncio.create_task(msg_buffer.wait_for_activity(activity.generation))}
         if bg_pool is not None:
             waiters.add(asyncio.create_task(bg_pool.wait_for_completion()))
         if remaining is not None:

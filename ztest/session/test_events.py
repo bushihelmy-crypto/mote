@@ -30,13 +30,10 @@ from mote.runtime.session.events import (
     SESSION_META,
     TURN_CONTEXT,
     ContextCompactedFact,
+    FinalOutputCommittedEvent,
     HistoryEditedFact,
     MessageEvent,
-    OutputAcceptedEvent,
     OutputCandidateReceivedEvent,
-    OutputCommitStartedEvent,
-    OutputCommittedEvent,
-    OutputPublishedEvent,
     OutputValidationRejectedEvent,
     RoutingDecisionFact,
     RuntimeCheckpointEvent,
@@ -317,36 +314,25 @@ def test_output_lifecycle_events_roundtrip():
             corrections_remaining=1,
             correction_allowed=True,
         ),
-        OutputAcceptedEvent(
+        FinalOutputCommittedEvent(
             candidate_id="c2",
             contract_id="test.report@1",
             schema_fingerprint="sha",
             value={"count": 1},
+            message=AIMessage(content="done"),
             correction_attempts=1,
         ),
-        OutputCommitStartedEvent(
-            candidate_id="c2",
-            contract_id="test.report@1",
-        ),
-        OutputCommittedEvent(
-            candidate_id="c2",
-            contract_id="test.report@1",
-            schema_fingerprint="sha",
-            value={"count": 1},
-            correction_attempts=1,
-        ),
-        OutputPublishedEvent(candidate_id="c2", contract_id="test.report@1"),
     ]
 
     rebuilt = [_decode(_roundtrip(event)) for event in events]
 
     assert [type(event) for event in rebuilt] == [type(event) for event in events]
-    assert rebuilt[-2].value == {"count": 1}
+    assert rebuilt[-1].value == {"count": 1}
 
 
 def test_output_event_rejects_legacy_payload_shape():
     with pytest.raises(ValueError, match="fields are not canonical"):
-        OutputCommittedEvent.from_payload(
+        FinalOutputCommittedEvent.from_payload(
             {
                 "candidate_id": "legacy-candidate",
                 "contract_id": "legacy.report@1",

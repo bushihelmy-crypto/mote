@@ -8,7 +8,7 @@ Port of codex ``CodexThread`` (the live half). An ``AgentRuntime`` wraps one
   * a ``status`` (``AgentStatus``) + ``active_turn`` flag,
   * a per-runtime ``wake_event`` used by the scheduler to start a turn
     (deliberately separate from the message buffer's new-message signal —
-    awaited via ``wait_for_message()`` — which is drain-cleared and owned by
+    awaited via generation-aware message activity owned by
     ``Role.wait_interruptible``).
 
 A "turn" is exactly one ``Role.run()``. Mailbox draining is owned by the

@@ -115,6 +115,8 @@ def build_product_agent(
                 mcps=mcps,
                 file_watch=file_watch,
                 permissions=permissions,
+                tools=list(DEFAULT_TOOLS),
+                deferred_tools=list(DEFAULT_DEFERRED_TOOLS),
             )
         state = RoleState(session_id=session_id) if session_id else RoleState()
         _apply_cwd(state, cwd)

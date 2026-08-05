@@ -1,7 +1,7 @@
 from mote.contracts.model.inference import InferenceResult
 from mote.contracts.model.turn import FinalCandidateAction, ModelTurn
 from mote.kernel.execution.run_state import AgentRunState
-from mote.kernel.execution.state import CandidateSelection, ExecutionState, NoModelTurn
+from mote.kernel.execution.state import ExecutionState, NoModelTurn, PendingCandidate
 from mote.product.agents.defaults import DEFAULT_DEFERRED_TOOLS, DEFAULT_TOOLS
 from mote.runtime.agent import RoleSchema
 
@@ -16,6 +16,8 @@ def test_role_schema_owns_deployment_configuration():
 def test_product_owns_coding_agent_tool_defaults():
     assert "Canvas" in DEFAULT_TOOLS
     assert "Canvas" in DEFAULT_DEFERRED_TOOLS
+    assert "Skill" in DEFAULT_TOOLS
+    assert "Skill" not in DEFAULT_DEFERRED_TOOLS
     assert "Handoff" not in DEFAULT_TOOLS
 
 
@@ -32,11 +34,11 @@ def test_execution_state_uses_explicit_no_model_turn():
     assert isinstance(state.turn, NoModelTurn)
 
 
-def test_candidate_selection_validates_candidate_index():
+def test_pending_candidate_validates_candidate_index():
     turn = ModelTurn(actions=[FinalCandidateAction(raw="ok", representation="text")])
-    assert CandidateSelection(turn, 0).candidate_index == 0
+    assert PendingCandidate(turn, 0).candidate_index == 0
 
     import pytest
 
     with pytest.raises(ValueError, match="does not identify"):
-        CandidateSelection(turn, 1)
+        PendingCandidate(turn, 1)

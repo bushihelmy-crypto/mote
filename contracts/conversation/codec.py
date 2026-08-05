@@ -10,7 +10,7 @@ from mote.contracts.events.envelope import freeze_json, thaw_json
 
 
 def encode_message(message: Message) -> dict[str, object]:
-    payload = message.model_dump(mode="json", exclude_none=True, warnings=False)
+    payload = thaw_json(message.model_dump(mode="python", exclude_none=True, warnings=False))
     if type(payload) is not dict:
         raise TypeError("message encoder did not produce an object")
     return payload

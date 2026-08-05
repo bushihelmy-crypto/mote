@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
+
+
+@dataclass(frozen=True, slots=True)
+class MessageActivitySnapshot:
+    generation: int
+    pending: bool
+
+    def __post_init__(self) -> None:
+        if type(self.generation) is not int or self.generation < 0:
+            raise ValueError("message activity generation must be a non-negative integer")
 
 
 class MessageActivity(Protocol):
@@ -15,7 +26,9 @@ class MessageActivity(Protocol):
     wait-only.
     """
 
-    async def wait_for_message(self) -> None:
-        """Block until a new message is pushed (returns immediately if one is
-        already pending)."""
-        ...
+    def activity_snapshot(self) -> MessageActivitySnapshot: ...
+
+    async def wait_for_activity(self, after_generation: int) -> MessageActivitySnapshot: ...
+
+
+__all__ = ["MessageActivity", "MessageActivitySnapshot"]

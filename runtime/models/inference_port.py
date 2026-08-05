@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from uuid import uuid4
 
 from mote.contracts.events.application import InferenceTargetCapacityReached, InferenceTargetExpired
@@ -220,9 +220,17 @@ class RuntimeModelInferencePort:
         self._inflight[attempt_key] = future
         try:
             route = pinned.route
+            payload = request.payload
+            if not route.profile.capabilities.supports_native_tool_search and any(
+                tool.defer_loading for tool in payload.tools
+            ):
+                payload = replace(
+                    payload,
+                    tools=tuple(tool.model_copy(update={"defer_loading": False}) for tool in payload.tools),
+                )
             output, _resolved = await generate_finalized(
                 route,
-                request.payload,
+                payload,
                 model_call_id=request.model_call_id,
             )
             if self._attempts.get(attempt.model_call_id) != (

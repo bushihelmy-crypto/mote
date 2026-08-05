@@ -22,7 +22,9 @@ from mote.kernel.output import OutputContract, text_output_contract
 from mote.product.agents.background_tasks import build_background_task_pool
 from mote.product.agents.defaults import DEFAULT_DEFERRED_TOOLS, DEFAULT_TOOLS
 from mote.product.agents.deferred_projection import build_deferred_result_projector
+from mote.product.agents.output_publication import ProductOutputPublisherFactory
 from mote.product.code_map import ProductCodeMapIndexerFactory
+from mote.product.config.schema import Config
 from mote.product.extensions.sources import ExtensionSourcePolicy
 from mote.product.lsp.factory import ProductLspServiceFactory
 from mote.product.paths import RuntimePaths, default_runtime_paths
@@ -111,6 +113,7 @@ class _RootAgentClass(Protocol[DepsT, OutputT]):
         role_schema: RoleSchema,
         state: RoleState,
         wiring: AgentWiring[DepsT, OutputT],
+        config: Config | None,
     ) -> RunnableAgent[OutputT]: ...
 
 
@@ -120,6 +123,7 @@ class _ChildAgentClass(Protocol):
         *,
         state: RoleState,
         wiring: AgentWiring[None, str],
+        config: Config | None,
     ) -> RunnableAgent[str]: ...
 
 
@@ -136,6 +140,7 @@ class RootAgentRequest(Generic[DepsT, OutputT]):
 @dataclass(frozen=True, slots=True)
 class _RootBuilder(Generic[DepsT, OutputT]):
     agent_cls: _RootAgentClass[DepsT, OutputT]
+    config: Config | None
 
     def build(self, request: RootAgentRequest[DepsT, OutputT]) -> RunnableAgent[OutputT]:
         return self.agent_cls(
@@ -143,6 +148,7 @@ class _RootBuilder(Generic[DepsT, OutputT]):
             role_schema=request.role_schema,
             state=request.state,
             wiring=request.wiring,
+            config=self.config,
         )
 
 
@@ -186,7 +192,9 @@ class CodingAgentFactory:
         prompt_policy_extensions: tuple[PromptPolicyExtensionSpec, ...] = (),
         compaction_policy_extensions: tuple[CompactionPolicyExtensionSpec, ...] = (),
         run_completion_policy_extensions: tuple[RunCompletionPolicyExtensionSpec, ...] = (),
+        config: Config | None = None,
     ) -> None:
+        self._config = config
         self._toolsets_factory = toolsets_factory
         self._model_checkpoint_policy = model_checkpoint_policy
         self._background_task_pool_builder = background_task_pool_builder
@@ -267,7 +275,10 @@ class CodingAgentFactory:
                 prompt_extensions=self._prompt_policy_extensions,
                 completion_extensions=self._run_completion_policy_extensions,
             ),
-            session_inputs=SessionComponentInputs(self._secrets_root),
+            session_inputs=SessionComponentInputs(
+                self._secrets_root,
+                ProductOutputPublisherFactory(self._session_workspace_root),
+            ),
             watching_inputs=WatchingComponentInputs(self._watched_config_files, self._hooks),
             config_root=self._user_config_root,
             workspace_root=self._session_workspace_root,
@@ -281,7 +292,7 @@ class CodingAgentFactory:
     def root_builder(
         self, agent_cls: _RootAgentClass[DepsT, OutputT], /
     ) -> AgentBuilder[RootAgentRequest[DepsT, OutputT], OutputT]:
-        return _RootBuilder(agent_cls)
+        return _RootBuilder(agent_cls, self._config)
 
     def child_builder(self, agent_cls: _ChildAgentClass, /) -> AgentBuilder[AgentConstructionRequest, str]:
         return _ChildBuilder(self, agent_cls)
@@ -304,6 +315,7 @@ class CodingAgentFactory:
                 parent_session_id=request.parent_session_id,
             ),
             wiring=wiring,
+            config=self._config,
         )
         if not isinstance(agent, RunnableAgent):
             raise TypeError(f"agent factory returned non-runnable {type(agent).__name__!r}")

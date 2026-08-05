@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from mote.contracts.events.model import InferenceCheckpointConsumedEvent
 from mote.contracts.execution.models import InferenceCheckpointState
 from mote.contracts.model import (
     AttemptBudget,
@@ -114,6 +115,30 @@ def test_interrupted_model_call_resumes_same_identity(tmp_path) -> None:
     assert resumed is not None
     assert resumed.model_call_id == "call"
     assert resumed.request_fingerprint == "request"
+
+
+def test_session_consumption_fact_finishes_acknowledgement_after_crash(tmp_path) -> None:
+    store = ModelSessionProjectionStore("session", SessionWorkspace(tmp_path), approved_model_checkpoint_policy())
+    state = InferenceCheckpointState(
+        "call",
+        inference_attempt_id="attempt",
+        inference_fencing_token=7,
+    )
+    store.begin(state)
+    store.commit_intent("call", GenerateOutput(content="paid result"))
+    checkpoint = InferenceCheckpoint(
+        projections=store,
+        model_calls=_Query(_recovery("call")),
+        inference_engine=_Engine(),
+        artifact_resolver=_Resolver(),
+    )
+    consumed = InferenceCheckpointConsumedEvent("call", "attempt", 7, "turn:commit")
+
+    checkpoint.reconcile_consumed((consumed,))
+    checkpoint.reconcile_consumed((consumed,))
+
+    assert store.get("call").state is ModelSessionProjectionState.ACKNOWLEDGED
+    assert checkpoint.resume() is None
 
 
 def test_absent_evidence_after_wire_start_fails_closed(tmp_path) -> None:

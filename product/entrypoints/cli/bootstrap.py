@@ -75,8 +75,12 @@ async def build_engine(
     paths = default_runtime_paths()
     prepare_application_sources(paths)
 
+    # Config discovery and the activated Application must agree on the workspace.
+    # In particular, loading before resolving ``--cwd`` can misclassify the user
+    # config as an untrusted WORKDIR layer when the shell was launched from HOME.
+    resolved_cwd = Path(cwd or os.getcwd())
     if config is None:
-        config = backend.load_config(model, paths=paths)
+        config = backend.load_config(model, paths=paths, cwd=resolved_cwd)
 
     # Resolve the human display locale once, at assembly time, before any consumer
     # renders a line: config.ui.language ("auto" → host LANG/LC_*), then env.
@@ -84,14 +88,13 @@ async def build_engine(
 
     # Default to the shell's launch directory so every Product catalog is
     # snapshotted against the same workspace the Agent will execute in.
-    resolved_cwd = cwd or os.getcwd()
     return await activate_application(
         ApplicationBuildRequest(
             config=config,
             paths=paths,
-            cwd=Path(resolved_cwd),
+            cwd=resolved_cwd,
             tools=tuple(tools) if tools else None,
-            reload_config=lambda: backend.load_config(model, paths=paths),
+            reload_config=lambda: backend.load_config(model, paths=paths, cwd=resolved_cwd),
         )
     )
 

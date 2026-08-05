@@ -11,13 +11,7 @@ def test_projects_only_tool_actions():
         ]
     )
     assert ActionDispatcher().tool_commands(turn, {"Read"}) == [
-        {
-            "id": "c1",
-            "command_name": "Read",
-            "args": {"path": "a.py"},
-            "status": "running",
-            "error_msg": "",
-        }
+        ToolCallAction(action_id="c1", name="Read", arguments={"path": "a.py"})
     ]
 
 

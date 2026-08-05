@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
+from mote.contracts.conversation import Message
+from mote.contracts.conversation.codec import dump_message, load_message
 from mote.contracts.events._base import DurableFact as _DurableFact
 from mote.contracts.events.envelope import JsonValue, freeze_json
 
@@ -13,17 +15,8 @@ OUTPUT_CANDIDATE_RECEIVED = "output_candidate_received"
 
 OUTPUT_VALIDATION_REJECTED = "output_validation_rejected"
 
-OUTPUT_ACCEPTED = "output_accepted"
-
 OUTPUT_MIGRATED = "output_migrated"
-
-OUTPUT_COMMIT_STARTED = "output_commit_started"
-
-OUTPUT_COMMITTED = "output_committed"
-
-OUTPUT_PUBLICATION_QUEUED = "output_publication_queued"
-
-OUTPUT_PUBLISHED = "output_published"
+FINAL_OUTPUT_COMMITTED = "final_output_committed.v2"
 
 OUTPUT_SNAPSHOT = "output_snapshot"
 
@@ -192,109 +185,6 @@ class OutputValidationRejectedEvent(_DurableFact):
 
 
 @dataclass(frozen=True)
-class OutputAcceptedEvent(_DurableFact):
-    """A candidate decoded and validated successfully, before durable commit."""
-
-    candidate_id: str = ""
-    contract_id: str = ""
-    schema_fingerprint: str = ""
-    value: JsonValue = None
-    correction_attempts: int = 0
-    validator_provenance: tuple[Mapping[str, JsonValue], ...] = ()
-    run_id: str = ""
-    run_kind: str = "agent"
-
-    name: ClassVar[str] = OUTPUT_ACCEPTED
-    type: ClassVar[str] = OUTPUT_ACCEPTED
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "value", freeze_json(self.value, path="accepted output value"))
-        object.__setattr__(
-            self,
-            "validator_provenance",
-            _freeze_records(
-                self.validator_provenance,
-                field_name="output validator provenance",
-            ),
-        )
-
-    def payload(self) -> dict[str, JsonValue]:
-        return {
-            "candidate_id": self.candidate_id,
-            "contract_id": self.contract_id,
-            "schema_fingerprint": self.schema_fingerprint,
-            "value": self.value,
-            "correction_attempts": self.correction_attempts,
-            "validator_provenance": cast(JsonValue, list(self.validator_provenance)),
-            "run_id": self.run_id,
-            "run_kind": self.run_kind,
-        }
-
-    @classmethod
-    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputAcceptedEvent":
-        values = _exact(
-            payload,
-            {
-                "candidate_id",
-                "contract_id",
-                "schema_fingerprint",
-                "value",
-                "correction_attempts",
-                "validator_provenance",
-                "run_id",
-                "run_kind",
-            },
-            owner=cls.__name__,
-        )
-        return cls(
-            candidate_id=_text(values, "candidate_id", cls.__name__),
-            contract_id=_text(values, "contract_id", cls.__name__),
-            schema_fingerprint=_text(values, "schema_fingerprint", cls.__name__),
-            value=values["value"],
-            correction_attempts=_integer(values, "correction_attempts", cls.__name__),
-            validator_provenance=_freeze_records(values["validator_provenance"], field_name="validator_provenance"),
-            run_id=_text(values, "run_id", cls.__name__),
-            run_kind=_text(values, "run_kind", cls.__name__),
-        )
-
-
-@dataclass(frozen=True)
-class OutputCommitStartedEvent(_DurableFact):
-    """Durable commit began for an already accepted output."""
-
-    candidate_id: str = ""
-    contract_id: str = ""
-    run_id: str = ""
-    run_kind: str = "agent"
-    fencing_token: int = 0
-
-    name: ClassVar[str] = OUTPUT_COMMIT_STARTED
-    type: ClassVar[str] = OUTPUT_COMMIT_STARTED
-
-    def payload(self) -> dict[str, JsonValue]:
-        return {
-            "candidate_id": self.candidate_id,
-            "contract_id": self.contract_id,
-            "run_id": self.run_id,
-            "run_kind": self.run_kind,
-            "fencing_token": self.fencing_token,
-        }
-
-    @classmethod
-    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputCommitStartedEvent":
-        values = _exact(
-            payload, {"candidate_id", "contract_id", "run_id", "run_kind", "fencing_token"}, owner=cls.__name__
-        )
-        return cls(
-            candidate_id=_text(values, "candidate_id", cls.__name__),
-            contract_id=_text(values, "contract_id", cls.__name__),
-            run_id=_text(values, "run_id", cls.__name__),
-            run_kind=_text(values, "run_kind", cls.__name__),
-            fencing_token=_integer(values, "fencing_token", cls.__name__),
-        )
-
-
-@dataclass(frozen=True)
 class OutputMigratedEvent(_DurableFact):
     """An explicit migration produced a candidate for the current contract."""
 
@@ -359,39 +249,39 @@ class OutputMigratedEvent(_DurableFact):
 
 
 @dataclass(frozen=True)
-class OutputCommittedEvent(_DurableFact):
-    """The accepted output and its transcript crossed the durability barrier."""
-
+class FinalOutputCommittedEvent(_DurableFact):
     candidate_id: str = ""
     contract_id: str = ""
     schema_fingerprint: str = ""
     value: JsonValue = None
+    message: Message | None = None
     correction_attempts: int = 0
     validator_provenance: tuple[Mapping[str, JsonValue], ...] = ()
     run_id: str = ""
     run_kind: str = "agent"
     fencing_token: int = 0
 
-    name: ClassVar[str] = OUTPUT_COMMITTED
-    type: ClassVar[str] = OUTPUT_COMMITTED
+    name: ClassVar[str] = FINAL_OUTPUT_COMMITTED
+    type: ClassVar[str] = FINAL_OUTPUT_COMMITTED
 
     def __post_init__(self) -> None:
+        if self.message is None:
+            raise ValueError("final output commit requires its terminal message")
         object.__setattr__(self, "value", freeze_json(self.value, path="committed output value"))
         object.__setattr__(
             self,
             "validator_provenance",
-            _freeze_records(
-                self.validator_provenance,
-                field_name="output validator provenance",
-            ),
+            _freeze_records(self.validator_provenance, field_name="output validator provenance"),
         )
 
     def payload(self) -> dict[str, JsonValue]:
+        assert self.message is not None
         return {
             "candidate_id": self.candidate_id,
             "contract_id": self.contract_id,
             "schema_fingerprint": self.schema_fingerprint,
             "value": self.value,
+            "message": dump_message(self.message),
             "correction_attempts": self.correction_attempts,
             "validator_provenance": cast(JsonValue, list(self.validator_provenance)),
             "run_id": self.run_id,
@@ -400,104 +290,31 @@ class OutputCommittedEvent(_DurableFact):
         }
 
     @classmethod
-    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputCommittedEvent":
-        values = _exact(
-            payload,
-            {
-                "candidate_id",
-                "contract_id",
-                "schema_fingerprint",
-                "value",
-                "correction_attempts",
-                "validator_provenance",
-                "run_id",
-                "run_kind",
-                "fencing_token",
-            },
-            owner=cls.__name__,
-        )
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "FinalOutputCommittedEvent":
+        fields = {
+            "candidate_id",
+            "contract_id",
+            "schema_fingerprint",
+            "value",
+            "message",
+            "correction_attempts",
+            "validator_provenance",
+            "run_id",
+            "run_kind",
+            "fencing_token",
+        }
+        values = _exact(payload, fields, owner=cls.__name__)
         return cls(
             candidate_id=_text(values, "candidate_id", cls.__name__),
             contract_id=_text(values, "contract_id", cls.__name__),
             schema_fingerprint=_text(values, "schema_fingerprint", cls.__name__),
             value=values["value"],
+            message=load_message(_text(values, "message", cls.__name__)),
             correction_attempts=_integer(values, "correction_attempts", cls.__name__),
             validator_provenance=_freeze_records(values["validator_provenance"], field_name="validator_provenance"),
             run_id=_text(values, "run_id", cls.__name__),
             run_kind=_text(values, "run_kind", cls.__name__),
             fencing_token=_integer(values, "fencing_token", cls.__name__),
-        )
-
-
-@dataclass(frozen=True)
-class OutputPublicationQueuedEvent(_DurableFact):
-    """A committed output entered the durable publication outbox."""
-
-    publication_id: str = ""
-    candidate_id: str = ""
-    contract_id: str = ""
-    run_id: str = ""
-    run_kind: str = "agent"
-
-    name: ClassVar[str] = OUTPUT_PUBLICATION_QUEUED
-    type: ClassVar[str] = OUTPUT_PUBLICATION_QUEUED
-
-    def payload(self) -> dict[str, JsonValue]:
-        return {
-            "publication_id": self.publication_id,
-            "candidate_id": self.candidate_id,
-            "contract_id": self.contract_id,
-            "run_id": self.run_id,
-            "run_kind": self.run_kind,
-        }
-
-    @classmethod
-    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputPublicationQueuedEvent":
-        values = _exact(
-            payload, {"publication_id", "candidate_id", "contract_id", "run_id", "run_kind"}, owner=cls.__name__
-        )
-        return cls(
-            publication_id=_text(values, "publication_id", cls.__name__),
-            candidate_id=_text(values, "candidate_id", cls.__name__),
-            contract_id=_text(values, "contract_id", cls.__name__),
-            run_id=_text(values, "run_id", cls.__name__),
-            run_kind=_text(values, "run_kind", cls.__name__),
-        )
-
-
-@dataclass(frozen=True)
-class OutputPublishedEvent(_DurableFact):
-    """A committed output crossed the Role's outward publication boundary."""
-
-    candidate_id: str = ""
-    contract_id: str = ""
-    publication_id: str = ""
-    run_id: str = ""
-    run_kind: str = "agent"
-
-    name: ClassVar[str] = OUTPUT_PUBLISHED
-    type: ClassVar[str] = OUTPUT_PUBLISHED
-
-    def payload(self) -> dict[str, JsonValue]:
-        return {
-            "candidate_id": self.candidate_id,
-            "contract_id": self.contract_id,
-            "publication_id": self.publication_id,
-            "run_id": self.run_id,
-            "run_kind": self.run_kind,
-        }
-
-    @classmethod
-    def from_payload(cls, payload: dict[str, JsonValue]) -> "OutputPublishedEvent":
-        values = _exact(
-            payload, {"candidate_id", "contract_id", "publication_id", "run_id", "run_kind"}, owner=cls.__name__
-        )
-        return cls(
-            candidate_id=_text(values, "candidate_id", cls.__name__),
-            contract_id=_text(values, "contract_id", cls.__name__),
-            publication_id=_text(values, "publication_id", cls.__name__),
-            run_id=_text(values, "run_id", cls.__name__),
-            run_kind=_text(values, "run_kind", cls.__name__),
         )
 
 

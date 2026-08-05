@@ -12,6 +12,7 @@ Key behaviours:
   and the think round is joined.
 - no commands -> a "No valid commands found" notice is recorded.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -204,7 +205,7 @@ async def test_act_external_checkpoint_records_call_and_drains_before_execution(
     assert len(channel.recorded_calls) == 1
     _, snap = channel.recorded_calls[0]
     assert snap[0].output == ""
-    assert writer.drain_calls == 2
+    assert writer.drain_calls == 1
     # Results recorded after, with the real output; the single-shot path is skipped.
     assert channel.recorded_results and channel.recorded_results[0][0].output == "done"
     assert channel.recorded_turns == []
@@ -224,7 +225,7 @@ async def test_act_non_external_turn_skips_checkpoint(make_engine):
     assert channel.recorded_calls == []
     assert channel.recorded_results == []
     assert len(channel.recorded_turns) == 1
-    assert writer.drain_calls == 1
+    assert writer.drain_calls == 0
 
 
 # ---------------------------------------------------------------------------

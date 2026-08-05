@@ -5,12 +5,8 @@ from dataclasses import FrozenInstanceError, fields
 import pytest
 from pydantic import BaseModel
 
-from mote.contracts.events.output import (
-    OutputAcceptedEvent,
-    OutputCandidateReceivedEvent,
-    OutputCommittedEvent,
-    OutputMigratedEvent,
-)
+from mote.contracts.conversation import AIMessage
+from mote.contracts.events.output import FinalOutputCommittedEvent, OutputCandidateReceivedEvent, OutputMigratedEvent
 from mote.kernel.output import JsonSchemaOutputDecoder, TypeAdapterOutputDecoder
 
 
@@ -23,9 +19,8 @@ class _Report(BaseModel):
     ("event_type", "field_name"),
     (
         (OutputCandidateReceivedEvent, "raw"),
-        (OutputAcceptedEvent, "value"),
         (OutputMigratedEvent, "value"),
-        (OutputCommittedEvent, "value"),
+        (FinalOutputCommittedEvent, "value"),
     ),
 )
 def test_durable_output_value_fields_are_json_typed(event_type: type, field_name: str) -> None:
@@ -37,9 +32,8 @@ def test_durable_output_value_fields_are_json_typed(event_type: type, field_name
     "factory",
     (
         lambda value: OutputCandidateReceivedEvent(raw=value),
-        lambda value: OutputAcceptedEvent(value=value),
         lambda value: OutputMigratedEvent(value=value),
-        lambda value: OutputCommittedEvent(value=value),
+        lambda value: FinalOutputCommittedEvent(value=value, message=AIMessage(content="done")),
     ),
 )
 def test_durable_output_events_reject_non_json_values(factory) -> None:
@@ -50,8 +44,9 @@ def test_durable_output_events_reject_non_json_values(factory) -> None:
 
 
 def test_durable_output_event_cannot_bypass_frozen_json_projection() -> None:
-    event = OutputCommittedEvent(
+    event = FinalOutputCommittedEvent(
         value={"items": [1, 2]},
+        message=AIMessage(content="done"),
         validator_provenance=[{"validator": "schema"}],
     )
 

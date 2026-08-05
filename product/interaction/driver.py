@@ -164,16 +164,23 @@ class SessionDriver:
         catalog — they are not part of the one-time startup load, so counting them
         here would misreport a load that never happened.
 
-        Deferred (search-to-enable) tools *are* part of that startup load — they
-        are bound at session open, only their schema is withheld until searched —
-        so they count toward the total, and the badge annotates how many of it
-        start deferred (e.g. "loaded 17 tools (8 deferred)").
+        Deferred (search-to-enable) tools *are* part of that startup load.  The
+        annotation reports the currently hidden subset, so resumed sessions stay
+        aligned with the per-turn ``Additional tools`` index after reveals.
         """
         builtin = self._backend.role_tool_count(self._role)
         if not builtin:
             return
         deferred = self._backend.role_deferred_tool_count(self._role)
-        self.notice("\u2691 " + t(K.DRIVER_TOOLS_LOADED, count=builtin, deferred=deferred))
+        self.notice(
+            "\u2691 "
+            + t(
+                K.DRIVER_TOOLS_LOADED,
+                count=builtin,
+                loaded=builtin - deferred,
+                deferred=deferred,
+            )
+        )
 
     def _take_turn_images(self) -> list:
         """Drain the port's staged image attachments for this turn (Textual only).

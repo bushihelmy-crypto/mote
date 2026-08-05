@@ -23,15 +23,11 @@ from mote.runtime.events.journal import LocalEventJournal
 from mote.runtime.session.codec import UnsupportedSessionEventError, session_stream_id
 from mote.runtime.session.events import (
     ContextCompactedFact,
+    FinalOutputCommittedEvent,
     HistoryEditedFact,
     MessageEvent,
-    OutputAcceptedEvent,
     OutputCandidateReceivedEvent,
-    OutputCommitStartedEvent,
-    OutputCommittedEvent,
     OutputMigratedEvent,
-    OutputPublicationQueuedEvent,
-    OutputPublishedEvent,
     OutputValidationRejectedEvent,
     RuntimeCheckpointEvent,
     RuntimeCommitEvent,
@@ -221,22 +217,14 @@ def test_output_state_survives_message_compaction(tmp_path):
         )
     )
     log.commit_offline(OutputCandidateReceivedEvent(candidate_id="c2", contract_id="test.report@1", raw={"count": 1}))
+    terminal_message = AIMessage(content="final")
     log.commit_offline(
-        OutputAcceptedEvent(
+        FinalOutputCommittedEvent(
             candidate_id="c2",
             contract_id="test.report@1",
             schema_fingerprint="sha",
             value={"count": 1},
-            correction_attempts=1,
-        )
-    )
-    log.commit_offline(OutputCommitStartedEvent(candidate_id="c2", contract_id="test.report@1"))
-    log.commit_offline(
-        OutputCommittedEvent(
-            candidate_id="c2",
-            contract_id="test.report@1",
-            schema_fingerprint="sha",
-            value={"count": 1},
+            message=terminal_message,
             validator_provenance=[
                 {
                     "name": "policy",
@@ -250,14 +238,16 @@ def test_output_state_survives_message_compaction(tmp_path):
             correction_attempts=1,
         )
     )
-    log.commit_offline(OutputPublishedEvent(candidate_id="c2", contract_id="test.report@1"))
-
     result = replay(log)
 
-    assert [message.content for message in result.transcript_messages] == ["original"]
-    assert [message.content for message in result.model_context_messages] == ["summary"]
-    assert result.output_state == {
-        "status": "published",
+    assert [message.content for message in result.transcript_messages] == ["original", "final"]
+    assert [message.content for message in result.model_context_messages] == ["summary", "final"]
+    output_state = dict(result.output_state)
+    restored_message = output_state.pop("message")
+    assert restored_message.id == terminal_message.id
+    assert restored_message.role == terminal_message.role
+    assert output_state == {
+        "status": "committed",
         "candidate_id": "c2",
         "contract_id": "test.report@1",
         "schema_fingerprint": "sha",
@@ -301,11 +291,12 @@ def test_unknown_event_rejects_replay(tmp_path):
 
 def test_duplicate_output_fact_is_idempotent(tmp_path):
     log = _fresh_log(tmp_path)
-    committed = OutputCommittedEvent(
+    committed = FinalOutputCommittedEvent(
         candidate_id="candidate-1",
         contract_id="test.report@1",
         schema_fingerprint="sha",
         value={"count": 1},
+        message=AIMessage(content="done"),
         run_id="run-1",
     )
     log.commit_offline(committed)
@@ -476,100 +467,36 @@ def test_runtime_commit_replays_only_unacknowledged_projection_work(tmp_path):
     assert result.pending_runtime_projections == {request.key: request}
 
 
-def test_publication_outbox_survives_crash_before_ack(tmp_path):
-    log = _fresh_log(tmp_path)
-    log.commit_offline(
-        OutputCommittedEvent(
-            candidate_id="c2",
-            contract_id="test.report@1",
-            schema_fingerprint="sha",
-            value={"count": 1},
-            validator_provenance=[
-                {
-                    "name": "policy",
-                    "version": "1",
-                    "stage": "policy",
-                    "effect": "pure",
-                    "determinism": "deterministic",
-                    "decision": "accept",
-                }
-            ],
-            run_id="run-1",
-        )
-    )
-    log.commit_offline(
-        OutputPublicationQueuedEvent(
-            publication_id="pub-1",
-            candidate_id="c2",
-            contract_id="test.report@1",
-            run_id="run-1",
-        )
-    )
-
-    assert replay(log).output_state == {
-        "status": "publication_queued",
-        "candidate_id": "c2",
-        "contract_id": "test.report@1",
-        "schema_fingerprint": "sha",
-        "value": {"count": 1},
-        "correction_attempts": 0,
-        "fencing_token": 0,
-        "validator_provenance": [
-            {
-                "name": "policy",
-                "version": "1",
-                "stage": "policy",
-                "effect": "pure",
-                "determinism": "deterministic",
-                "decision": "accept",
-            }
-        ],
-        "publication_id": "pub-1",
-        "run_id": "run-1",
-        "run_kind": "agent",
-    }
-    assert replay(log).output_states["run-1"]["status"] == "publication_queued"
-
-
 def test_interleaved_agent_and_graph_outputs_fold_by_run_id(tmp_path):
     log = _fresh_log(tmp_path)
     log.commit_offline(
-        OutputAcceptedEvent(
+        FinalOutputCommittedEvent(
             candidate_id="agent-candidate",
             contract_id="mote.text@1",
             schema_fingerprint="agent-schema",
             value="agent result",
+            message=AIMessage(content="agent result"),
             run_id="agent-run",
             run_kind="agent",
         )
     )
     log.commit_offline(
-        OutputAcceptedEvent(
+        FinalOutputCommittedEvent(
             candidate_id="graph-candidate",
             contract_id="mote.graph-json@1",
             schema_fingerprint="graph-schema",
             value={"answer": 42},
+            message=AIMessage(content="graph result"),
             run_id="graph-run",
             run_kind="graph",
         )
     )
-    log.commit_offline(
-        OutputCommitStartedEvent(
-            candidate_id="agent-candidate",
-            contract_id="mote.text@1",
-            run_id="agent-run",
-            fencing_token=7,
-            run_kind="agent",
-        )
-    )
-
     states = replay(log).output_states
 
-    assert states["agent-run"]["status"] == "commit_started"
-    assert states["agent-run"]["fencing_token"] == 7
+    assert states["agent-run"]["status"] == "committed"
     assert states["agent-run"]["value"] == "agent result"
     assert states["agent-run"]["run_kind"] == "agent"
-    assert states["graph-run"]["status"] == "accepted"
+    assert states["graph-run"]["status"] == "committed"
     assert states["graph-run"]["value"] == {"answer": 42}
     assert states["graph-run"]["run_kind"] == "graph"
 

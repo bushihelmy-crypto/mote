@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 
 from mote.contracts.conversation import CauseBy
 from mote.contracts.task.models import TaskId
+from mote.contracts.task.notification import BackgroundTaskNotification
 from mote.orchestration.background_tasks.constants import STALL_CHECK_INTERVAL, STALL_TAIL_BYTES, STALL_THRESHOLD
-from mote.orchestration.background_tasks.model import BackgroundTaskNotification
 from mote.orchestration.background_tasks.status import BackgroundTaskStatus
 from mote.runtime.control.scheduling import PeriodicLoop
 

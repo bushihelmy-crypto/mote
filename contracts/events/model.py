@@ -33,6 +33,7 @@ MODEL_ATTEMPT_FINISHED = "model_attempt_finished"
 MODEL_FALLBACK_SELECTED = "model_fallback_selected"
 
 MODEL_CALL_FINISHED = "model_call_finished"
+INFERENCE_CHECKPOINT_CONSUMED = "inference_checkpoint_consumed.v1"
 
 ROUTING_DECISION = "routing_decision"
 
@@ -210,6 +211,46 @@ class ModelCallFinishedEvent:
             if not isinstance(frozen, Mapping):
                 raise TypeError(f"model call {name} must be an object")
             setattr(self, name, cast(Mapping[str, JsonValue], frozen))
+
+
+@dataclass(frozen=True)
+class InferenceCheckpointConsumedEvent(_DurableFact):
+    model_call_id: str = ""
+    inference_attempt_id: str = ""
+    inference_fencing_token: int = 0
+    operation_id: str = ""
+
+    name: ClassVar[str] = INFERENCE_CHECKPOINT_CONSUMED
+    type: ClassVar[str] = INFERENCE_CHECKPOINT_CONSUMED
+
+    def __post_init__(self) -> None:
+        if not self.model_call_id or not self.operation_id:
+            raise ValueError("inference checkpoint consumption identity must be complete")
+        if type(self.inference_fencing_token) is not int or self.inference_fencing_token < 1:
+            raise ValueError("inference checkpoint consumption fence must be positive")
+
+    def payload(self) -> dict[str, JsonValue]:
+        return {
+            "model_call_id": self.model_call_id,
+            "inference_attempt_id": self.inference_attempt_id,
+            "inference_fencing_token": self.inference_fencing_token,
+            "operation_id": self.operation_id,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, JsonValue]) -> "InferenceCheckpointConsumedEvent":
+        fields = {"model_call_id", "inference_attempt_id", "inference_fencing_token", "operation_id"}
+        if set(payload) != fields:
+            raise ValueError("InferenceCheckpointConsumedEvent payload fields are not canonical")
+        model_call_id = payload["model_call_id"]
+        attempt_id = payload["inference_attempt_id"]
+        fence = payload["inference_fencing_token"]
+        operation_id = payload["operation_id"]
+        if type(model_call_id) is not str or type(attempt_id) is not str or type(operation_id) is not str:
+            raise TypeError("inference checkpoint consumption identity fields must be strings")
+        if type(fence) is not int:
+            raise TypeError("inference checkpoint consumption fence must be an integer")
+        return cls(model_call_id, attempt_id, fence, operation_id)
 
 
 @dataclass(frozen=True)

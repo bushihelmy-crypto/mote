@@ -12,13 +12,13 @@ from typing import Callable, Optional
 from mote.contracts.conversation import CauseBy
 from mote.contracts.events.task import TaskProgressEvent
 from mote.contracts.task.lifecycle import LocalTaskReference
+from mote.contracts.task.notification import BackgroundTaskNotification
 from mote.contracts.task.progress import (
     ActivityProgressEvent,
     BackgroundTaskProgressEvent,
     ProgressEvent,
     ProgressEventSink,
 )
-from mote.orchestration.background_tasks.model import BackgroundTaskNotification
 from mote.runtime.events.context import observe_event_sync
 from mote.runtime.events.progress_scope import bind_progress_sink, reset_progress_sink
 from mote.runtime.telemetry.logging import logger

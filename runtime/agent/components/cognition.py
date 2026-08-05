@@ -178,6 +178,7 @@ def _build_flow_engine(
         inference_engine=inference_engine,
         artifact_resolver=ctx.dep(ARTIFACT_RESOLVER),
     )
+    checkpoint.reconcile_consumed(role._state_ctl.consumed_inference_checkpoints())
     output_engine = OutputEngine(
         role.output_contract,
         restored_state=role._state_ctl.take_pending_output_restore(),
@@ -193,6 +194,7 @@ def _build_flow_engine(
         memory=ctx.dep(CONTEXT_MANAGER),
         output_engine=output_engine,
         inference_checkpoint=checkpoint,
+        session_fact_sink=ctx.dep(SESSION_FACT_COMMITTER),
         drain_writes=role._context.disk_writer.drain,
     )
     return ExecutionEngine(

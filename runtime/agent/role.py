@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 from dataclasses import asdict
+from functools import partial
 from typing import TYPE_CHECKING, Any, Generic, Optional, Protocol, Set, TypeVar, cast, runtime_checkable
 from uuid import uuid4
 
@@ -23,7 +24,6 @@ from mote.contracts.conversation.fields import MESSAGE_ROUTE_TO_SELF
 from mote.contracts.conversation.prompt_policy import PromptIntent
 from mote.contracts.events.conversation import PromptRejectedEvent, UserPromptSubmitEvent
 from mote.contracts.events.envelope import JsonValue, thaw_json
-from mote.contracts.events.output import OutputPublicationQueuedEvent, OutputPublishedEvent
 from mote.contracts.events.session import SessionStartEvent, TurnEndEvent
 from mote.contracts.file import RewindResult
 from mote.contracts.output import (
@@ -36,6 +36,7 @@ from mote.contracts.output import (
     TranscriptRef,
 )
 from mote.contracts.output.policy import RunCompletionDecision, RunCompletionIntent
+from mote.contracts.output.publication import OutputPublicationRequest
 from mote.contracts.ports.agent.hosting import ResidentAgentHostingSnapshot
 from mote.contracts.ports.agent.routing import AgentRoutingPort
 from mote.contracts.ports.events.telemetry import TelemetryRuntimePort
@@ -105,6 +106,7 @@ if TYPE_CHECKING:
         ReliableArtifactPublisher,
     )
     from mote.contracts.ports.conversation.prompt_policy import PromptPolicy
+    from mote.contracts.ports.output.publication import OutputPublisher
     from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicy
     from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolResultPolicy
     from mote.runtime.config.device import DeviceConfig
@@ -195,6 +197,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         self._cleanup_lifecycle_prepared = False
         self._incarnation_id = uuid4().hex
         self._routing_port: AgentRoutingPort | None = None
+        self._output_publisher: OutputPublisher | None = None
         self._human_interaction: ContextVar[RoleHumanInteractionPort | None] = ContextVar(
             f"human_interaction_{self.state.session_id}", default=None
         )
@@ -534,6 +537,9 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         """Bind the orchestration-owned routing capability."""
         self._routing_port = routing
         routing.set_addresses(self.session_id, self.state.addresses)
+        factory = self._component_projection().session().output_publisher_factory
+        if factory is not None:
+            self._output_publisher = factory.build(self.session_id, routing)
 
     # =========================================================================
     # Initialization helpers
@@ -1200,19 +1206,55 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         """If the role belongs to env, then the role's messages will be broadcast to env"""
         if not msg:
             return
+        if not msg.send_to:
+            return
         if MESSAGE_ROUTE_TO_SELF in msg.send_to:
             msg.send_to.add(any_to_str(self))
             msg.send_to.remove(MESSAGE_ROUTE_TO_SELF)
         if not msg.sent_from or msg.sent_from == MESSAGE_ROUTE_TO_SELF:
             msg.sent_from = any_to_str(self)
-        if all(to in {any_to_str(self), self.role_schema.name} for to in msg.send_to):
-            self.put_message(msg)
+        self_targets = {any_to_str(self), self.role_schema.name}
+        local_targets = msg.send_to.intersection(self_targets)
+        external_targets = msg.send_to.difference(self_targets)
+        if local_targets:
+            local_message = msg.model_copy(deep=True, update={"send_to": local_targets})
+            self.put_message(local_message)
+        if not external_targets:
             return
         if self._routing_port is None:
             return
-        if isinstance(msg, AIMessage) and not msg.agent:
-            msg.with_agent(self.role_schema.display_name)
-        self._routing_port.publish_message(msg)
+        routed_message = msg.model_copy(deep=True, update={"send_to": external_targets}) if local_targets else msg
+        if isinstance(routed_message, AIMessage) and not routed_message.agent:
+            routed_message.with_agent(self.role_schema.display_name)
+        self._routing_port.publish_message(routed_message)
+
+    async def _accept_output_publication(
+        self,
+        message: Message,
+        committed: CommittedOutput[OutputT],
+    ) -> None:
+        publication_id = f"output:{self.session_id}:{committed.run_id}"
+        publication_message = message.model_copy(deep=True)
+        publication_message.metadata["output_publication_id"] = publication_id
+        factory = self._component_projection().session().output_publisher_factory
+        publisher = self._output_publisher
+        if publisher is None and factory is not None:
+            publisher = factory.build(self.session_id, self._routing_port)
+            self._output_publisher = publisher
+        if publisher is None:
+            raise RuntimeError("final output requires the Product-owned durable publisher")
+        await publisher.accept(
+            OutputPublicationRequest(
+                publication_id=publication_id,
+                source_agent_id=self.session_id,
+                candidate_id=committed.candidate_id,
+                contract_id=committed.contract_id,
+                run_id=committed.run_id,
+                run_kind=committed.run_kind.value,
+                message=publication_message,
+            )
+        )
+        await publisher.reconcile_once()
 
     def put_message(self, message):
         """Place the message into the Role object's private message buffer."""
@@ -1247,6 +1289,12 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         if self._session_started:
             return
         self._session_started = True
+
+        # Acquire the canonical writer lease on this event loop so its heartbeat
+        # remains live while model/tool calls spend longer than one lease TTL.
+        # Event-journal writes themselves run on disk workers and cannot own an
+        # asyncio renewal task.
+        await self._components.session_log.start_writer()
 
         # Session metadata is an ordinary first fact, committed before any
         # observer can append later session facts.
@@ -1399,29 +1447,8 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                     rsp.with_agent(self.role_schema.display_name)
                 committed = flow_result.committed_output
                 if committed is not None:
-                    publication_id = f"output:{self.session_id}:{committed.run_id}"
-                    queued_event = OutputPublicationQueuedEvent(
-                        publication_id=publication_id,
-                        candidate_id=committed.candidate_id,
-                        contract_id=committed.contract_id,
-                        run_id=committed.run_id,
-                        run_kind=committed.run_kind.value,
-                    )
-                    await self._components.session_fact_committer.commit_fact(queued_event)
-                    await self._telemetry.emit(queued_event)
-                    await self._context.disk_writer.drain()
-                    rsp.metadata["output_publication_id"] = publication_id
-                    self.publish_message(rsp)
-                    published_event = OutputPublishedEvent(
-                        candidate_id=committed.candidate_id,
-                        contract_id=committed.contract_id,
-                        publication_id=publication_id,
-                        run_id=committed.run_id,
-                        run_kind=committed.run_kind.value,
-                    )
-                    await self._components.session_fact_committer.commit_fact(published_event)
-                    await self._telemetry.emit(published_event)
-                    await self._context.disk_writer.drain()
+                    if self._routing_port is not None:
+                        await self._accept_output_publication(rsp, committed)
                     return RunResult(
                         output=committed.value,
                         output_record=committed,
@@ -1579,7 +1606,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         if session_log is not None:
             lifecycle.register_close(
                 "session-stream-ownership",
-                session_log.release_writer,
+                session_log.close_writer,
                 phase=LifecyclePhase.FLUSH_DURABILITY,
             )
         repo_index = self._components.peek_repo_index()
@@ -1655,7 +1682,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         if bg_pool is not None:
             lifecycle.register_close(
                 "background-tasks",
-                lambda: self._drain_background_tasks(bg_pool),
+                partial(self._drain_background_tasks, bg_pool),
                 phase=LifecyclePhase.CLOSE_RESOURCES,
             )
         file_watch_service = self._components.peek_file_watch_service()
@@ -1711,6 +1738,12 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
         # reducer ← ContextManager). Split out of the getters so no component
         # read mutates a sibling as a hidden side-effect.
         self._components._wire_collaborators()
+
+        factory = self._component_projection().session().output_publisher_factory
+        if self._output_publisher is None and factory is not None:
+            self._output_publisher = factory.build(self.session_id, self._routing_port)
+        if self._output_publisher is not None:
+            await self._output_publisher.reconcile_once()
 
         await self._components.reconcile_artifact_publications_once()
         await self._components.reconcile_runtime_projections_once()

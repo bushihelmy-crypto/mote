@@ -117,6 +117,7 @@ class RoleSessionManager:
 
         role.state.recovered = True
         state_ctl = role._state_ctl
+        state_ctl.set_consumed_inference_checkpoints(tuple(result.consumed_inference_checkpoints.values()))
         runtime_checkpoints = getattr(result, "runtime_checkpoints", {}) or {}
         for checkpoint in runtime_checkpoints.values():
             role._components.runtime_host.stage_checkpoint(checkpoint, alias=checkpoint.alias)
@@ -125,16 +126,13 @@ class RoleSessionManager:
         output_state = agent_states[-1] if agent_states else result.output_state
         if output_state and output_state.get("run_kind", "agent") != "agent":
             output_state = None
-        if output_state and output_state.get("status") not in {
-            "published",
-            "correction_exhausted",
-        }:
+        if output_state and output_state.get("status") == "committed":
             state_ctl.set_pending_output_restore(output_state)
         state_ctl.set_pending_graph_output_restores(
             {
                 run_id: state
                 for run_id, state in output_states.items()
-                if state.get("run_kind") == "graph" and state.get("status") not in {"published", "correction_exhausted"}
+                if state.get("run_kind") == "graph" and state.get("status") == "committed"
             }
         )
         return True

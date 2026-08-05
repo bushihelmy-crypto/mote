@@ -337,7 +337,8 @@ class _AttemptExecution:
                 observation_error = observed_exc
             state = ReceiptState.IN_DOUBT if self._receipt_committed else ReceiptState.TERMINAL_FAILED
             event_type = AttemptEventType.IN_DOUBT if state is ReceiptState.IN_DOUBT else AttemptEventType.FAILED
-            reason = type(exc).__name__
+            detail = str(exc).strip()
+            reason = type(exc).__name__ + (f": {detail}" if detail else "")
             if observation_error is not None:
                 reason += f"; governance:{type(observation_error).__name__}"
             payload: dict[str, Any] = {"reason": reason}

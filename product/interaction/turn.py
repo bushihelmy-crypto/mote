@@ -6,6 +6,7 @@ import asyncio
 from typing import Any, Protocol, runtime_checkable
 
 from mote.contracts.conversation import Message
+from mote.contracts.output import RunResult
 from mote.orchestration.agents.control import AgentControl
 from mote.product.presentation.events import ErrorRaised, MediaBlock, MessageBlockCompleted, UserMediaIdentity
 from mote.product.presentation.projection.base import BaseProjector
@@ -67,6 +68,17 @@ class TurnRunner:
         error = runtime.last_error if runtime is not None else None
         if error is not None:
             await self._projector.deliver(ErrorRaised(text=format_turn_error(error)))
+            return
+        outcome = runtime.last_run_result if runtime is not None else None
+        if isinstance(outcome, RunResult) and isinstance(outcome.output, str):
+            await self._projector.deliver(
+                MessageBlockCompleted(
+                    role="assistant",
+                    markdown=outcome.output,
+                    streamed=False,
+                    message_id=outcome.transcript.terminal_message_id,
+                )
+            )
 
 
 __all__ = ["TurnRunner", "format_turn_error"]

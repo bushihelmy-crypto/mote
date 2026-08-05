@@ -23,16 +23,13 @@ from mote.contracts.runtime.handoff import PendingRuntimeHandoff, RuntimeHandoff
 from mote.runtime.session.codec import decode_session_event
 from mote.runtime.session.events import (
     ContextCompactedFact,
+    FinalOutputCommittedEvent,
     HistoryEditedFact,
+    InferenceCheckpointConsumedEvent,
     LLMCallEvent,
     MessageEvent,
-    OutputAcceptedEvent,
     OutputCandidateReceivedEvent,
-    OutputCommitStartedEvent,
-    OutputCommittedEvent,
     OutputMigratedEvent,
-    OutputPublicationQueuedEvent,
-    OutputPublishedEvent,
     OutputValidationRejectedEvent,
     RoutingDecisionFact,
     RuntimeCheckpointEvent,
@@ -75,6 +72,7 @@ class SessionProjectionState:
     compactions: int = 0
     history_edits: int = 0
     model_calls: dict[str, ModelCallSummary] = field(default_factory=dict)
+    consumed_inference_checkpoints: dict[str, InferenceCheckpointConsumedEvent] = field(default_factory=dict)
     routing_state: RoutingSessionState = field(default_factory=RoutingSessionState)
     routing_decisions: dict[str, dict] = field(default_factory=dict)
     latest_compaction: Optional[ContextCompactedFact] = None
@@ -214,6 +212,11 @@ def reduce_session_event(state: SessionProjectionState, event: SessionEvent) -> 
             ]
     elif isinstance(event, LLMCallEvent) and event.summary is not None:
         state.model_calls[event.summary.model_call_id] = event.summary
+    elif isinstance(event, InferenceCheckpointConsumedEvent):
+        prior = state.consumed_inference_checkpoints.get(event.operation_id)
+        if prior is not None and prior != event:
+            raise ValueError("inference checkpoint operation identity forked")
+        state.consumed_inference_checkpoints[event.operation_id] = event
     elif isinstance(event, RoutingDecisionFact):
         decision = event.decision
         decision_id = str(decision.get("decision_id", ""))
@@ -288,32 +291,6 @@ def reduce_session_event(state: SessionProjectionState, event: SessionEvent) -> 
             output["validator_provenance"] = list(event.validator_provenance)
         _set_run_id(output, event.run_id)
         state.output_state = output
-    elif isinstance(event, OutputAcceptedEvent):
-        output = dict(state.output_state or {})
-        output.update(
-            {
-                "status": "accepted",
-                "candidate_id": event.candidate_id,
-                "contract_id": event.contract_id,
-                "schema_fingerprint": event.schema_fingerprint,
-                "value": event.value,
-                "correction_attempts": event.correction_attempts,
-            }
-        )
-        if event.validator_provenance:
-            output["validator_provenance"] = list(event.validator_provenance)
-        _set_run_id(output, event.run_id)
-        state.output_state = output
-    elif isinstance(event, OutputCommitStartedEvent):
-        output = dict(state.output_state or {})
-        output.update(
-            status="commit_started",
-            candidate_id=event.candidate_id,
-            contract_id=event.contract_id,
-            fencing_token=event.fencing_token,
-        )
-        _set_run_id(output, event.run_id)
-        state.output_state = output
     elif isinstance(event, OutputMigratedEvent):
         state.output_state = {
             "status": "accepted",
@@ -325,8 +302,11 @@ def reduce_session_event(state: SessionProjectionState, event: SessionEvent) -> 
             "migration_provenance": list(event.steps),
         }
         _set_run_id(state.output_state, event.run_id)
-    elif isinstance(event, OutputCommittedEvent):
-        prior_migration = (state.output_state or {}).get("migration_provenance")
+    elif isinstance(event, FinalOutputCommittedEvent):
+        assert event.message is not None
+        state.message_events += 1
+        state.transcript_messages.append(event.message)
+        state.model_context_messages.append(event.message)
         output = {
             "status": "committed",
             "candidate_id": event.candidate_id,
@@ -335,32 +315,10 @@ def reduce_session_event(state: SessionProjectionState, event: SessionEvent) -> 
             "value": event.value,
             "correction_attempts": event.correction_attempts,
             "fencing_token": event.fencing_token,
+            "message": event.message,
         }
-        if prior_migration:
-            output["migration_provenance"] = prior_migration
         if event.validator_provenance:
             output["validator_provenance"] = list(event.validator_provenance)
-        _set_run_id(output, event.run_id)
-        state.output_state = output
-    elif isinstance(event, OutputPublicationQueuedEvent):
-        output = dict(state.output_state or {})
-        output.update(
-            status="publication_queued",
-            publication_id=event.publication_id,
-            candidate_id=event.candidate_id,
-            contract_id=event.contract_id,
-        )
-        _set_run_id(output, event.run_id)
-        state.output_state = output
-    elif isinstance(event, OutputPublishedEvent):
-        output = dict(state.output_state or {})
-        output.update(
-            status="published",
-            candidate_id=event.candidate_id,
-            contract_id=event.contract_id,
-        )
-        if event.publication_id:
-            output["publication_id"] = event.publication_id
         _set_run_id(output, event.run_id)
         state.output_state = output
 
@@ -403,14 +361,10 @@ def _set_run_id(state: dict, run_id: str) -> None:
 
 
 _OUTPUT_EVENTS = (
+    FinalOutputCommittedEvent,
     OutputCandidateReceivedEvent,
     OutputValidationRejectedEvent,
-    OutputAcceptedEvent,
-    OutputCommitStartedEvent,
     OutputMigratedEvent,
-    OutputCommittedEvent,
-    OutputPublicationQueuedEvent,
-    OutputPublishedEvent,
 )
 
 

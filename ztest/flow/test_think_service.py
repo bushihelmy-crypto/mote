@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import pytest
 
+from mote.contracts.execution.models import InferenceCompleted, InferenceStopped
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -19,7 +21,7 @@ async def test_think_returns_false_when_inactive(make_engine):
     b = make_engine(active=False)
     b.engine._ctx = b.ctx
 
-    assert await b.engine._inference.infer() is False
+    assert isinstance(await b.engine._inference.infer(), InferenceStopped)
     # Nothing was prepared / started.
     assert b.provider.prepare_calls == 0
     assert b.inference_engine.start_calls == []
@@ -29,7 +31,7 @@ async def test_think_prepares_and_starts(make_engine):
     b = make_engine(active=True)
     b.engine._ctx = b.ctx
 
-    assert await b.engine._inference.infer() is True
+    assert isinstance(await b.engine._inference.infer(), InferenceCompleted)
     assert b.provider.prepare_calls == 1
     # The resolved route is driven off the full prepared InferenceRequest so route
     # selection can include model-call metadata as well as messages.
@@ -108,7 +110,7 @@ async def test_think_no_turn_context_bus_records_nothing(make_engine):
     b.engine._ctx = b.ctx
     before = len(b.memory.messages)
 
-    assert await b.engine._inference.infer() is True
+    assert isinstance(await b.engine._inference.infer(), InferenceCompleted)
     assert len(b.memory.messages) == before
 
 
@@ -141,6 +143,6 @@ async def test_think_inactive_skips_turn_context_recording(make_engine):
     b.engine._ctx = b.ctx
     before = len(b.memory.messages)
 
-    assert await b.engine._inference.infer() is False
+    assert isinstance(await b.engine._inference.infer(), InferenceStopped)
     # Inactive cycle returns before recording — nothing committed.
     assert len(b.memory.messages) == before

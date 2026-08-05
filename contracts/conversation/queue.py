@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from dataclasses import dataclass
 from enum import Enum
 from json import JSONDecodeError
 from typing import List, Optional
@@ -15,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from mote.contracts.conversation.codec import dump_message, load_message
 from mote.contracts.conversation.messages import Message
+from mote.contracts.ports.conversation.message_activity import MessageActivitySnapshot
 
 
 class MessagePriority(int, Enum):
@@ -32,13 +34,21 @@ class QueuedMessage(BaseModel):
     message: Message
 
 
+@dataclass(frozen=True, slots=True)
+class InboxBatchLease:
+    generation: int
+    items: tuple[QueuedMessage, ...]
+
+
 class MessageQueue(BaseModel):
     """Single-queue message buffer with priority-aware consumption."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     _items: list[QueuedMessage] = PrivateAttr(default_factory=list)
-    _new_msg_event: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
+    _activity_generation: int = PrivateAttr(default=0)
+    _activity_condition: asyncio.Condition = PrivateAttr(default_factory=asyncio.Condition)
+    _reserved: InboxBatchLease | None = PrivateAttr(default=None)
 
     def pop(self, max_priority: int = MessagePriority.NEXT) -> Message | None:
         """Pop the highest-priority message whose priority <= *max_priority*."""
@@ -66,29 +76,66 @@ class MessageQueue(BaseModel):
                 keep.append(item)
         drain.sort(key=lambda x: x.priority)
         self._items = keep
-        if not self._items:
-            self._new_msg_event.clear()
         return [item.message for item in drain]
+
+    def reserve(self, max_priority: int = MessagePriority.NEXT) -> InboxBatchLease:
+        if self._reserved is not None:
+            raise RuntimeError("message queue already has an active drain lease")
+        keep: list[QueuedMessage] = []
+        drain: list[QueuedMessage] = []
+        for item in self._items:
+            (drain if item.priority <= max_priority else keep).append(item)
+        drain.sort(key=lambda item: item.priority)
+        self._items = keep
+        lease = InboxBatchLease(self._activity_generation, tuple(drain))
+        self._reserved = lease
+        return lease
+
+    def ack(self, lease: InboxBatchLease) -> None:
+        self._require_lease(lease)
+        self._reserved = None
+
+    def release(self, lease: InboxBatchLease) -> None:
+        self._require_lease(lease)
+        self._items = list(lease.items) + self._items
+        self._reserved = None
+
+    def _require_lease(self, lease: InboxBatchLease) -> None:
+        if self._reserved is not lease:
+            raise RuntimeError("message queue drain lease is not current")
 
     def push(self, msg: Message, priority: MessagePriority = MessagePriority.NEXT) -> None:
         """Push a message with the given priority (default NEXT)."""
         self._items.append(QueuedMessage(priority=priority, message=msg))
-        self._new_msg_event.set()
+        self._activity_generation += 1
+        self._notify_activity()
 
     def empty(self) -> bool:
         """Return true if the queue is empty."""
         return len(self._items) == 0
 
-    async def wait_for_message(self) -> None:
-        """Block until a new message is pushed.
+    def activity_snapshot(self) -> MessageActivitySnapshot:
+        return MessageActivitySnapshot(self._activity_generation, bool(self._items))
 
-        Returns immediately when the pending-signal is already set (a message
-        is waiting). The signal is cleared by ``pop_all`` when the queue drains,
-        so this method only ever awaits — letting collaborators (the background
-        pool, ``Role.wait_interruptible``) react to activity without reaching
-        into the internal ``asyncio.Event``.
-        """
-        await self._new_msg_event.wait()
+    async def wait_for_activity(self, after_generation: int) -> MessageActivitySnapshot:
+        if type(after_generation) is not int or after_generation < 0:
+            raise ValueError("after_generation must be a non-negative integer")
+        async with self._activity_condition:
+            await self._activity_condition.wait_for(
+                lambda: self._activity_generation > after_generation or bool(self._items)
+            )
+            return self.activity_snapshot()
+
+    def _notify_activity(self) -> None:
+        async def notify() -> None:
+            async with self._activity_condition:
+                self._activity_condition.notify_all()
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(notify())
 
     async def dump(self) -> str:
         """Convert the ``MessageQueue`` object to a json string."""

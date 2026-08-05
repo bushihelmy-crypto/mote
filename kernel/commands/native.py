@@ -257,7 +257,9 @@ class NativeToolChannel(CommandChannel):
         """Translate native text/tool calls into semantic actions."""
         actions = []
         for call in result.tool_calls or []:
-            arguments = call.arguments
+            arguments = thaw_json(cast(JsonValue, call.arguments))
+            if not isinstance(arguments, dict):
+                raise TypeError("native tool-call arguments must be a JSON object")
             if call.name == FINAL_OUTPUT_TOOL_NAME:
                 actions.append(
                     FinalCandidateAction(
@@ -271,7 +273,7 @@ class NativeToolChannel(CommandChannel):
                     ToolCallAction(
                         action_id=call.id,
                         name=call.name,
-                        arguments=dict(arguments),
+                        arguments=arguments,
                     )
                 )
         content = result.content or ""

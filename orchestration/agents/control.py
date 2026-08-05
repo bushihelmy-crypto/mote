@@ -26,6 +26,7 @@ Delivery (``send_input`` / ``send_inter_agent_communication``):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 import uuid
 import weakref
@@ -81,6 +82,7 @@ from mote.contracts.ports.events.telemetry import TelemetryIdentity, TelemetryOv
 from mote.contracts.ports.runtime.lease import LeaseCoordinator, LeaseEpoch
 from mote.contracts.ports.workflow.delivery import WorkflowAgentDeliveryCompositionPort
 from mote.contracts.ports.workflow.governance import WorkflowGovernanceCompositionPort
+from mote.contracts.runtime.errors import LeaseFencedError
 from mote.contracts.workflow.admission import (
     ClaimWorkflowCreateAdmission,
     ReserveWorkflowCreateAdmission,
@@ -126,6 +128,7 @@ from mote.runtime.agent.base import BaseRole
 from mote.runtime.agent.control import set_control
 from mote.runtime.agent.incarnation import AgentIncarnationError, AgentIncarnationFactory
 from mote.runtime.clock import SystemClock
+from mote.runtime.control.leases import LeaseHandle
 from mote.runtime.events.log_subscriber import LogSubscriber
 from mote.runtime.events.telemetry import AllTelemetryBinding, TelemetryManifest, TelemetryRuntime, TelemetryState
 from mote.runtime.models.cost.node import CostNode
@@ -143,6 +146,11 @@ OutputT = TypeVar("OutputT")
 def _path_depth(path: AgentPath) -> int:
     """Depth of *path* below root: ``/root`` is 0, ``/root/a`` is 1, ..."""
     return len(path.as_str().strip("/").split("/")) - 1
+
+
+def _turn_queue_path(lineage_path: Path, queue_id: str) -> Path:
+    identity_digest = hashlib.sha256(queue_id.encode("utf-8")).hexdigest()
+    return lineage_path.with_name(f"agent-turn-queue-{identity_digest}.json")
 
 
 def _sanitize_segment(name: str) -> str:
@@ -236,7 +244,7 @@ class AgentControl:
         turn_queue_owner = f"agent-turn-scheduler:{uuid.uuid4().hex}"
         turn_queue_lease = residency_lease_coordinator.acquire(turn_queue_subject, turn_queue_owner, 30.0)
         turn_queue_store = DurableTurnQueueStore(
-            lineage_path.with_name("agent-turn-queue.json"),
+            _turn_queue_path(lineage_path, turn_queue_subject),
             queue_id=turn_queue_subject,
             capacity=turn_queue_capacity,
             lease_coordinator=residency_lease_coordinator,
@@ -280,6 +288,22 @@ class AgentControl:
         self._delivery_lease = residency_lease_coordinator.acquire(
             self._delivery_subject, self._residency_owner_id, 30.0
         )
+        self._turn_queue_lease_handle = LeaseHandle(
+            residency_lease_coordinator,
+            subject=turn_queue_subject,
+            owner_id=turn_queue_owner,
+        )
+        self._lineage_lease_handle = LeaseHandle(
+            residency_lease_coordinator,
+            subject=self._lineage_lease.subject,
+            owner_id=self._residency_owner_id,
+        )
+        self._delivery_lease_handle = LeaseHandle(
+            residency_lease_coordinator,
+            subject=self._delivery_subject,
+            owner_id=self._residency_owner_id,
+        )
+        self._lease_heartbeats_started = False
         self._delivery_store = AgentDeliveryStore(
             lineage_path.with_name("agent-deliveries.json"),
             leases=residency_lease_coordinator,
@@ -1879,6 +1903,11 @@ class AgentControl:
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
+        if not self._lease_heartbeats_started:
+            self._turn_queue_lease_handle.adopt_nowait(self._turn_queue_lease)
+            self._lineage_lease_handle.adopt_nowait(self._lineage_lease)
+            self._delivery_lease_handle.adopt_nowait(self._delivery_lease)
+            self._lease_heartbeats_started = True
         self._start_telemetry()
         self._scheduler.start()
         # Event-driven fulfilment for the fleet-idle case (persistent mode only;
@@ -1912,10 +1941,21 @@ class AgentControl:
             await self._scheduler.stop()
         finally:
             try:
-                if self._turn_queue_lease is not None:
-                    self._residency_lease_coordinator.release(self._turn_queue_lease)
-                    self._turn_queue_lease = None
+                if self._lease_heartbeats_started:
+                    await asyncio.gather(
+                        self._turn_queue_lease_handle.close(),
+                        self._lineage_lease_handle.close(),
+                        self._delivery_lease_handle.close(),
+                    )
+                    self._lease_heartbeats_started = False
+                else:
+                    for lease in (self._turn_queue_lease, self._lineage_lease, self._delivery_lease):
+                        try:
+                            self._residency_lease_coordinator.release(lease)
+                        except LeaseFencedError:
+                            pass
             finally:
+                self._turn_queue_lease = None
                 await self._telemetry.aclose()
 
     async def run_ready_turns(self, max_turns: int = 1) -> int:

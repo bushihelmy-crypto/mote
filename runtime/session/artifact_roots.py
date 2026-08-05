@@ -43,7 +43,13 @@ class SessionFileOpsArtifactRoots:
             return ()
         for session_dir in self._sessions_root.iterdir():
             rollout = session_dir / "rollout.jsonl"
-            if session_dir.name in self._excluded_session_ids or not session_dir.is_dir() or not rollout.is_file():
+            activation = session_dir / "stream-manifest.json"
+            if (
+                session_dir.name in self._excluded_session_ids
+                or not session_dir.is_dir()
+                or not rollout.is_file()
+                or not activation.is_file()
+            ):
                 continue
             log = SessionLog(session_dir.name, base_dir=str(self._sessions_root))
             operations.append(
@@ -54,6 +60,7 @@ class SessionFileOpsArtifactRoots:
                     artifact_repository=self._repository,
                     artifact_lifecycle_root=session_dir / "artifact-lifecycle",
                     lock_root=log.runtime_root / "file-locks",
+                    event_sink=log.commit_offline,
                     event_source=lambda log=log: iter_file_operations_events(log.iter_events()),
                 )
             )

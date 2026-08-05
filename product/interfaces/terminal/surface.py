@@ -57,6 +57,7 @@ from mote.product.presentation.rich_rendering.builders import linkify, media_cap
 from mote.product.presentation.rich_rendering.builders import render_image as _render_image
 from mote.product.presentation.rich_rendering.builders import (
     render_result_detail,
+    system_reminder_text,
     task_progress_text,
     tool_body_syntax,
     tool_completed_text,
@@ -315,10 +316,7 @@ class TerminalSurface(BaseSurface):
 
     def render_system_reminder(self, ev: Any) -> None:
         self._end_stream()
-        line = Text()
-        line.append(NOTE + " ", style=Palette.DIM)
-        line.append_text(linkify(getattr(ev, "text", "") or "", base_style=Palette.DIM))
-        self._console.print(line)
+        self._console.print(system_reminder_text(ev))
 
     def render_error(self, ev: Any) -> None:
         self._end_stream()
