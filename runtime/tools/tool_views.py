@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from mote.contracts.config.tool import ToolEffectStoreConfig, ToolResultLimitConfig
-from mote.runtime.tools.effect_store import ToolEffectStore
+from mote.contracts.config.tool import ToolResultLimitConfig
 from mote.runtime.tools.tool_catalog import BoundToolCatalog, NativeToolCatalog, XmlToolCatalog
 
 
@@ -100,12 +99,4 @@ class ToolExecutorViews:
 
     @property
     def limit_config(self) -> ToolResultLimitConfig:
-        raise NotImplementedError
-
-    @property
-    def effect_store_config(self) -> ToolEffectStoreConfig:
-        raise NotImplementedError
-
-    @property
-    def effect_store(self) -> ToolEffectStore | None:
         raise NotImplementedError

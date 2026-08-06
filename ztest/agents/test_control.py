@@ -28,6 +28,8 @@ class FakeRole:
         self._session_id = session_id
         self.state = types.SimpleNamespace(msg_buffer=MessageQueue())
         self.observed_turns = []
+        self.interrupt_recorded = False
+        self.interrupt_settled = False
 
     @property
     def session_id(self):
@@ -43,6 +45,14 @@ class FakeRole:
         drained = self.state.msg_buffer.pop_all()
         self.observed_turns.append([m.content for m in drained])
         return "ok"
+
+    async def interrupt_active_run(self):
+        self.interrupt_recorded = True
+        return types.SimpleNamespace(run_id=self.session_id)
+
+    async def settle_interrupted_run(self, permit):
+        assert self.interrupt_recorded
+        self.interrupt_settled = True
 
     def dump(self):
         return {"session_id": self._session_id}
@@ -263,6 +273,59 @@ async def test_interrupt_idle_agent_marks_interrupted(control):
     control.add_agent(rt)
     status = await control.interrupt("a")
     assert status == AgentStatus.INTERRUPTED
+
+
+@pytest.mark.asyncio
+async def test_interrupt_active_turn_records_durable_fact_before_cancel(control):
+    runtime = make_runtime("a", status=AgentStatus.RUNNING)
+    runtime.active_turn = True
+    cancelled = asyncio.Event()
+
+    async def driver():
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            assert runtime.role.interrupt_recorded
+            cancelled.set()
+            raise
+
+    runtime.task = asyncio.create_task(driver())
+    control.add_agent(runtime)
+    await asyncio.sleep(0)
+
+    assert await control.interrupt("a") == AgentStatus.RUNNING
+    assert cancelled.is_set()
+    assert runtime.role.interrupt_settled
+
+
+@pytest.mark.asyncio
+async def test_interrupt_durable_failure_does_not_cancel_active_turn(control):
+    runtime = make_runtime("a", status=AgentStatus.RUNNING)
+    runtime.active_turn = True
+    cancelled = asyncio.Event()
+
+    async def reject_interrupt():
+        raise RuntimeError("durable interrupt failed")
+
+    async def driver():
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    runtime.role.interrupt_active_run = reject_interrupt
+    runtime.task = asyncio.create_task(driver())
+    control.add_agent(runtime)
+
+    with pytest.raises(RuntimeError, match="durable interrupt failed"):
+        await control.interrupt("a")
+    assert not runtime.task.cancelled()
+    assert not cancelled.is_set()
+
+    runtime.task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.task
 
 
 def test_format_completion_notification():

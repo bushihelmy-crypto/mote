@@ -24,6 +24,7 @@ from mote.runtime.agent.component_keys import (
     CONTEXT_VISIBILITY,
     DIAGNOSTICS_BUFFER,
     EVENT_FABRIC,
+    EXECUTION_RECONCILER,
     EXECUTOR,
     FILE_OPERATIONS,
     FILE_WATCH_SERVICE,
@@ -31,11 +32,13 @@ from mote.runtime.agent.component_keys import (
     HOOK_MANAGER,
     INFERENCE_SUBSYSTEMS_FACTORY,
     LSP_SERVICE,
+    PENDING_ACT_SERVICE,
     PROMPT_POLICY,
     REPO_INDEX,
     RESOURCE_REGISTRY,
     ROUTER,
     RUN_COMPLETION_POLICY,
+    RUN_INTERRUPT_SERVICE,
     RUNTIME_HOST,
     SANDBOX_RUNTIME,
     SECRET_STORE,
@@ -43,6 +46,7 @@ from mote.runtime.agent.component_keys import (
     SESSION_LOG,
     SESSION_MANAGER,
     SESSION_PROJECTION,
+    SESSION_RUN_WRITER_GUARD,
     SKILL_MANAGER,
     STATE_CTL,
     SUBSCRIPTION_STATE_STORE,
@@ -79,9 +83,13 @@ if TYPE_CHECKING:
     from mote.runtime.interactive.host import RuntimeHost
     from mote.runtime.resources import ResourceRegistry
     from mote.runtime.session import SessionLog
+    from mote.runtime.session.execution_reconciliation import RuntimeExecutionReconciler
+    from mote.runtime.session.pending_act import RuntimePendingActService
     from mote.runtime.session.projection import SessionLiveProjection
+    from mote.runtime.session.run_interrupt import RunInterruptService
     from mote.runtime.session.subscribers import CheckpointSubscriber, TitleSubscriber
     from mote.runtime.session.workspace import SessionWorkspace
+    from mote.runtime.session.writer_guard import SessionRunWriterGuard
     from mote.runtime.tools.tool_executor import ToolExecutor
 
 
@@ -181,6 +189,22 @@ class RoleComponentAccessors(Generic[OutputT]):
     @property
     def session_fact_committer(self):
         return self._graph.get(SESSION_FACT_COMMITTER)
+
+    @property
+    def pending_act_service(self) -> "RuntimePendingActService":
+        return self._graph.get(PENDING_ACT_SERVICE)
+
+    @property
+    def execution_reconciler(self) -> "RuntimeExecutionReconciler":
+        return self._graph.get(EXECUTION_RECONCILER)
+
+    @property
+    def run_interrupt_service(self) -> "RunInterruptService":
+        return self._graph.get(RUN_INTERRUPT_SERVICE)
+
+    @property
+    def session_run_writer_guard(self) -> "SessionRunWriterGuard":
+        return self._graph.get(SESSION_RUN_WRITER_GUARD)
 
     @property
     def telemetry(self):

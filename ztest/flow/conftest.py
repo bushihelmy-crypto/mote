@@ -299,26 +299,32 @@ class FakeExecutor:
         *,
         results: Optional[dict[str, FakeResult]] = None,
         default: Optional[FakeResult] = None,
-        ledgered: Optional[set[str]] = None,
+        external: Optional[set[str]] = None,
     ):
         self.results = results or {}
         self.default = default or FakeResult()
         self.calls: list[dict] = []
-        # Names the fake would EXTERNAL-ledger; drives will_ledger so a test can
-        # exercise the loop's pre-execution checkpoint path.
-        self.ledgered = set(ledgered or ())
+        self.external = set(external or ())
 
     async def run_command(self, name, args, result_id=None):
         self.calls.append({"name": name, "args": args, "result_id": result_id})
         return self.results.get(name, self.default)
 
-    def will_ledger(self, name, args, result_id) -> bool:
-        return result_id is not None and name in self.ledgered
-
 
 class FakeToolExecutionPort:
     def __init__(self, executor):
         self.executor = executor
+        self.approval = None
+        self.fileops_transactions = {}
+
+    def bind_approval_coordinator(self, coordinator):
+        self.approval = coordinator
+
+    def bind_fileops_transaction(self, request, transaction_id):
+        self.fileops_transactions[request.call_id] = transaction_id
+
+    async def authorize(self, request):
+        return ToolDispatchResult(True)
 
     async def dispatch(self, request):
         result = await self.executor.run_command(
@@ -330,6 +336,24 @@ class FakeToolExecutionPort:
 
     def release(self, snapshot):
         return True
+
+    def invocation_identity(self, request):
+        from mote.contracts.tool import (
+            ToolAttemptOrdinal,
+            ToolInvocationId,
+            ToolInvocationIdentity,
+            tool_arguments_digest,
+        )
+
+        return ToolInvocationIdentity(
+            ToolInvocationId(request.call_id),
+            ToolAttemptOrdinal(1),
+            f"{request.tool_name}@1",
+            request.registry_revision,
+            tool_arguments_digest(request.arguments),
+            "fake-session",
+            "fake-run",
+        )
 
 
 class FakeMemory:
@@ -613,7 +637,7 @@ def make_engine(tmp_path):
                 "",
                 {"type": "object", "properties": {}},
                 f"{name}@1",
-                "external" if name in executor.ledgered else "pure",
+                "external" if name in executor.external else "pure",
             )
             for name in ctx.tools
         )
@@ -631,6 +655,9 @@ def make_engine(tmp_path):
         active_holder = [active]
         bg_holder = [bg_pool]
         reported: list = []
+        accepted_pending_acts: list = []
+        settled_pending_acts: list = []
+        external_effects: list = []
 
         def is_active() -> bool:
             return active_holder[0]
@@ -661,6 +688,98 @@ def make_engine(tmp_path):
             session_fact_sink=FakeSessionFactSink(),
             drain_writes=drain_writes or default_drain,
         )
+
+        class FakePendingActAcceptance:
+            async def accept(self, actions, snapshot, messages):
+                from types import SimpleNamespace
+
+                from mote.contracts.execution.pending_act import PendingAction
+                from mote.contracts.tool import ToolEffect, ToolInvocationId
+
+                accepted_pending_acts.append((actions, snapshot, messages))
+                pending = tuple(
+                    PendingAction(
+                        ordinal,
+                        ToolInvocationId(action.action_id),
+                        action.action_id,
+                        action.name,
+                        f"{action.name}@1",
+                        snapshot.registry_revision,
+                        ToolEffect(
+                            next(item.effect for item in snapshot.catalog.definitions if item.name == action.name)
+                        ),
+                        0,
+                    )
+                    for ordinal, action in enumerate(actions)
+                )
+                return SimpleNamespace(
+                    frontier=SimpleNamespace(
+                        frontier_id=SimpleNamespace(value="fake-frontier"),
+                        model_call_id="fake-model-call",
+                        actions=pending,
+                    )
+                )
+
+            async def settle(
+                self,
+                acceptance,
+                messages,
+                *,
+                continue_inference,
+                effect_receipts=(),
+                action_results=(),
+                skipped=None,
+                rejected_approval_request_id=None,
+            ):
+                settled_pending_acts.append(
+                    (
+                        acceptance,
+                        messages,
+                        continue_inference,
+                        effect_receipts,
+                        action_results,
+                    )
+                )
+
+            def resume(self, frontier, snapshot):
+                raise AssertionError("flow fake has no recovered PendingAct")
+
+            async def begin_external_effect(self, acceptance, ordinal, identity):
+                from mote.contracts.ports.execution.pending_act import ExternalEffectPermit
+
+                external_effects.append(("started", identity))
+                return ExternalEffectPermit(getattr(acceptance, "frontier", acceptance), identity)
+
+            async def begin_invoke(self, acceptance, ordinal, identity):
+                from mote.contracts.execution.pending_act_claim import PendingActClaimId, PendingActInvokePermit
+
+                return PendingActInvokePermit(
+                    PendingActClaimId("fake-claim"),
+                    acceptance.frontier.frontier_id,
+                    "fake-owner",
+                    "fake-incarnation",
+                    0,
+                    1,
+                    getattr(acceptance.frontier, "revision", 0),
+                    identity.invocation_id,
+                    acceptance.frontier.actions[ordinal].fileops_transaction_id,
+                )
+
+            async def mark_external_effect_in_doubt(self, permit, *, evidence):
+                external_effects.append(("in_doubt", permit.identity, evidence))
+
+            async def resolve_approval(self, acceptance, intent):
+                from mote.contracts.ports.tool.approval import ToolApprovalResolution
+
+                return ToolApprovalResolution(True)
+
+        class FakeExecutionRestore:
+            def snapshot(self):
+                from mote.contracts.execution.restore import NoPendingExecution
+
+                return NoPendingExecution()
+
+        pending_act_port = FakePendingActAcceptance()
         engine = ExecutionEngine(
             inference_engine=inference_engine,
             command_channel=channel,
@@ -674,12 +793,18 @@ def make_engine(tmp_path):
             report_inference_result=report_inference_result,
             inference_checkpoint=checkpoint,
             execution_transaction=transaction,
+            pending_act_acceptance=pending_act_port,
+            execution_restore=FakeExecutionRestore(),
             turn_context_bus=turn_context_bus,
             get_cwd=get_cwd,
             output_engine=output_engine,
             **engine_kwargs,
         )
         engine._tool_snapshot = provider.tool_snapshot
+        engine.accepted_pending_acts = accepted_pending_acts
+        engine.settled_pending_acts = settled_pending_acts
+        engine.pending_act_port = pending_act_port
+        engine.external_effects = external_effects
         return FlowBundle(
             engine=engine,
             ctx=ctx,

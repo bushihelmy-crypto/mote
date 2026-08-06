@@ -20,6 +20,16 @@ import asyncio
 import pytest
 
 from mote.contracts.conversation import CauseBy
+from mote.contracts.execution.pending_act import (
+    PendingActFrontier,
+    PendingActFrontierId,
+    PendingAction,
+    ToolCompositionDefinitionRef,
+)
+from mote.contracts.ports.execution.pending_act import PendingActResume
+from mote.contracts.tool import ToolEffect, ToolInvocationId
+from mote.contracts.tool.actions import ToolCallAction
+from mote.contracts.tool.errors import ToolNotFoundError
 from mote.ztest.artifact_fakes import artifact_media
 
 from .conftest import FakeChannel, FakeExecutor, FakeResult, FakeThinkEngine
@@ -49,7 +59,8 @@ async def test_act_executes_in_order_and_passes_result_id(make_engine):
     assert executor.calls[0]["result_id"] == "t1"
     assert executor.calls[1]["result_id"] == "t2"
 
-    content, executed = channel.recorded_turns[0]
+    content, _ = channel.recorded_calls[0]
+    executed = channel.recorded_results[0]
     assert [entry.name for entry in executed] == ["Read", "Glob"]
     assert all(entry.success for entry in executed)
     assert "readout" in rsp.content and "globout" in rsp.content
@@ -72,7 +83,7 @@ async def test_act_first_failure_skips_remaining(make_engine):
     # Only the failing command actually executed.
     assert [c["name"] for c in executor.calls] == ["Read"]
 
-    _, executed = channel.recorded_turns[0]
+    executed = channel.recorded_results[0]
     assert executed[0].success is False
     # Remaining are synthesized SKIPPED entries.
     for entry in executed[1:]:
@@ -116,7 +127,7 @@ async def test_act_propagates_media(make_engine):
 
     await b.engine._actions.execute()
 
-    _, executed = channel.recorded_turns[0]
+    executed = channel.recorded_results[0]
     assert executed[0].media == [image, pdf]
 
 
@@ -129,7 +140,7 @@ async def test_act_keeps_structured_media_as_the_authoritative_entry(make_engine
 
     await b.engine._actions.execute()
 
-    _, executed = channel.recorded_turns[0]
+    executed = channel.recorded_results[0]
     assert executed[0].media == [media]
     assert not hasattr(executed[0], "images")
     assert not hasattr(executed[0], "pdfs")
@@ -142,8 +153,8 @@ async def test_act_no_commands_records_notice(make_engine):
 
     rsp = await b.engine._actions.execute()
 
-    content, executed = channel.recorded_turns[0]
-    assert executed == []
+    assert channel.recorded_calls == []
+    assert channel.recorded_results == [[]]
     assert "No valid commands found" in rsp.content
     assert b.inference_engine.join_calls == 1
 
@@ -156,19 +167,219 @@ async def test_act_passes_think_content_to_record_turn(make_engine):
 
     await b.engine._actions.execute()
 
-    content, _ = channel.recorded_turns[0]
+    content, _ = channel.recorded_calls[0]
     assert content == "assistant reasoning"
 
 
-async def test_act_dispatcher_filters_actions_with_context_tools(make_engine):
+async def test_act_rejects_tool_absent_from_pinned_snapshot(make_engine):
     channel = FakeChannel(commands=[_cmd("Read", id="t1"), _cmd("Unknown", id="t2")])
     b = make_engine(channel=channel, tools=["Read", "Glob", "AskUserQuestion"])
     b.engine._ctx = b.ctx
 
-    await b.engine._actions.execute()
+    with pytest.raises(
+        ToolNotFoundError,
+        match="tool not found or expired from the pinned snapshot: Unknown",
+    ):
+        await b.engine._actions.execute()
 
-    assert [call["name"] for call in b.executor.calls] == ["Read"]
-    assert channel.iter_calls == []
+    assert b.executor.calls == []
+    assert b.engine.accepted_pending_acts == []
+
+
+async def test_act_resume_drives_existing_frontier_without_creating_a0(make_engine):
+    channel = FakeChannel()
+    executor = FakeExecutor(results={"Read": FakeResult(output="restored")})
+    b = make_engine(channel=channel, executor=executor, tools=["Read"])
+    b.engine._ctx = b.ctx
+    frontier = PendingActFrontier(
+        1,
+        PendingActFrontierId("frontier-1"),
+        "session-1",
+        "run-1",
+        "model-call-1",
+        0,
+        ToolCompositionDefinitionRef(
+            "fake",
+            "1",
+            "fake",
+            "fake-application-generation",
+            "fake",
+            "sha256-provider",
+            "fake-application-generation",
+            "fake-capabilities",
+        ),
+        (PendingAction(0, ToolInvocationId("t1"), "t1", "Read", "Read@1", 1, ToolEffect.PURE, 0),),
+    )
+
+    def resume(current, snapshot):
+        assert current is frontier
+        return PendingActResume(frontier, (ToolCallAction(action_id="t1", name="Read", arguments={}),))
+
+    b.engine.pending_act_port.resume = resume
+    response = await b.engine._actions.resume(frontier)
+
+    assert b.engine.accepted_pending_acts == []
+    assert [call["name"] for call in executor.calls] == ["Read"]
+    assert b.engine.settled_pending_acts[0][2] is True
+    assert "restored" in response.content
+
+
+async def test_act_resume_does_not_dispatch_already_committed_action(make_engine):
+    channel = FakeChannel()
+    executor = FakeExecutor(results={"Read": FakeResult(output="must-not-run")})
+    b = make_engine(channel=channel, executor=executor, tools=["Read"])
+    b.engine._ctx = b.ctx
+    frontier = PendingActFrontier(
+        1,
+        PendingActFrontierId("frontier-1"),
+        "session-1",
+        "run-1",
+        "model-call-1",
+        0,
+        ToolCompositionDefinitionRef(
+            "fake",
+            "1",
+            "fake",
+            "fake-application-generation",
+            "fake",
+            "sha256-provider",
+            "fake-application-generation",
+            "fake-capabilities",
+        ),
+        (PendingAction(0, ToolInvocationId("t1"), "t1", "Read", "Read@1", 1, ToolEffect.PURE, 0),),
+    )
+
+    b.engine.pending_act_port.resume = lambda current, snapshot: PendingActResume(
+        current,
+        (ToolCallAction(action_id="t1", name="Read", arguments={}),),
+        frozenset({"t1"}),
+    )
+
+    response = await b.engine._actions.resume(frontier)
+
+    assert executor.calls == []
+    assert "[RECOVERED]" in response.content
+    assert channel.recorded_results == [[]]
+    assert b.engine.settled_pending_acts[0][1] == ()
+    assert b.engine.settled_pending_acts[0][4] == ()
+
+
+async def test_act_resume_binds_new_external_receipt_by_invocation_identity(
+    make_engine,
+):
+    channel = FakeChannel()
+    executor = FakeExecutor(
+        results={"External": FakeResult(output="new result")},
+        external={"External"},
+    )
+    b = make_engine(channel=channel, executor=executor, tools=["External"])
+    b.engine._ctx = b.ctx
+    frontier = PendingActFrontier(
+        1,
+        PendingActFrontierId("frontier-1"),
+        "session-1",
+        "run-1",
+        "model-call-1",
+        0,
+        ToolCompositionDefinitionRef(
+            "fake",
+            "1",
+            "fake",
+            "fake-application-generation",
+            "fake",
+            "sha256-provider",
+            "fake-application-generation",
+            "fake-capabilities",
+        ),
+        (
+            PendingAction(
+                0,
+                ToolInvocationId("old-invocation"),
+                "old-action",
+                "External",
+                "External@1",
+                1,
+                ToolEffect.EXTERNAL,
+                0,
+            ),
+            PendingAction(
+                1,
+                ToolInvocationId("new-action"),
+                "new-action",
+                "External",
+                "External@1",
+                1,
+                ToolEffect.EXTERNAL,
+                0,
+            ),
+        ),
+    )
+    b.engine.pending_act_port.resume = lambda current, snapshot: PendingActResume(
+        current,
+        (
+            ToolCallAction(action_id="old-action", name="External", arguments={}),
+            ToolCallAction(action_id="new-action", name="External", arguments={}),
+        ),
+        frozenset({"old-invocation"}),
+    )
+
+    await b.engine._actions.resume(frontier)
+
+    assert [call["result_id"] for call in executor.calls] == ["new-action"]
+    receipt = b.engine.settled_pending_acts[0][3][0]
+    assert receipt.identity.invocation_id == ToolInvocationId("new-action")
+
+
+async def test_recovered_act_uses_explicitly_restored_snapshot_without_inference(
+    make_engine,
+):
+    channel = FakeChannel()
+    executor = FakeExecutor(results={"Read": FakeResult(output="restored")})
+    b = make_engine(channel=channel, executor=executor, tools=["Read"])
+    b.engine._ctx = b.ctx
+    restored_snapshot = b.provider.tool_snapshot
+    b.engine._tool_snapshot = None
+    b.engine.restore_tool_snapshot(restored_snapshot)
+    frontier = PendingActFrontier(
+        1,
+        PendingActFrontierId("frontier-1"),
+        "session-1",
+        "run-1",
+        "model-call-1",
+        0,
+        ToolCompositionDefinitionRef(
+            "fake",
+            "1",
+            "fake",
+            "fake-application-generation",
+            "fake",
+            "sha256-provider",
+            "fake-application-generation",
+            "fake-capabilities",
+        ),
+        (
+            PendingAction(
+                0,
+                ToolInvocationId("t1"),
+                "t1",
+                "Read",
+                "Read@1",
+                1,
+                ToolEffect.PURE,
+                0,
+            ),
+        ),
+    )
+    b.engine.pending_act_port.resume = lambda current, snapshot: PendingActResume(
+        current,
+        (ToolCallAction(action_id="t1", name="Read", arguments={}),),
+    )
+
+    response = await b.engine._actions.resume(frontier)
+
+    assert b.inference_engine.start_calls == []
+    assert [call["name"] for call in executor.calls] == ["Read"]
+    assert "restored" in response.content
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +404,7 @@ async def test_act_external_checkpoint_records_call_and_drains_before_execution(
     # the assistant tool-call message and flush it to disk BEFORE the body runs,
     # then record only the results afterwards (no single-shot record_turn).
     channel = FakeChannel(commands=[_cmd("Bash", id="t1", args={"cmd": "curl x"})])
-    executor = FakeExecutor(results={"Bash": FakeResult(output="done")}, ledgered={"Bash"})
+    executor = FakeExecutor(results={"Bash": FakeResult(output="done")}, external={"Bash"})
     writer = _FakeWriter()
     b = make_engine(channel=channel, executor=executor, drain_writes=writer.drain)
     b.engine._ctx = b.ctx
@@ -205,26 +416,30 @@ async def test_act_external_checkpoint_records_call_and_drains_before_execution(
     assert len(channel.recorded_calls) == 1
     _, snap = channel.recorded_calls[0]
     assert snap[0].output == ""
-    assert writer.drain_calls == 1
+    assert writer.drain_calls == 0
     # Results recorded after, with the real output; the single-shot path is skipped.
     assert channel.recorded_results and channel.recorded_results[0][0].output == "done"
     assert channel.recorded_turns == []
     assert executor.calls[0]["name"] == "Bash"
+    assert [item[0] for item in b.engine.external_effects] == ["started"]
+    receipt = b.engine.settled_pending_acts[0][3][0]
+    assert receipt.disposition == "succeeded"
+    assert receipt.identity.invocation_id.value == "t1"
 
 
 async def test_act_non_external_turn_skips_checkpoint(make_engine):
-    # A turn with no ledgered tool is committed as one transaction after effects.
+    # A PURE turn is committed as one transaction after effects.
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
-    executor = FakeExecutor(results={"Read": FakeResult(output="ok")})  # nothing ledgered
+    executor = FakeExecutor(results={"Read": FakeResult(output="ok")})
     writer = _FakeWriter()
     b = make_engine(channel=channel, executor=executor, drain_writes=writer.drain)
     b.engine._ctx = b.ctx
 
     await b.engine._actions.execute()
 
-    assert channel.recorded_calls == []
-    assert channel.recorded_results == []
-    assert len(channel.recorded_turns) == 1
+    assert len(channel.recorded_calls) == 1
+    assert len(channel.recorded_results) == 1
+    assert channel.recorded_turns == []
     assert writer.drain_calls == 0
 
 
@@ -253,7 +468,7 @@ class _RaisingExecutor(FakeExecutor):
 
 
 async def test_act_checkpoint_interrupt_closes_pairing_then_reraises(make_engine):
-    # An EXTERNAL (ledgered -> checkpoint) turn whose SECOND call is interrupted
+    # An EXTERNAL turn whose SECOND call is interrupted
     # by a Ctrl+C (CancelledError) mid-body. The assistant tool_call message was
     # already recorded up front, so leaving now would strand two tool_use ids
     # without tool_results (the very thing that 400s the next request). The loop
@@ -266,7 +481,7 @@ async def test_act_checkpoint_interrupt_closes_pairing_then_reraises(make_engine
             _cmd("RunGraph", id="t3"),
         ]
     )
-    executor = FakeExecutor(default=FakeResult(output="done"), ledgered={"RunGraph"})
+    executor = FakeExecutor(default=FakeResult(output="done"), external={"RunGraph"})
     # First call settles normally; the SECOND raises CancelledError mid-body.
     calls_seen = {"n": 0}
 
@@ -286,29 +501,20 @@ async def test_act_checkpoint_interrupt_closes_pairing_then_reraises(make_engine
     with pytest.raises(asyncio.CancelledError):
         await b.engine._actions.execute()
 
-    # The assistant call was checkpointed; results were recorded despite the
-    # interrupt, so EVERY emitted tool_call id now has a paired result.
-    assert len(channel.recorded_results) == 1
-    recorded = channel.recorded_results[0]
-    assert [entry.action_id for entry in recorded] == ["t1", "t2", "t3"]
-    # t1 ran to completion; t2 (interrupted) and t3 (never reached) are closed
-    # with an INTERRUPTED marker and marked unsuccessful.
-    assert recorded[0].output == "done" and recorded[0].success is True
-    assert "[INTERRUPTED]" in recorded[1].output and recorded[1].success is False
-    assert "[INTERRUPTED]" in recorded[2].output and recorded[2].success is False
-    # The single-shot record_turn was NOT used (checkpoint path re-raised).
+    # A0 exists, but ActionExecutionService must not synthesize a second truth
+    # after cancellation. Durable interrupt settlement owns ToolResult pairing.
+    assert len(channel.recorded_calls) == 1
+    assert channel.recorded_results == []
     assert channel.recorded_turns == []
 
 
 async def test_act_non_checkpoint_interrupt_records_nothing(make_engine):
-    # A non-ledgered (non-checkpoint) turn interrupted mid-body: nothing was
+    # A PURE turn interrupted mid-body: no partial result was
     # recorded yet (record_turn runs only on the success tail), so there is no
     # dangling tool_use to repair. The loop must simply propagate the interrupt
     # without recording a partial turn.
     channel = FakeChannel(commands=[_cmd("Read", id="t1")])
-    executor = _RaisingExecutor(
-        raise_on="Read", exc=asyncio.CancelledError(), results={}, default=FakeResult()
-    )  # nothing ledgered -> no checkpoint
+    executor = _RaisingExecutor(raise_on="Read", exc=asyncio.CancelledError(), results={}, default=FakeResult())
     writer = _FakeWriter()
     b = make_engine(channel=channel, executor=executor, drain_writes=writer.drain)
     b.engine._ctx = b.ctx
@@ -316,6 +522,6 @@ async def test_act_non_checkpoint_interrupt_records_nothing(make_engine):
     with pytest.raises(asyncio.CancelledError):
         await b.engine._actions.execute()
 
-    assert channel.recorded_calls == []
+    assert len(channel.recorded_calls) == 1
     assert channel.recorded_results == []
     assert channel.recorded_turns == []

@@ -80,10 +80,10 @@ class PortHumanChannel:
             decision = await self._port.decide_approval(self._ctx, request)
             outcome = decision.outcome
             if outcome == "accept":
-                return "allow_once"
+                return ApprovalChoice.allow_once(decision.edited_args)
             if outcome == "always_allow":
-                return "allow_session"
-            return "deny"
+                return ApprovalChoice.allow_session(decision.edited_args)
+            return ApprovalChoice.reject()
 
     async def open_handoff(
         self,

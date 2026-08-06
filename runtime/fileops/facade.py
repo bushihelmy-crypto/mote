@@ -40,6 +40,7 @@ from mote.contracts.file.views import (
     ReadRequest,
     TextReadRequest,
 )
+from mote.contracts.ports.execution.reconciliation import FileTransactionReceipt, ReceiptQueryState
 from mote.runtime.artifacts.repository import ContentAddressedArtifactStore
 from mote.runtime.fileops.byte_views import ByteViewService
 from mote.runtime.fileops.candidate_discovery import CandidateDiscoveryService
@@ -89,6 +90,7 @@ from mote.runtime.fileops.snapshots import SealedSnapshotReader
 from mote.runtime.fileops.text_sources import TextSourceService
 from mote.runtime.fileops.text_views import TextViewService
 from mote.runtime.fileops.transactions import DurableEditPlanArtifacts, MutationCoordinator, ScopedMutationArtifacts
+from mote.runtime.tools.execution_context import current_fileops_transaction_id
 
 
 def _directory_readable(path: Path) -> bool:
@@ -523,7 +525,25 @@ class FileOperations:
                 return snapshot, self.artifacts.read_bytes(snapshot.artifact)
 
     def plan_file_edit(self, request: EditPlanRequest) -> EditPlan:
-        return self.edit_planner.plan(request)
+        return self.edit_planner.plan(request, transaction_id=current_fileops_transaction_id())
+
+    def query_file_transaction(self, transaction_id: str) -> FileTransactionReceipt:
+        """Read the canonical FileOps transaction without reconciling it."""
+        if type(transaction_id) is not str or not transaction_id:
+            raise ValueError("transaction id must be a non-empty string")
+        record = self.journal.get(transaction_id)
+        if record is None or record.status is TransactionStatus.PREPARED:
+            return FileTransactionReceipt(
+                transaction_id,
+                (ReceiptQueryState.ABSENT if record is None else ReceiptQueryState.IN_DOUBT),
+                detail="" if record is None else "transaction remains prepared",
+            )
+        state = {
+            TransactionStatus.COMMITTED: ReceiptQueryState.COMMITTED,
+            TransactionStatus.ABORTED: ReceiptQueryState.ABORTED,
+            TransactionStatus.IN_DOUBT: ReceiptQueryState.IN_DOUBT,
+        }[record.status]
+        return FileTransactionReceipt(transaction_id, state, record.committed_versions, record.detail)
 
     def commit_edit_plan(
         self,
@@ -617,7 +637,12 @@ class FileOperations:
         root = path_token(self._get_project_root())
         resolved_root = os.path.realpath(root.native)
         specs: list[LockSpec] = [
-            LockSpec(PROJECT_LOCK_LEVEL, project_identity(root).key, LockMode.SHARED, root.display)
+            LockSpec(
+                PROJECT_LOCK_LEVEL,
+                project_identity(root).key,
+                LockMode.SHARED,
+                root.display,
+            )
         ]
         canonical: list[str] = []
         for value in targets:
@@ -633,7 +658,14 @@ class FileOperations:
             if not inside:
                 raise ValueError(f"generated target is outside project root: {target.display}")
             canonical.append(target.display)
-            specs.append(LockSpec(NAME_LOCK_LEVEL, name_identity(target).key, LockMode.EXCLUSIVE, target.display))
+            specs.append(
+                LockSpec(
+                    NAME_LOCK_LEVEL,
+                    name_identity(target).key,
+                    LockMode.EXCLUSIVE,
+                    target.display,
+                )
+            )
             if os.path.lexists(target.native):
                 specs.append(
                     LockSpec(

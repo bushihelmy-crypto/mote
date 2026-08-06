@@ -4,14 +4,14 @@ A single axis orthogonal to permissions: *where does a tool's effect land, and
 is that effect recoverable if the run is interrupted mid-call?*
 
 - ``PURE``     — no side effect (Read/Grep/Glob/LS). Re-running is always safe;
-                 the result is re-derivable. The effect ledger ignores these.
+                 the result is re-derivable. PendingAct may recompute these.
 - ``LOCAL``    — mutates only local, recoverable state (the filesystem). Already
                  protected by durable File Operations transactions,
                  so re-running an interrupted call is safe. Ledger ignores these.
 - ``EXTERNAL`` — the effect escapes the locally-recoverable boundary (network,
                  IPC, a subprocess, a human-visible action, a spawned agent, an
                  MCP server). There is no before-image and replay may duplicate
-                 the effect, so these are the ONLY calls the effect ledger tracks
+                 the effect, so PendingAct must durably fence these before invoke
                  (started/completed/failed) and the ONLY ones guarded against
                  blind re-execution after a crash.
 
@@ -34,7 +34,7 @@ from enum import Enum
 class ToolEffect(str, Enum):
     """Where a tool's side effect lands and whether replay is safe.
 
-    A ``str`` enum so the value serializes directly into the ledger records and
+    A ``str`` enum so the value serializes directly into durable PendingAct facts and
     can be compared against a stored string without conversion.
     """
 

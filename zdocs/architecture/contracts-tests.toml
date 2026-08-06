@@ -641,7 +641,7 @@ command = "python -B -m pytest ztest/architecture ztest/contracts -q --tb=short 
 
 [[symbol_test]]
 symbol = "mote.contracts.constants.messages.TOOL_CALL_ID"
-suites = ["ztest/context/compaction/test_erase.py", "ztest/context/compaction/test_recovery.py", "ztest/context/conftest.py", "ztest/parser/test_native_channel.py", "ztest/session/test_reconcile.py"]
+suites = ["ztest/context/compaction/test_erase.py", "ztest/context/compaction/test_recovery.py", "ztest/context/conftest.py", "ztest/parser/test_native_channel.py"]
 command = "python -B -m pytest ztest/architecture ztest/contracts -q --tb=short -p no:cacheprovider"
 
 [[symbol_test]]

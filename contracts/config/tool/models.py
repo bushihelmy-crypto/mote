@@ -78,25 +78,10 @@ class ToolResultLimitConfig(ConfigModel):
     compression_max_input_chars: int = COMPRESSION_MAX_INPUT_CHARS
 
 
-class ToolEffectStoreConfig(ConfigModel):
-    """Knobs for the EXTERNAL-tool-effect idempotency ledger (crash-replay guard).
-
-    Sibling of :class:`ToolResultLimitConfig`: a pure-data, tool-execution-scope
-    policy the :class:`ToolExecutor` owns. When enabled, the executor records a
-    durable started/completed/failed entry per EXTERNAL ``(session, tool_call_id)``
-    around the tool body so a resume after a mid-call crash can tell a finished
-    call from an in-flight one (and heal a dangling one from the recorded result
-    instead of re-running its side effect). Disabling it reproduces the prior
-    no-ledger behavior — every call simply runs.
-    """
-
-    enabled: bool = True
-
-
 class LoopGuardConfig(ConfigModel):
     """Knobs for the tool-call loop guard (repeated-failure / no-progress detector).
 
-    Sibling of :class:`ToolEffectStoreConfig`: a pure-data, tool-execution-scope
+    A pure-data, tool-execution-scope
     policy the :class:`~mote.runtime.tools.tool_executor.ToolExecutor` wires as a
     ToolResultPolicy enrichment stage.
     It watches finished calls and, when a call thrashes, appends a nudge to that
@@ -172,7 +157,7 @@ class TemporalConfig(ConfigModel):
 class ToolSearchConfig(ConfigModel):
     """Master switch for the Tool Search subsystem (deferred-tool discovery).
 
-    Sibling of :class:`ToolResultLimitConfig` / :class:`ToolEffectStoreConfig`: a
+    Sibling of :class:`ToolResultLimitConfig`: a
     pure-data, tool-execution-scope policy. Per-role ``RoleSchema.deferred_tools``
     declares WHICH tools are hidden-until-discovered; this ``enabled`` flag is the
     global OVERRIDE that gates whether that declaration takes effect at all.

@@ -17,6 +17,8 @@ PDFS = "pdfs"
 # TOOL_CALL_ID: the call id on a tool-result message (role="tool").
 TOOL_CALLS = "tool_calls"
 TOOL_CALL_ID = "tool_call_id"
+TOOL_EFFECT_RECEIPT_ID = "tool_effect_receipt_id"
+TOOL_EFFECT_PRESENTATION_DIGEST = "tool_effect_presentation_digest"
 # TOOL_REFERENCES: names of tools the model just discovered via SearchTools, on a
 # tool-result message. On the Anthropic native wire (server-side tool-search,
 # "custom" path) the tool_result's content is rendered as a list of

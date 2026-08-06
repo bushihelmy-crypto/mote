@@ -276,7 +276,14 @@ class RoleComponents(RoleComponentAccessors[OutputT], Generic[OutputT]):
         if self._state.output_lease is not None:
             raise RuntimeError("an output lease is already active")
         restored = self._role._state_ctl.get_pending_output_restore()
-        run_id = str((restored or {}).get("run_id") or uuid4().hex)
+        projection = self.session_projection.snapshot()
+        pending_runs = tuple(projection.active_pending_act_by_run)
+        if len(pending_runs) > 1:
+            raise RuntimeError("Session has multiple active PendingAct runs")
+        restored_run_id = (restored or {}).get("run_id")
+        if restored_run_id is not None and pending_runs and restored_run_id != pending_runs[0]:
+            raise RuntimeError("output restore and PendingAct restore run identities differ")
+        run_id = str(restored_run_id or (pending_runs[0] if pending_runs else uuid4().hex))
         path = (
             SessionLog(
                 self._role.session_id,

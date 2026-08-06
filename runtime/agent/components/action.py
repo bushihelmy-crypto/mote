@@ -31,6 +31,7 @@ from mote.runtime.agent.component_keys import (
     PERMISSION_ENGINE,
     SECRET_STORE,
     SESSION_FACT_COMMITTER,
+    SESSION_PROJECTION,
     SKILL_MANAGER,
     TELEMETRY,
     TOOL_CALL_POLICY,
@@ -180,7 +181,9 @@ def dedupe_tools(tools: list[str]) -> list[str]:
     return deduped
 
 
-def build_args_limiter(executor: ToolExecutor[object]) -> Callable[[str, Any, str | None], Any]:
+def build_args_limiter(
+    executor: ToolExecutor[object],
+) -> Callable[[str, Any, str | None], Any]:
     """Adapt the executor's lossless large-argument persistence seam."""
 
     def limit(_tool_name: str, args: Any, call_id: str | None) -> Any:
@@ -235,11 +238,21 @@ def _build_tool_call_policy(ctx: RoleBuildContext, inputs: ActionComponentInputs
 
 def _build_permission_engine(ctx: RoleBuildContext, inputs: ActionComponentInputs):
     role = ctx.role
-    return build_permission_engine(
+    engine = build_permission_engine(
         role.role_schema.permissions,
         role=role,
         require_permission=any(toolset.requires_permission_gate for toolset in inputs.toolsets),
     )
+    if engine is None:
+        return None
+    projection = ctx.dep(SESSION_PROJECTION).snapshot()
+    for granted in projection.session_permission_rules:
+        engine.remember_approved_session(
+            granted.tool_name,
+            granted.permission_targets,
+            mutates_fs=granted.mutates_fs,
+        )
+    return engine
 
 
 def _build_tool_result_policy(ctx: RoleBuildContext):
@@ -276,7 +289,6 @@ def _build_executor(ctx: RoleBuildContext, inputs: ActionComponentInputs) -> Too
         tool_call_policy=ctx.dep(TOOL_CALL_POLICY),
         tool_result_policy=ctx.dep(TOOL_RESULT_POLICY),
         limit_config=tools_cfg.result_limit,
-        effect_store_config=tools_cfg.effect_store,
         loop_guard_config=tools_cfg.loop_guard,
         telemetry=ctx.dep(TELEMETRY),
         deferred_result_projector=deferred_projector,

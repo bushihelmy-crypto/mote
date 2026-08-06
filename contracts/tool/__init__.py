@@ -4,6 +4,7 @@ from mote.contracts.tool.arguments import ToolArguments, freeze_tool_arguments
 from mote.contracts.tool.calls import serialize_tool_call_args
 from mote.contracts.tool.effects import ToolEffect
 from mote.contracts.tool.execution import ToolExecutionKind
+from mote.contracts.tool.external_effect import ExternalEffectState, ToolEffectReceipt
 from mote.contracts.tool.identity import (
     ToolAttemptOrdinal,
     ToolInvocationId,
@@ -21,6 +22,8 @@ __all__ = [
     "NativeToolSchema",
     "ToolEffect",
     "ToolExecutionKind",
+    "ExternalEffectState",
+    "ToolEffectReceipt",
     "ToolAttemptOrdinal",
     "ToolInvocationId",
     "ToolInvocationIdentity",

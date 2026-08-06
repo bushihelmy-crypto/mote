@@ -21,8 +21,9 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generic, Mapping, TypeVar
 
-from mote.contracts.config.tool import LoopGuardConfig, ToolEffectStoreConfig, ToolResultLimitConfig
+from mote.contracts.config.tool import LoopGuardConfig, ToolResultLimitConfig
 from mote.contracts.foundation.errors.codes import RecoveryAction
+from mote.contracts.ports.tool.approval import ToolApprovalCoordinator
 from mote.contracts.ports.tool.deferred import DeferredResultProjector
 from mote.contracts.ports.tool.policy import ToolCallPolicy, ToolResultPolicy
 from mote.contracts.tool import (
@@ -47,7 +48,6 @@ from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.telemetry.logging import log_class
 from mote.runtime.tools.base_executor import BaseToolExecutor
 from mote.runtime.tools.base_tool import BaseTool, ToolCapabilityProvider
-from mote.runtime.tools.effect_store import ToolEffectStore
 from mote.runtime.tools.mcp.lifecycle import McpLifecycle
 from mote.runtime.tools.policy import build_tool_call_policy, build_tool_result_policy
 from mote.runtime.tools.provider import NativeToolset, XmlToolset, validate_toolset_protocols
@@ -55,7 +55,7 @@ from mote.runtime.tools.provider_definitions import NativeToolDefinition, XmlToo
 from mote.runtime.tools.tool_binding import ExecutableToolBinding
 from mote.runtime.tools.tool_catalog import NativeToolCatalog, XmlToolCatalog
 from mote.runtime.tools.tool_lifecycle import ToolLifecycle
-from mote.runtime.tools.tool_pipeline import ToolExecutionPipeline, failed_result
+from mote.runtime.tools.tool_pipeline import ToolExecution, ToolExecutionPipeline, failed_result
 from mote.runtime.tools.tool_result import ToolResult
 from mote.runtime.tools.tool_settlement import ToolSettlement
 from mote.runtime.tools.tool_views import ToolExecutorViews
@@ -63,19 +63,6 @@ from mote.runtime.tools.tool_views import ToolExecutorViews
 if TYPE_CHECKING:
     from mote.runtime.tools.mcp.universal import UniversalMCP
 
-
-# Refusal shown when a resumed session re-dispatches an EXTERNAL call that the
-# ledger last saw as ``started`` — its outcome was lost to a crash, so re-running
-# it might duplicate a side effect. The framework cannot know whether the effect
-# took hold; that judgment (verify / retry / abandon) is left to the model.
-_UNKNOWN_AFTER_CRASH = (
-    "<unknown-after-crash>\n"
-    "Tool '{name}' (call {call_id}) was started before a restart but its outcome "
-    "was never recorded, so re-running it could duplicate an external side effect. "
-    "It was NOT re-run. Verify whether the effect already took hold; reissue the "
-    "call only if it is safe to retry."
-    "\n</unknown-after-crash>"
-)
 
 AgentDepsT = TypeVar("AgentDepsT")
 
@@ -119,9 +106,9 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
         tools: list[str] | None = None,
         role: ToolCapabilityProvider | None = None,
         limit_config: ToolResultLimitConfig | None = None,
-        effect_store_config: ToolEffectStoreConfig | None = None,
         tool_call_policy: ToolCallPolicy | None = None,
         tool_result_policy: ToolResultPolicy | None = None,
+        approval_coordinator: ToolApprovalCoordinator | None = None,
         loop_guard_config: LoopGuardConfig | None = None,
         telemetry: TelemetryRuntime | None = None,
         recovery_strategies: Mapping[RecoveryAction, RecoveryStrategy] | None = None,
@@ -171,16 +158,6 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
         # default config reproduces the out-of-the-box behavior.
         self._limit_config = limit_config or ToolResultLimitConfig()
 
-        # EXTERNAL-effect idempotency ledger (crash-replay guard). The executor
-        # is the single owner of this cross-cutting policy (mirrors limit_config).
-        # Built once per session, co-located under the session directory via the
-        # shared workspace store; ``None`` when disabled → run_command skips all
-        # ledger work (identical to the prior no-ledger behavior).
-        self._effect_store_config = effect_store_config or ToolEffectStoreConfig()
-        self._effect_store: ToolEffectStore | None = (
-            ToolEffectStore(session_id, self._workspace_store) if self._effect_store_config.enabled else None
-        )
-
         # A standalone executor is its own composition root.  The Role path
         # injects a policy assembled by RoleComponents; standalone approval-
         # required Toolsets still force the core gate on so composition cannot
@@ -199,7 +176,6 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
             session_id=self._session_id,
             telemetry=self._telemetry,
             get_tool=self._get_tool,
-            effect_store=self._effect_store,
             limit_config=self._limit_config,
             workspace_store=self._workspace_store,
             policy=self._tool_result_policy,
@@ -219,12 +195,17 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
             get_tool=self._get_tool,
             available_names=self._catalog.names,
             policy=self._tool_call_policy,
-            effect_store=self._effect_store,
+            approval=approval_coordinator,
             recovery_runner=self._recovery_runner,
             deferred_projector=deferred_result_projector,
             settlement=self._settlement,
         )
         self._deferred_result_projector = deferred_result_projector
+        self._approval_coordinator = approval_coordinator
+
+    def bind_approval_coordinator(self, coordinator: ToolApprovalCoordinator | None) -> None:
+        self._approval_coordinator = coordinator
+        self._pipeline.bind_approval_coordinator(coordinator)
 
     def prepare(self) -> None:
         self._lifecycle.prepare()
@@ -253,12 +234,8 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
         return self._limit_config
 
     @property
-    def effect_store_config(self) -> ToolEffectStoreConfig:
-        return self._effect_store_config
-
-    @property
-    def effect_store(self) -> ToolEffectStore | None:
-        return self._effect_store
+    def session_id(self) -> str:
+        return self._session_id
 
     @property
     def command_protocol(self) -> CommandProtocol:
@@ -303,6 +280,28 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
     def _is_readonly_tool(self, name: str) -> bool:
         tool = self._get_tool(name)
         return tool is not None and tool.resolve_effect() is ToolEffect.PURE
+
+    def next_invocation_identity(
+        self,
+        binding: ExecutableToolBinding,
+        arguments: Mapping[str, object],
+        *,
+        catalog_generation: int,
+        result_id: str,
+    ) -> ToolInvocationIdentity:
+        invocation_id = ToolInvocationId(result_id)
+        attempt = self._attempt_ordinals.get(invocation_id, 0) + 1
+        self._attempt_ordinals[invocation_id] = attempt
+        run_context = current_run_context()
+        return ToolInvocationIdentity(
+            invocation_id=invocation_id,
+            attempt_ordinal=ToolAttemptOrdinal(attempt),
+            definition_identity=binding.semantic_identity,
+            catalog_generation=catalog_generation,
+            arguments_digest=tool_arguments_digest(arguments),
+            owner_id=self._session_id,
+            run_id=run_context.run_id if run_context is not None else "",
+        )
 
     async def run_command(
         self,
@@ -361,30 +360,26 @@ class ToolExecutor(ToolExecutorViews, BaseToolExecutor, Generic[AgentDepsT]):
         if binding.definition.category == "mcp" and not self._mcp_lifecycle.active:
             return failed_result(RuntimeError("MCP generation is not accepting new work"))
         arguments = freeze_tool_arguments(kwargs)
-        invocation_id = ToolInvocationId(result_id or f"tool-{uuid.uuid4().hex}")
-        attempt = self._attempt_ordinals.get(invocation_id, 0) + 1
-        self._attempt_ordinals[invocation_id] = attempt
-        run_context = current_run_context()
-        identity = ToolInvocationIdentity(
-            invocation_id=invocation_id,
-            attempt_ordinal=ToolAttemptOrdinal(attempt),
-            definition_identity=binding.semantic_identity,
+        identity = self.next_invocation_identity(
+            binding,
+            arguments,
             catalog_generation=catalog_generation,
-            arguments_digest=tool_arguments_digest(arguments),
-            owner_id=self._session_id,
-            run_id=run_context.run_id if run_context is not None else "",
+            result_id=result_id or f"tool-{uuid.uuid4().hex}",
         )
         return await self._pipeline.run(name, arguments, identity, binding=binding)
 
-    def will_ledger(self, name: str, args: dict[str, Any], result_id: str | None) -> bool:
-        tool = self._get_tool(name)
-        return (
-            tool is not None
-            and self._effect_store is not None
-            and self._effect_store_config.enabled
-            and result_id is not None
-            and tool.resolve_effect_for(args) is ToolEffect.EXTERNAL
-        )
+    async def authorize_pinned_command(
+        self,
+        binding: ExecutableToolBinding,
+        name: str,
+        kwargs: Mapping[str, object],
+        identity: ToolInvocationIdentity,
+    ) -> tuple[ToolExecution, ToolResult | None]:
+        execution = self._pipeline.execution(name, freeze_tool_arguments(kwargs), identity, binding=binding)
+        return execution, await self._pipeline.authorize(execution)
+
+    async def invoke_authorized_pinned_command(self, execution: ToolExecution) -> ToolResult:
+        return await self._pipeline.invoke(execution)
 
     def persist_large_args(self, args: Any, call_id: str | None) -> Any:
         config = self._limit_config

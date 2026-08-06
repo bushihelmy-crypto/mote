@@ -77,6 +77,9 @@ class ToolCallDecision:
     arguments: ToolArguments = field(default_factory=dict)
     reason: str = ""
     terminate: bool = False
+    approval_required: bool = False
+    permission_targets: tuple[str, ...] = ()
+    mutates_fs: bool = False
     trace: tuple[ToolPolicyTraceEntry, ...] = ()
 
     @classmethod
@@ -105,6 +108,28 @@ class ToolCallDecision:
             arguments=freeze_tool_arguments(arguments),
             reason=reason,
             terminate=terminate,
+            trace=trace,
+        )
+
+    @classmethod
+    def require_approval(
+        cls,
+        identity: ToolInvocationIdentity,
+        arguments: ToolArguments,
+        *,
+        reason: str,
+        permission_targets: tuple[str, ...],
+        mutates_fs: bool,
+        trace: tuple[ToolPolicyTraceEntry, ...] = (),
+    ) -> "ToolCallDecision":
+        return cls(
+            identity=identity,
+            allowed=False,
+            arguments=freeze_tool_arguments(arguments),
+            reason=reason,
+            approval_required=True,
+            permission_targets=permission_targets,
+            mutates_fs=mutates_fs,
             trace=trace,
         )
 

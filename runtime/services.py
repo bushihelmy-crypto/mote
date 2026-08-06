@@ -7,6 +7,7 @@ import threading
 from collections.abc import Iterable
 
 from mote.contracts.ports.agent.budget import AgentBudgetPort
+from mote.contracts.ports.runtime.lease import LeaseCoordinator
 from mote.contracts.ports.session.run_lease import RunLeaseCoordinator
 from mote.contracts.ports.workflow.delivery import WorkflowAgentDeliveryCompositionPort
 from mote.contracts.ports.workflow.governance import WorkflowGovernanceCompositionPort
@@ -31,6 +32,7 @@ class EngineServices:
         "context",
         "code_map_scan_gate",
         "run_lease_coordinator",
+        "runtime_lease_coordinator",
         "application_composition",
         "application_reloader",
         "agent_budget",
@@ -47,6 +49,7 @@ class EngineServices:
         *,
         context: Context,
         run_lease_coordinator: RunLeaseCoordinator | None = None,
+        runtime_lease_coordinator: LeaseCoordinator | None = None,
         code_map_scan_gate: CodeMapScanGate | None = None,
         resources: Iterable[LifecycleResource] = (),
         application_composition: ApplicationCompositionPort | None = None,
@@ -62,6 +65,7 @@ class EngineServices:
         self.workflow_governance = workflow_governance
         self.workflow_delivery = workflow_delivery
         self.run_lease_coordinator = run_lease_coordinator
+        self.runtime_lease_coordinator = runtime_lease_coordinator
         self.code_map_scan_gate = code_map_scan_gate or CodeMapScanGate()
         self._owner_count = 0
         self._owner_lock = threading.Lock()

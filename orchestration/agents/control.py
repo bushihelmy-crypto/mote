@@ -1534,15 +1534,18 @@ class AgentControl:
     async def interrupt(self, agent_id: str) -> AgentStatus:
         """Best-effort interrupt of an agent's in-flight turn.
 
-        Cancels the runtime's current driver task if it is mid-turn; the turn's
-        ``CancelledError`` path sets ``INTERRUPTED``. A fresh driver is re-spawned
-        when the scheduler is in persistent mode so the agent stays drivable.
+        Durably records an interrupt before cancelling the runtime's current
+        driver task. A fresh driver is re-spawned when the scheduler is in
+        persistent mode so the agent stays drivable.
         """
         runtime = self._runtimes.get(agent_id)
         if runtime is None:
             return AgentStatus.NOT_FOUND
         task = runtime.task
         if task is not None and not task.done() and runtime.active_turn:
+            permit = await runtime.role.interrupt_active_run()
+            if permit is None:
+                return runtime.status
             task.cancel()
             try:
                 await task
@@ -1550,6 +1553,7 @@ class AgentControl:
                 pass
             except Exception as exc:  # noqa: BLE001 — driver crashed on interrupt
                 logger.debug(f"AgentControl: driver task raised on interrupt: {exc}")
+            await runtime.role.settle_interrupted_run(permit)
             runtime.task = None
             self._scheduler.ensure_driver(runtime)
         elif not is_final(runtime.status):
@@ -1904,6 +1908,8 @@ class AgentControl:
     # ------------------------------------------------------------------
     def start(self) -> None:
         if not self._lease_heartbeats_started:
+            if self._turn_queue_lease is None or self._lineage_lease is None or self._delivery_lease is None:
+                raise RuntimeError("AgentControl durable leases are unavailable")
             self._turn_queue_lease_handle.adopt_nowait(self._turn_queue_lease)
             self._lineage_lease_handle.adopt_nowait(self._lineage_lease)
             self._delivery_lease_handle.adopt_nowait(self._delivery_lease)
@@ -1949,7 +1955,13 @@ class AgentControl:
                     )
                     self._lease_heartbeats_started = False
                 else:
-                    for lease in (self._turn_queue_lease, self._lineage_lease, self._delivery_lease):
+                    for lease in (
+                        self._turn_queue_lease,
+                        self._lineage_lease,
+                        self._delivery_lease,
+                    ):
+                        if lease is None:
+                            continue
                         try:
                             self._residency_lease_coordinator.release(lease)
                         except LeaseFencedError:

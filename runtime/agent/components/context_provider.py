@@ -279,6 +279,19 @@ class ContextProvider(BaseContextProvider):
         request.command_channel = channel
         return request
 
+    async def restore_tool_snapshot(self, definition):
+        """Resolve and pin current composition without making a model request."""
+
+        target = await self.resolve_inference_target(model_call_id="pending-act-recovery")
+        try:
+            return self._tool_snapshot_manager.restore(
+                definition,
+                target,
+                include_hidden=target.capabilities.supports_native_tool_search,
+            )
+        finally:
+            await self.release_inference_target(target)
+
     async def _collect(self) -> InferenceContext:
         """Delegate context collection to PromptBuilder."""
         return await PromptBuilder.collect_context(self._think_inputs(), self._think_subsystems())

@@ -10,11 +10,11 @@ def test_projects_only_tool_actions():
             FinalCandidateAction(raw="ignored", representation="test"),
         ]
     )
-    assert ActionDispatcher().tool_commands(turn, {"Read"}) == [
+    assert ActionDispatcher().tool_commands(turn) == [
         ToolCallAction(action_id="c1", name="Read", arguments={"path": "a.py"})
     ]
 
 
-def test_filters_unknown_tool_names():
+def test_preserves_unknown_tool_names_for_snapshot_validation():
     turn = ModelTurn(actions=[ToolCallAction(name="Unknown")])
-    assert ActionDispatcher().tool_commands(turn, {"Read"}) == []
+    assert ActionDispatcher().tool_commands(turn) == [ToolCallAction(name="Unknown")]

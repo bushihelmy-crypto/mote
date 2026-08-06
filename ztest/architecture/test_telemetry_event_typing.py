@@ -10,7 +10,7 @@ from mote.contracts.events.family_policy import (
     EventFamily,
 )
 from mote.contracts.ports.events.telemetry import TelemetryEmitter
-from mote.kernel.telemetry.events import KernelTelemetryEvent, emit_event, emit_event_sync
+from mote.kernel.telemetry.events import KernelTelemetryEvent, emit_event
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -33,7 +33,6 @@ def test_emitter_protocol_preserves_its_event_type_parameter() -> None:
 
 def test_kernel_observer_accepts_only_kernel_observation_union() -> None:
     assert get_type_hints(emit_event)["event"] == KernelTelemetryEvent
-    assert get_type_hints(emit_event_sync)["event"] == KernelTelemetryEvent
     source = (ROOT / "kernel/telemetry/events.py").read_text(encoding="utf-8")
     assert "Any" not in source
     assert "runtime" not in source

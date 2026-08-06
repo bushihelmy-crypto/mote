@@ -6,11 +6,11 @@ import hashlib
 import json
 import os
 import threading
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncIterator, ContextManager, Iterator, Mapping, Optional, Protocol, Sequence, cast
+from typing import AsyncIterator, Iterator, Mapping, Optional, Sequence, cast
 
 from mote.contracts.events.envelope import (
     CorrelationId,
@@ -23,8 +23,11 @@ from mote.contracts.events.envelope import (
 )
 from mote.contracts.ports.events.journal import (
     AppendResult,
+    GuardedAppendAuthority,
+    JournalCommitGuard,
     JournalIntegrityError,
     StreamVersionConflict,
+    StreamWriterFence,
     UncommittedFact,
     VerificationIssue,
     VerificationReport,
@@ -51,10 +54,6 @@ class _ScanResult:
     report: VerificationReport
 
 
-class JournalCommitGuard(Protocol):
-    def guard(self) -> ContextManager[None]: ...
-
-
 @log_class(level="DEBUG", exclude={"path_for"})
 class LocalEventJournal:
     """Append-only JSONL journal owned by one Runtime process.
@@ -71,6 +70,7 @@ class LocalEventJournal:
         *,
         writer: DiskWriter | None = None,
         commit_guard: JournalCommitGuard | None = None,
+        guarded_append_authority: GuardedAppendAuthority | None = None,
     ) -> None:
         self._path = Path(path)
         self._stream_id = StreamId(_validate_stream_id(stream_id))
@@ -78,6 +78,7 @@ class LocalEventJournal:
         self._states: dict[str, _StreamState] = {}
         self._commit_lock = threading.Lock()
         self._commit_guard = commit_guard
+        self._guarded_append_authority = guarded_append_authority
 
     @property
     def writer(self) -> DiskWriter:
@@ -103,6 +104,43 @@ class LocalEventJournal:
             expected_version=expected_version,
         )
 
+    async def append_guarded(
+        self,
+        stream_id: StreamId,
+        facts: Sequence[UncommittedFact],
+        *,
+        expected_version: int,
+        writer: StreamWriterFence,
+    ) -> AppendResult:
+        if self._guarded_append_authority is None:
+            raise RuntimeError("journal has no guarded append authority configured")
+        return await run_disk_io(
+            self.append_guarded_committed,
+            stream_id,
+            facts,
+            expected_version=expected_version,
+            writer=writer,
+        )
+
+    def append_guarded_committed(
+        self,
+        stream_id: StreamId,
+        facts: Sequence[UncommittedFact],
+        *,
+        expected_version: int,
+        writer: StreamWriterFence,
+    ) -> AppendResult:
+        """Commit while the exact run writer and stream version share one critical section."""
+
+        if not isinstance(writer, StreamWriterFence):
+            raise TypeError("writer must be a StreamWriterFence")
+        stream = StreamId(_validate_stream_id(stream_id))
+        batch = self._validate_append(stream, facts, expected_version=expected_version)
+        assert self._guarded_append_authority is not None
+        with self._commit_lock, ExitStack() as guards:
+            guards.enter_context(self._guarded_append_authority.guard_append(writer))
+            return self._append_sync(stream, batch, expected_version=expected_version)
+
     def append_committed(
         self,
         stream_id: StreamId,
@@ -113,6 +151,23 @@ class LocalEventJournal:
         """Synchronously commit through the same CAS/fsync implementation."""
 
         stream = StreamId(_validate_stream_id(stream_id))
+        batch = self._validate_append(stream, facts, expected_version=expected_version)
+        with self._commit_lock:
+            guard = self._commit_guard.guard() if self._commit_guard is not None else nullcontext()
+            with guard:
+                return self._append_sync(
+                    stream,
+                    batch,
+                    expected_version=expected_version,
+                )
+
+    def _validate_append(
+        self,
+        stream: StreamId,
+        facts: Sequence[UncommittedFact],
+        *,
+        expected_version: int,
+    ) -> tuple[UncommittedFact, ...]:
         if type(expected_version) is not int or expected_version < 0:
             raise ValueError("expected_version must be a non-negative integer")
         batch = tuple(facts)
@@ -124,14 +179,7 @@ class LocalEventJournal:
         if len(set(event_ids)) != len(event_ids):
             raise ValueError("one append cannot contain duplicate event IDs")
         self.path_for(stream)
-        with self._commit_lock:
-            guard = self._commit_guard.guard() if self._commit_guard is not None else nullcontext()
-            with guard:
-                return self._append_sync(
-                    stream,
-                    batch,
-                    expected_version=expected_version,
-                )
+        return batch
 
     async def read(
         self,

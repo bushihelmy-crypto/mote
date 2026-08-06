@@ -30,39 +30,28 @@ Two orthogonal axes are applied in sequence:
      ``user``): a filesystem-mutating write outside the sandbox is escalated to
      the user (Codex's ``RequireEscalated`` flow) rather than hard-failed.
 """
+
 from __future__ import annotations
 
 import os
-from typing import Awaitable, Callable, Optional
+from typing import Optional
 
 from mote.contracts.authorization import PermissionDecision, PermissionMode, PermissionRule
-from mote.contracts.interaction import ApprovalChoice, ApprovalReasonCode, ApprovalRequest
-from mote.runtime.tools.permission.rule_matcher import suggest_command_rule
 from mote.runtime.tools.permission.rule_store import RuleStore
 from mote.runtime.tools.permission.sandbox.guard import SandboxGuard
 
-# An async callback that asks the human to approve a gated action and returns
-# their structured decision. Supplied by the Role (``request_approval``
-# capability); ``None`` when no interactive channel exists. The engine hands it
-# a language-neutral :class:`ApprovalRequest` (never a prose string) and gets
-# back one of the three :data:`ApprovalChoice` outcomes — display wording lives
-# entirely in the human layer.
-AskUser = Callable[[ApprovalRequest], Awaitable[ApprovalChoice]]
-
 
 class PermissionEngine:
-    """Evaluate tool calls against a mode + rule store + sandbox, prompting when needed."""
+    """Evaluate permission and sandbox policy without performing interaction."""
 
     def __init__(
         self,
         mode: PermissionMode,
         store: RuleStore,
-        ask_user: Optional[AskUser] = None,
         sandbox: Optional[SandboxGuard] = None,
     ) -> None:
         self._mode = mode
         self._store = store
-        self._ask_user = ask_user
         self._sandbox = sandbox
 
     async def check(
@@ -94,12 +83,12 @@ class PermissionEngine:
                 resolution is folded strictest-wins across segments, and a
                 single-segment command remembers an approval as a *prefix* rule.
         """
-        decision = await self._decide(tool_name, target, tool_check, mutates_fs, segments)
+        decision = self._decide(tool_name, target, tool_check, mutates_fs, segments)
 
         # Sandbox gate (axis B). Only narrows allows, and never re-questions a
         # write the user just approved this turn (reason "user").
         if decision.behavior == "allow" and mutates_fs and self._sandbox is not None and decision.reason.type != "user":
-            decision = await self._apply_sandbox(tool_name, target, decision)
+            decision = self._apply_sandbox(tool_name, target, decision)
 
         return decision
 
@@ -158,50 +147,13 @@ class PermissionEngine:
         if not ask_paths and not escalation_paths:
             return PermissionDecision.allow("multi", "all paths allowed")
 
-        # One consolidated prompt for every path that needs confirmation.
-        if self._ask_user is None:
-            blocked = ", ".join(ask_paths + escalation_paths)
-            return PermissionDecision.deny(
-                "default",
-                "multi-path approval required",
-                message=(f"'{tool_name}' needs approval for {blocked} but no " f"interactive channel is available."),
-            )
-
         pending = ask_paths + escalation_paths
-        # A consolidated multi-path ask: escalation among them lifts the risk
-        # band, and any concrete verdict text rides ``reason_detail`` verbatim.
         detail = "; ".join(r for r in reasons if r)
-        request = ApprovalRequest(
-            tool_name=tool_name,
-            kind="escalation" if escalation_paths else "approval",
-            target="\n  ".join(pending),
-            paths=list(pending),
-            risk="high" if escalation_paths else "medium",
-            reason_code="sandbox" if escalation_paths else "default",
-            reason_detail=detail,
+        return PermissionDecision.ask(
+            "sandbox" if escalation_paths else "default",
+            detail or "multi-path approval required",
+            message="\n  ".join(pending),
         )
-        choice = await self._ask_user(request)
-
-        if choice == "deny":
-            return PermissionDecision.deny(
-                "user",
-                "user denied",
-                message=f"The user denied running '{tool_name}'.",
-            )
-        if choice == "allow_session":
-            for path in ask_paths:
-                self._store.add_session_rule(
-                    PermissionRule(
-                        tool_name=tool_name,
-                        pattern=path or None,
-                        behavior="allow",
-                        source="session",
-                    )
-                )
-            if self._sandbox is not None:
-                for path in escalation_paths:
-                    self._sandbox.add_session_root(os.path.dirname(path) or path)
-        return PermissionDecision.allow("user", f"user approved ({choice})")
 
     def _decide_static(
         self,
@@ -263,7 +215,7 @@ class PermissionEngine:
     # Axis A — approval decision
     # ------------------------------------------------------------------
 
-    async def _decide(
+    def _decide(
         self,
         tool_name: str,
         target: str,
@@ -283,11 +235,9 @@ class PermissionEngine:
 
         # 3-4. Bypass-immune asks.
         if rule_behavior == "ask":
-            return await self._resolve_ask(tool_name, target, "rule", "an ask rule requires confirmation", segments)
+            return PermissionDecision.ask("rule", "an ask rule requires confirmation")
         if tool_check is not None and tool_check.behavior == "ask":
-            return await self._resolve_ask(
-                tool_name, target, "tool_check", tool_check.message or "the tool requires confirmation", segments
-            )
+            return PermissionDecision.ask("tool_check", tool_check.message or "the tool requires confirmation")
 
         # 5. Bypass mode: allow everything that wasn't deny/ask above.
         if self._mode == "bypass":
@@ -320,7 +270,7 @@ class PermissionEngine:
             )
 
         # 11. default: ask the user.
-        return await self._resolve_ask(tool_name, target, "default", "this action needs your approval", segments)
+        return PermissionDecision.ask("default", "this action needs your approval")
 
     def _resolve_rules(self, tool_name: str, target: str, segments: Optional[list[str]]) -> Optional[str]:
         """Rule behavior for a call: per-segment fold for commands, else single."""
@@ -332,7 +282,7 @@ class PermissionEngine:
     # Axis B — sandbox boundary
     # ------------------------------------------------------------------
 
-    async def _apply_sandbox(self, tool_name: str, path: str, allowed: PermissionDecision) -> PermissionDecision:
+    def _apply_sandbox(self, tool_name: str, path: str, allowed: PermissionDecision) -> PermissionDecision:
         """Gate an allowed filesystem write against the sandbox boundary.
 
         Returns the original allow when the write is inside the boundary; on a
@@ -348,103 +298,17 @@ class PermissionEngine:
         if verdict.allowed:
             return allowed
 
-        if self._ask_user is None:
-            return PermissionDecision.deny(
-                "sandbox",
-                verdict.reason,
-                message=f"'{tool_name}' blocked by sandbox: {verdict.reason} (no channel to escalate).",
+        return PermissionDecision.ask("sandbox", verdict.reason, message=path)
+
+    def remember_approved_session(self, tool_name: str, targets: tuple[str, ...], *, mutates_fs: bool) -> None:
+        for target in targets or ("",):
+            self._store.add_session_rule(
+                PermissionRule(
+                    tool_name=tool_name,
+                    pattern=target or None,
+                    behavior="allow",
+                    source="session",
+                )
             )
-
-        request = ApprovalRequest(
-            tool_name=tool_name,
-            kind="escalation",
-            target=path,
-            paths=[path],
-            risk="high",
-            reason_code="sandbox",
-            reason_detail=verdict.reason,
-        )
-        choice = await self._ask_user(request)
-        if choice == "deny":
-            return PermissionDecision.deny(
-                "sandbox",
-                "user blocked sandbox escalation",
-                message=f"The user blocked '{tool_name}' writing '{path}'.",
-            )
-        if choice == "allow_session":
-            self._sandbox.add_session_root(os.path.dirname(path) or path)
-        return PermissionDecision.allow("user", f"sandbox escalation approved ({choice})")
-
-    # ------------------------------------------------------------------
-    # Shared ask helper
-    # ------------------------------------------------------------------
-
-    async def _resolve_ask(
-        self,
-        tool_name: str,
-        target: str,
-        reason_type: str,
-        reason: str,
-        segments: Optional[list[str]] = None,
-    ) -> PermissionDecision:
-        """Prompt the user and turn their reply into allow/deny.
-
-        Fail-closed: with no interactive channel, an ask becomes a deny. When the
-        user picks "always", the rule named in the prompt is remembered for the
-        session — a *prefix* rule for a single-segment command (so variations
-        stop prompting), otherwise an exact-target rule.
-        """
-        if self._ask_user is None:
-            return PermissionDecision.deny(
-                reason_type,
-                reason,
-                message=f"'{tool_name}' needs approval but no interactive channel is available.",
-            )
-
-        rule, spec = self._suggested_allow_rule(tool_name, target, segments)
-        # Map the internal reason_type to a language-neutral reason_code. A fixed
-        # reason (ask rule / mode default) carries no detail — the display layer
-        # localizes it from the code. A tool self-check ask carries the tool's
-        # own (author-written English) message verbatim as ``reason_detail``.
-        reason_code: ApprovalReasonCode
-        if reason_type == "rule":
-            reason_code, reason_detail = "ask_rule", ""
-        elif reason_type == "tool_check":
-            reason_code, reason_detail = "tool", reason
-        else:
-            reason_code, reason_detail = "default", ""
-        request = ApprovalRequest(
-            tool_name=tool_name,
-            target=target,
-            paths=[target] if target else [],
-            reason_code=reason_code,
-            reason_detail=reason_detail,
-            suggestion=spec,
-        )
-        choice = await self._ask_user(request)
-
-        if choice == "deny":
-            return PermissionDecision.deny("user", "user denied", message=f"The user denied running '{tool_name}'.")
-        if choice == "allow_session":
-            # Remember exactly the rule shown in the prompt — no surprise grant.
-            self._store.add_session_rule(rule)
-        return PermissionDecision.allow("user", f"user approved ({choice})")
-
-    def _suggested_allow_rule(
-        self, tool_name: str, target: str, segments: Optional[list[str]]
-    ) -> tuple[PermissionRule, str]:
-        """The allow rule an "always" grant should add, plus its display spec.
-
-        Single-segment shell commands get a prefix rule (``Bash(git commit:*)``)
-        so the model can re-run variations without re-prompting. Compound
-        commands and non-command tools fall back to an exact-target rule to
-        avoid over-granting.
-        """
-        if segments is not None and len(segments) == 1:
-            rule = suggest_command_rule(tool_name, segments[0])
-            if rule is not None:
-                return rule, f"{rule.tool_name}({rule.pattern})"
-        pattern = target or None
-        rule = PermissionRule(tool_name=tool_name, pattern=pattern, behavior="allow", source="session")
-        spec = f"{tool_name}({pattern})" if pattern else tool_name
-        return rule, spec
+            if mutates_fs and self._sandbox is not None and target:
+                self._sandbox.add_session_root(os.path.dirname(target) or target)

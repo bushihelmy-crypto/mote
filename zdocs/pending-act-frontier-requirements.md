@@ -133,11 +133,10 @@ class PendingAction:
     catalog_generation: int
     effect: ToolEffect
     current_arguments_revision: int
-    approval_request_id: ApprovalRequestId | None
     fileops_transaction_id: FileTransactionId | None
 ```
 
-PendingAction 只保存关联 identity；不复制 ApprovalState、ExternalEffectState 或 FileOpsState。
+PendingAction只保存action与canonical FileOps transaction identity；不复制Approval request、ApprovalState、ExternalEffectState或FileOpsState。Approval request按frontier/invocation/arguments revision与permission-target digest确定性关联，由Approval projection独立拥有。
 
 ### 4.3 参数 revision
 

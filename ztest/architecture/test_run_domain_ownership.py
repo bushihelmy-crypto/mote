@@ -25,13 +25,14 @@ def test_generic_run_journal_production_surface_is_absent() -> None:
 
 
 def test_run_domains_have_distinct_canonical_owners() -> None:
-    assert (ROOT / "runtime/tools/effect_store.py").exists()
+    assert not (ROOT / "runtime/tools/effect_store.py").exists()
+    assert (ROOT / "runtime/session/pending_act.py").exists()
     assert (ROOT / "runtime/models/failover/model_journal.py").exists()
     assert (ROOT / "runtime/session/timers.py").exists()
 
     executor = (ROOT / "runtime/tools/tool_executor.py").read_text(encoding="utf-8")
     capabilities = (ROOT / "runtime/agent/capabilities.py").read_text(encoding="utf-8")
     temporal = (ROOT / "product/workflows/temporal_effects.py").read_text(encoding="utf-8")
-    assert "ToolEffectStore" in executor
+    assert "ToolEffectStore" not in executor
     assert "SessionTimerStore" in capabilities
     assert "RunJournal" not in temporal

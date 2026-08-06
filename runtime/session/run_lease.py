@@ -16,6 +16,7 @@ from mote.contracts.output.errors import (
     RunLeaseCoordinatorUnavailableError,
     RunLeaseUnavailableError,
 )
+from mote.contracts.ports.events.journal import StreamWriterFence, StreamWriterFenced
 from mote.contracts.ports.session.run_lease import LeaseEpoch, RunLeaseCoordinator
 from mote.contracts.session.lease import RunLease, RunLeasePolicy
 from mote.runtime.events.context import observe_event
@@ -87,6 +88,22 @@ class RunLeaseStore:
         """Hold takeover serialization through the caller's commit write."""
         with self._locked():
             self._assert(self._read(), run_id, fencing_token)
+            yield
+
+    @contextmanager
+    def guard_writer(self, writer: StreamWriterFence) -> Iterator[None]:
+        """Adapt the canonical run lease to an exact journal writer epoch."""
+
+        with self._locked():
+            try:
+                self._assert(
+                    self._read(),
+                    writer.run_id,
+                    writer.fencing_token,
+                    writer.owner_id,
+                )
+            except OutputCommitFencedError as error:
+                raise StreamWriterFenced(str(error)) from error
             yield
 
     def get(self, run_id: str) -> RunLease | None:

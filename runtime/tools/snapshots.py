@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 from uuid import uuid4
 
+from mote.contracts.execution.pending_act import ToolCompositionDefinitionRef
+from mote.contracts.ports.tool.approval import ToolApprovalCoordinator
 from mote.contracts.tool.catalog import (
     MaterializedToolCatalog,
     MaterializedToolDefinition,
@@ -13,9 +16,11 @@ from mote.contracts.tool.catalog import (
     ToolDispatchResult,
     ToolExecutionOutcome,
 )
+from mote.contracts.tool.identity import ToolInvocationIdentity
 from mote.runtime.tools.bound_registry import BoundToolRegistry, PinnedToolInvocation
 from mote.runtime.tools.definition_compiler import compile_tool_catalog_identity
 from mote.runtime.tools.tool_binding import ExecutableToolBinding
+from mote.runtime.tools.tool_pipeline import ToolExecution
 
 
 class RuntimeToolSnapshotManager:
@@ -27,6 +32,7 @@ class RuntimeToolSnapshotManager:
         self._registry = BoundToolRegistry()
         self._revision = 0
         self._references: dict[tuple[str, int], int] = {}
+        self._authorized: dict[tuple[str, int, str], ToolExecution] = {}
 
     def materialize(self, target, *, include_hidden: bool) -> ToolBindingSnapshot:
         definitions = self._definitions(include_hidden=include_hidden)
@@ -63,18 +69,85 @@ class RuntimeToolSnapshotManager:
             retention_lease_id=uuid4().hex,
         )
 
+    def restore(
+        self,
+        definition: ToolCompositionDefinitionRef,
+        target,
+        *,
+        include_hidden: bool,
+    ) -> ToolBindingSnapshot:
+        """Pin a live candidate only when every durable definition fact matches."""
+
+        snapshot = self.materialize(target, include_hidden=include_hidden)
+        provider_digest = f"sha256-{hashlib.sha256(snapshot.provider_descriptor.encode('utf-8')).hexdigest()}"
+        if (
+            snapshot.catalog.identity.catalog_id != definition.blueprint_identity
+            or snapshot.catalog.identity.version != definition.blueprint_version
+            or snapshot.catalog.fingerprint != definition.executable_digest
+            or snapshot.composition_generation_id != definition.composition_generation_id
+            or snapshot.catalog.fingerprint != definition.catalog_fingerprint
+            or provider_digest != definition.provider_descriptor_digest
+            or snapshot.composition_generation_id != definition.policy_generation
+            or snapshot.capability_fingerprint != definition.capability_fingerprint
+        ):
+            self.release(snapshot)
+            raise ValueError("recovered PendingAct tool composition cannot be reconstructed exactly")
+        return snapshot
+
     async def dispatch(self, request: ToolDispatchRequest) -> ToolDispatchResult[ToolExecutionOutcome]:
+        execution = self._authorized.pop(_request_key(request), None)
+        if execution is None:
+            return ToolDispatchResult(False, conflict="tool invocation was not authorized")
+        value = await self._executor.invoke_authorized_pinned_command(execution)
+        return ToolDispatchResult(True, value=value)
+
+    async def authorize(self, request: ToolDispatchRequest) -> ToolDispatchResult[None]:
         pinned, conflict = self._registry.resolve(request)
         if pinned is None:
             return ToolDispatchResult(False, conflict=conflict)
-        value = await self._executor.run_pinned_command(
+        key = _request_key(request)
+        if key in self._authorized:
+            return ToolDispatchResult(False, conflict="tool invocation is already authorized")
+        identity = self.invocation_identity(request)
+        execution, rejected = await self._executor.authorize_pinned_command(
             pinned.binding,
             pinned.canonical_name,
             dict(request.arguments),
-            catalog_generation=pinned.catalog_generation,
-            result_id=request.call_id or None,
+            identity,
         )
-        return ToolDispatchResult(True, value=value)
+        if rejected is not None:
+            return ToolDispatchResult(
+                False,
+                conflict=rejected.output,
+                approval_request_id=execution.approval_request_id,
+            )
+        self._authorized[key] = execution
+        return ToolDispatchResult(True)
+
+    def bind_approval_coordinator(self, coordinator: ToolApprovalCoordinator | None) -> None:
+        self._executor.bind_approval_coordinator(coordinator)
+
+    def bind_fileops_transaction(self, request: ToolDispatchRequest, transaction_id: str | None) -> None:
+        execution = self._authorized.get(_request_key(request))
+        if execution is None:
+            raise ValueError("file transaction binding requires an authorized invocation")
+        if transaction_id is not None and not transaction_id:
+            raise ValueError("file transaction identity must be non-empty")
+        execution.fileops_transaction_id = transaction_id
+
+    def invocation_identity(self, request: ToolDispatchRequest) -> ToolInvocationIdentity:
+        authorized = self._authorized.get(_request_key(request))
+        if authorized is not None:
+            return authorized.identity
+        pinned, conflict = self._registry.resolve(request)
+        if pinned is None:
+            raise ValueError(conflict)
+        return self._executor.next_invocation_identity(
+            pinned.binding,
+            request.arguments,
+            catalog_generation=pinned.catalog_generation,
+            result_id=request.call_id,
+        )
 
     def release(self, snapshot: ToolBindingSnapshot) -> bool:
         key = (snapshot.snapshot_id, snapshot.registry_revision)
@@ -83,6 +156,9 @@ class RuntimeToolSnapshotManager:
             self._references[key] = references - 1
             return False
         self._references.pop(key, None)
+        self._authorized = {
+            request_key: execution for request_key, execution in self._authorized.items() if request_key[:2] != key
+        }
         return self._registry.release(*key, references=0)
 
     def _definitions(self, *, include_hidden: bool) -> list[MaterializedToolDefinition]:
@@ -124,3 +200,7 @@ class RuntimeToolSnapshotManager:
 
 
 __all__ = ["RuntimeToolSnapshotManager"]
+
+
+def _request_key(request: ToolDispatchRequest) -> tuple[str, int, str]:
+    return request.snapshot_id, request.registry_revision, request.call_id

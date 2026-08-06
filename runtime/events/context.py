@@ -49,7 +49,6 @@ def bind_telemetry(
         with bind_trace_id_provider(current_trace_id if telemetry is not None else None):
             with bind_observers(
                 observe_event if telemetry is not None else None,
-                observe_event_sync if telemetry is not None else None,
             ):
                 yield telemetry
     finally:

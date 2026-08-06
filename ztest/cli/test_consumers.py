@@ -539,14 +539,14 @@ async def test_human_channel_ask_delegates_to_port():
 async def test_human_channel_request_approval_routes_to_selector():
     # ``request_approval`` hands the semantic request straight to the port's
     # decide_approval (no text round-trip) and maps the outcome to an ApprovalChoice.
-    from mote.contracts.interaction import ApprovalRequest
+    from mote.contracts.interaction import ApprovalChoice, ApprovalRequest
 
     request = ApprovalRequest(tool_name="Bash", target="rm -rf build/")
     for outcome, expected in [
-        ("accept", "allow_once"),
-        ("always_allow", "allow_session"),
-        ("reject", "deny"),
-        ("always_deny", "deny"),
+        ("accept", ApprovalChoice.allow_once()),
+        ("always_allow", ApprovalChoice.allow_session()),
+        ("reject", ApprovalChoice.reject()),
+        ("always_deny", ApprovalChoice.reject()),
     ]:
         port = FakeApprovalPort(outcome=outcome)
         env = PortHumanChannel(port, ctx="CTX")

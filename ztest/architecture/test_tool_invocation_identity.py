@@ -82,14 +82,10 @@ def test_tool_fact_and_view_contracts_cannot_omit_invocation_identity():
     assert "identity=identity" in settlement
 
 
-def test_tool_effect_journal_persists_the_full_identity():
-    pipeline = (ROOT / "runtime/tools/tool_pipeline.py").read_text(encoding="utf-8")
-    effect_store = (ROOT / "runtime/tools/effect_store.py").read_text(encoding="utf-8")
-
-    assert "commit_intent(execution.identity" in pipeline
-    assert "prior.identity" in effect_store
-    assert "ToolInvocationIdentity.from_payload" in effect_store
-    assert "execution.identity = durable_identity" in pipeline
+def test_session_external_effect_fact_persists_the_full_identity():
+    facts = (ROOT / "contracts/events/pending_act.py").read_text(encoding="utf-8")
+    assert "ToolInvocationIdentity.from_payload" in facts
+    assert "receipt.identity.to_payload()" in facts
 
 
 def test_executor_is_the_only_missing_id_mint_and_pipeline_carries_full_identity():

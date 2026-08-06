@@ -152,24 +152,20 @@ async def test_permission_rewrite_is_reclassified_before_final_allow():
     assert engine.targets == ["original-target", "safe-final-target"]
 
 
-async def test_non_terminal_permission_decision_is_fail_closed():
+async def test_ask_permission_decision_is_returned_as_typed_approval_requirement():
     policy = DefaultToolCallPolicy(permission_engine=_AskEngine())
 
     decision = await policy.authorize(_intent("Bash"), _facts)
 
     assert not decision.allowed
-    assert decision.trace[-1].disposition == "failed_closed"
-    assert decision.trace[-1].detail == "ValueError"
+    assert decision.approval_required
+    assert decision.trace[-1].disposition == "enrich"
 
 
-async def test_user_rejection_is_terminal():
-    async def deny(_request):
-        return "deny"
-
+async def test_permission_engine_never_prompts_or_forges_user_rejection():
     engine = PermissionEngine(
         mode="default",
         store=RuleStore(),
-        ask_user=deny,
     )
     policy = DefaultToolCallPolicy(permission_engine=engine)
 
@@ -179,7 +175,8 @@ async def test_user_rejection_is_terminal():
     )
 
     assert not decision.allowed
-    assert decision.terminate
+    assert decision.approval_required
+    assert not decision.terminate
 
 
 async def test_trace_never_records_rewritten_argument_values():

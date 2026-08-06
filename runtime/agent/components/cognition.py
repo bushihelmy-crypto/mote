@@ -27,8 +27,12 @@ from mote.runtime.agent.component_keys import (
     INFERENCE_ENGINE_FACTORY,
     INFERENCE_PORT,
     INFERENCE_SUBSYSTEMS_FACTORY,
+    PENDING_ACT_CLAIM_SERVICE,
+    PENDING_ACT_SERVICE,
     ROUTER,
     SESSION_FACT_COMMITTER,
+    SESSION_PROJECTION,
+    SESSION_RUN_WRITER_GUARD,
     SKILL_MANAGER,
     TOOL_SNAPSHOT_MANAGER,
     TURN_CONTEXT_BUS,
@@ -46,6 +50,9 @@ from mote.runtime.models.routing.state import RoleRoutingStateStore
 from mote.runtime.models.session_projection import ModelSessionProjectionStore
 from mote.runtime.output.engine import OutputEngine
 from mote.runtime.persistence.execution_transaction import RuntimeExecutionTransaction
+from mote.runtime.session.durable_approval import DurableApprovalCoordinator
+from mote.runtime.session.execution_restore import RuntimeExecutionRestore
+from mote.runtime.session.pending_act_acceptance import RuntimePendingActAcceptance
 from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.telemetry.reporting import ThoughtReporter
 from mote.runtime.tools.snapshots import RuntimeToolSnapshotManager
@@ -97,7 +104,9 @@ def cognition_component_specs(
     ]
 
 
-def _build_tool_snapshot_manager(ctx: BuildContext["Role", object]) -> RuntimeToolSnapshotManager:
+def _build_tool_snapshot_manager(
+    ctx: BuildContext["Role", object],
+) -> RuntimeToolSnapshotManager:
     return RuntimeToolSnapshotManager(
         ctx.dep(EXECUTOR),
         composition_generation_id=(ctx.role._components.current_application_generation_id()),
@@ -210,6 +219,23 @@ def _build_flow_engine(
         report_inference_result=role._report_think_result,
         inference_checkpoint=checkpoint,
         execution_transaction=execution_transaction,
+        pending_act_acceptance=RuntimePendingActAcceptance(
+            ctx.dep(PENDING_ACT_SERVICE),
+            ctx.dep(SESSION_PROJECTION),
+            checkpoint,
+            ctx.dep(SESSION_RUN_WRITER_GUARD),
+            ctx.dep(PENDING_ACT_CLAIM_SERVICE),
+            DurableApprovalCoordinator(ctx.dep(SESSION_PROJECTION), ctx.dep(SESSION_FACT_COMMITTER)),
+            session_id=role.state.session_id,
+            run_id=lease.run_id,
+            fencing_token=lease.fencing_token,
+            request_approval=role.request_approval,
+        ),
+        execution_restore=RuntimeExecutionRestore(
+            ctx.dep(SESSION_PROJECTION),
+            run_id=lease.run_id,
+            committed_output=output_engine,
+        ),
         turn_context_bus=ctx.dep(TURN_CONTEXT_BUS),
         get_cwd=role.get_cwd,
         advance_turn=role._advance_turn,

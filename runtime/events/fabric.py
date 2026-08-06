@@ -14,6 +14,7 @@ from mote.contracts.ports.events.journal import (
     EventJournalError,
     JournalIntegrityError,
     StreamVersionConflict,
+    StreamWriterFence,
     UncommittedFact,
 )
 from mote.contracts.ports.events.subscription import ManagedSubscriptionStateStore
@@ -142,6 +143,35 @@ class EventFabric:
                 await asyncio.shield(task)
             raise
 
+    async def append_guarded(
+        self,
+        stream_id: StreamId,
+        facts: Sequence[UncommittedFact],
+        *,
+        expected_version: int,
+        writer: StreamWriterFence,
+    ) -> AppendResult:
+        """Append a domain CAS exactly once; conflicts are never reconciled and retried."""
+
+        self._assert_write_ready()
+        task = asyncio.create_task(
+            self._append_guarded_committed(
+                stream_id,
+                facts,
+                expected_version=expected_version,
+                writer=writer,
+            ),
+            name=f"event-fabric-guarded-append:{stream_id}",
+        )
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            with suppress(Exception):
+                await asyncio.shield(task)
+            raise
+
     def append_from_thread(
         self,
         stream_id: StreamId,
@@ -209,6 +239,55 @@ class EventFabric:
                         facts,
                         expected_version=self._dispatcher.cursor(stream_id),
                     )
+            except JournalIntegrityError as exc:
+                self._health.mark_unavailable(
+                    "fabric.journal",
+                    f"{type(exc).__name__}: {exc}",
+                )
+                self._state = FabricState.FAILED
+                raise
+            except (EventJournalError, OSError) as exc:
+                self._health.mark_read_only(
+                    "fabric.journal",
+                    f"{type(exc).__name__}: {exc}",
+                )
+                raise EventFabricReadOnly("event journal is not writable") from exc
+            try:
+                if self._on_commit is not None:
+                    self._on_commit(result)
+                await self._dispatcher.dispatch(result)
+            except BaseException as exc:
+                self._health.mark_unavailable(
+                    "fabric.dispatch",
+                    f"{type(exc).__name__}: {exc}",
+                )
+                self._state = FabricState.FAILED
+                raise CommittedDispatchError(result, exc) from exc
+            self._health.clear("fabric.journal")
+            self._health.clear("fabric.dispatch")
+            return result
+
+    async def _append_guarded_committed(
+        self,
+        stream_id: StreamId,
+        facts: Sequence[UncommittedFact],
+        *,
+        expected_version: int,
+        writer: StreamWriterFence,
+    ) -> AppendResult:
+        async with self._append_lock:
+            append_guarded = getattr(self._journal, "append_guarded", None)
+            if append_guarded is None:
+                raise EventFabricUnavailable("event journal does not support guarded appends")
+            try:
+                result = await append_guarded(
+                    stream_id,
+                    facts,
+                    expected_version=expected_version,
+                    writer=writer,
+                )
+            except StreamVersionConflict:
+                raise
             except JournalIntegrityError as exc:
                 self._health.mark_unavailable(
                     "fabric.journal",

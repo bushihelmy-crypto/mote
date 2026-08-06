@@ -12,6 +12,7 @@ from mote.contracts.model.checkpoint import ModelCheckpointPolicy
 from mote.contracts.ports.agent.composition import RoutingStrategyFactory
 from mote.contracts.ports.conversation.compaction_policy import CompactionPolicyExtensionSpec
 from mote.contracts.ports.conversation.prompt_policy import PromptPolicyExtensionSpec
+from mote.contracts.ports.execution.reconciliation import ExternalEffectResultQuery
 from mote.contracts.ports.model.routing import RoutingPolicy
 from mote.contracts.ports.output.run_completion_policy import RunCompletionPolicyExtensionSpec
 from mote.contracts.ports.task.operations import BackgroundTaskServiceFactory
@@ -192,9 +193,11 @@ class CodingAgentFactory:
         prompt_policy_extensions: tuple[PromptPolicyExtensionSpec, ...] = (),
         compaction_policy_extensions: tuple[CompactionPolicyExtensionSpec, ...] = (),
         run_completion_policy_extensions: tuple[RunCompletionPolicyExtensionSpec, ...] = (),
+        external_effect_results: ExternalEffectResultQuery | None = None,
         config: Config | None = None,
     ) -> None:
         self._config = config
+        self._external_effect_results = external_effect_results
         self._toolsets_factory = toolsets_factory
         self._model_checkpoint_policy = model_checkpoint_policy
         self._background_task_pool_builder = background_task_pool_builder
@@ -278,6 +281,7 @@ class CodingAgentFactory:
             session_inputs=SessionComponentInputs(
                 self._secrets_root,
                 ProductOutputPublisherFactory(self._session_workspace_root),
+                self._external_effect_results,
             ),
             watching_inputs=WatchingComponentInputs(self._watched_config_files, self._hooks),
             config_root=self._user_config_root,

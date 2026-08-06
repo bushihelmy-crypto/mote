@@ -37,7 +37,7 @@ from mote.contracts.agent import (
     SpawnPlan,
 )
 from mote.contracts.conversation import UserMessage
-from mote.contracts.interaction import AskUserQuestionAnswers
+from mote.contracts.interaction import ApprovalChoice, AskUserQuestionAnswers
 from mote.contracts.interaction.handoff import HandoffOutcome, HandoffRequest, HandoffStatus
 from mote.contracts.model.topology_codec import decode_route_id
 from mote.contracts.output import RunResult
@@ -64,7 +64,7 @@ if TYPE_CHECKING:
         SearchOutputMode,
         SearchResult,
     )
-    from mote.contracts.interaction import ApprovalChoice, ApprovalRequest
+    from mote.contracts.interaction import ApprovalRequest
     from mote.contracts.ports.skill.registry import SkillCatalog
     from mote.runtime.agent.role import Role
     from mote.runtime.agent.role_schema import RoleSchema
@@ -415,7 +415,7 @@ class RoleCapabilities:
         role = self._role
         env = role.human_interaction
         if env is None:
-            return "deny"
+            return ApprovalChoice.reject()
         return await env.request_approval(request, sent_from=role.role_schema.name)
 
     async def reply_to_user(self, content: str) -> str:

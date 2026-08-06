@@ -14,6 +14,7 @@ _tool_call_id: ContextVar[str | None] = ContextVar("mote_tool_call_id", default=
 _authorized_invocation: ContextVar["AuthorizedToolInvocation | None"] = ContextVar(
     "mote_authorized_tool_invocation", default=None
 )
+_fileops_transaction_id: ContextVar[str | None] = ContextVar("mote_fileops_transaction_id", default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,10 @@ def current_authorized_invocation() -> AuthorizedToolInvocation | None:
     return _authorized_invocation.get()
 
 
+def current_fileops_transaction_id() -> str | None:
+    return _fileops_transaction_id.get()
+
+
 @contextmanager
 def bind_authorized_invocation(invocation: AuthorizedToolInvocation) -> Iterator[None]:
     token = _authorized_invocation.set(invocation)
@@ -51,3 +56,12 @@ def bind_authorized_invocation(invocation: AuthorizedToolInvocation) -> Iterator
         yield
     finally:
         _authorized_invocation.reset(token)
+
+
+@contextmanager
+def bind_fileops_transaction_id(transaction_id: str | None) -> Iterator[None]:
+    token = _fileops_transaction_id.set(transaction_id)
+    try:
+        yield
+    finally:
+        _fileops_transaction_id.reset(token)

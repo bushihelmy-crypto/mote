@@ -49,9 +49,9 @@ contracts/ports/execution/pending_act.py
 contracts/ports/events/journal.py
 contracts/ports/session/facts.py
 
-runtime/persistence/pending_act.py
-runtime/persistence/pending_act_claim.py
-runtime/persistence/execution_restore.py
+runtime/session/pending_act.py
+runtime/session/pending_act_claim.py
+runtime/session/execution_restore.py
 runtime/session/events.py
 runtime/session/committer.py
 runtime/session/projection.py
@@ -91,7 +91,6 @@ class PendingAction:
     catalog_generation: int
     effect: ToolEffect
     current_arguments_revision: int
-    approval_request_id: ApprovalRequestId | None
     fileops_transaction_id: FileTransactionId | None
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +105,7 @@ class PendingActFrontier:
     actions: tuple[PendingAction, ...]
 ```
 
-注意：`PendingAction`没有混合生命周期字段。Approval、ExternalEffect与FileOps状态从各自projection按identity关联。
+注意：`PendingAction`没有混合生命周期字段，也不复制Approval request identity。Approval request按frontier/invocation/arguments revision与permission-target digest确定性关联；Approval、ExternalEffect与FileOps状态从各自projection按identity关联。
 
 校验：ordinal连续、identity唯一、revision非负、arguments digest严格、effect与definition一致、final candidate禁止进入。
 
@@ -324,7 +323,7 @@ Reducer负责完整性验证，不替代guarded append并发控制。
 
 ## 7. RuntimePendingActService
 
-新增`runtime/persistence/pending_act.py`，实现Contracts command/query Ports。
+新增`runtime/session/pending_act.py`，实现Contracts command/query Ports。
 
 构造依赖：
 
@@ -437,7 +436,7 @@ decision durable后响应丢失，按request ID返回同一结果；commit失败
 
 ## 9. Execution claim
 
-新增`runtime/persistence/pending_act_claim.py`，claim durable facts仍在Session。
+新增`runtime/session/pending_act_claim.py`，claim durable facts仍在Session。
 
 ```text
 claim_revision：每次claim command递增
@@ -520,7 +519,7 @@ TurnInterrupted         → 不进入drive；交给interrupt settlement
 
 ### 11.2 Unified restore
 
-新增`runtime/persistence/execution_restore.py`，一次读取同一projection snapshot与stream version，返回：
+新增`runtime/session/execution_restore.py`，一次读取同一projection snapshot与stream version，返回：
 
 ```text
 CommittedExecution
@@ -743,6 +742,10 @@ ztest/architecture/test_pending_act_boundaries.py
 - `TurnInterruptSettledEvent`幂等封闭取消结算，marker与ToolResult不重复。
 
 ## 17. 完成定义
+
+实现状态（2026-08-06）：Phase 1—6已闭合。Session stream是PendingAct、Approval、ExternalEffect、Result、Cursor、Claim与Interrupt的唯一durable owner；恢复期reconciler只依赖typed result query与guarded Session fact sink，不持有ToolExecutor或dispatch能力。Product composition可以显式注入`ExternalEffectResultQuery`：仅当查询结果的完整invocation identity和presentation digest均严格匹配时，同一guarded batch提交`ExternalEffectFinished + ToolResult + PendingActionResultCommitted`；未知结果原子结算为`IN_DOUBT`，不会盲重试。统一restore通过泛型`CommittedExecution`返回已提交终态，Output Runtime仅以Contracts-owned `CommittedExecutionQuery`暴露不可变查询，Session不依赖具体`OutputEngine`，Kernel也不再执行第二次output restore；已提交终态与active PendingAct并存时fail closed。恢复ACT前由canonical snapshot manager按完整definition identity重建并验证tool snapshot，不触发inference。
+
+验证采用小批串行测试以避免WSL资源峰值；相关PendingAct、restore、interrupt、graph recovery、architecture门禁及定向Pyright均通过。验收期间进一步发现并修复了file-backed writer的嵌套锁问题：`GuardedAppendAuthority`现在在同一个Runtime lease coordinator临界区中原子校验Session stream epoch与run writer epoch，随后由Journal在该临界区内完成stream-version CAS与append，不再分别获取两个同源文件锁。多action恢复也统一按invocation identity跟踪已结算action与新receipt：已提交action不会再次进入结果投影，新external receipt不会因跳过前序action而错绑。仓内既有Pydantic/第三方deprecation warning不属于本切片。
 
 - Approval与Execution contract、projection、service完全分离；
 - PendingAct只关联identity与batch；

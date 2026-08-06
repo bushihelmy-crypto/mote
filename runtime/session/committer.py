@@ -15,10 +15,33 @@ from mote.contracts.events.output import (
     OutputMigratedEvent,
     OutputValidationRejectedEvent,
 )
+from mote.contracts.events.pending_act import (
+    ApprovalDecisionCommittedEvent,
+    ApprovalRequestedEvent,
+    ExternalEffectFinishedEvent,
+    ExternalEffectInDoubtEvent,
+    ExternalEffectStartedEvent,
+    PendingActClaimAcquiredEvent,
+    PendingActClaimReleasedEvent,
+    PendingActClaimRenewedEvent,
+    PendingActClaimTakenOverEvent,
+    PendingActCreatedEvent,
+    PendingActInterruptedEvent,
+    PendingActionArgumentsRevisedEvent,
+    PendingActionResultCommittedEvent,
+    PendingActionsSkippedEvent,
+    PendingActSchemaActivatedEvent,
+    PendingActSettledEvent,
+    RunRecoveryCursorAdvancedEvent,
+    SessionPermissionRuleGrantedEvent,
+    TurnInterruptedContextAttachedEvent,
+    TurnInterruptedEvent,
+    TurnInterruptSettledEvent,
+)
 from mote.contracts.events.session import TurnEndEvent
 from mote.contracts.model.failover import ModelCallSummary
 from mote.contracts.ports.events.journal import AppendResult
-from mote.contracts.ports.session.facts import RolloutSourceEvent
+from mote.contracts.ports.session.facts import GuardedSessionFactBatch, RolloutSourceEvent
 from mote.runtime.events.fabric import EventFabric
 from mote.runtime.session.codec import encode_session_event
 from mote.runtime.session.events import (
@@ -62,6 +85,16 @@ class SessionFactCommitter:
         if any(isinstance(event, (PromptRejectedEvent, TurnEndEvent)) for event in events):
             await self._log.writer.drain()
         return result
+
+    async def commit_guarded(self, batch: GuardedSessionFactBatch) -> AppendResult:
+        persisted_events = tuple(self._project_fact(event) for event in batch.events)
+        facts = tuple(encode_session_event(event, session_id=self._log.session_id) for event in persisted_events)
+        return await self._fabric.append_guarded(
+            self._log.stream_id,
+            facts,
+            expected_version=batch.expected_stream_version,
+            writer=batch.writer,
+        )
 
     @staticmethod
     def _project_fact(event: RolloutSourceEvent) -> SessionEvent:
@@ -112,6 +145,27 @@ class SessionFactCommitter:
                 FinalOutputCommittedEvent,
                 InferenceCheckpointConsumedEvent,
                 PromptRejectedEvent,
+                PendingActSchemaActivatedEvent,
+                PendingActCreatedEvent,
+                PendingActionArgumentsRevisedEvent,
+                ApprovalRequestedEvent,
+                ApprovalDecisionCommittedEvent,
+                SessionPermissionRuleGrantedEvent,
+                ExternalEffectStartedEvent,
+                ExternalEffectFinishedEvent,
+                ExternalEffectInDoubtEvent,
+                PendingActSettledEvent,
+                PendingActionResultCommittedEvent,
+                PendingActionsSkippedEvent,
+                PendingActClaimAcquiredEvent,
+                PendingActClaimRenewedEvent,
+                PendingActClaimTakenOverEvent,
+                PendingActClaimReleasedEvent,
+                RunRecoveryCursorAdvancedEvent,
+                TurnInterruptedEvent,
+                TurnInterruptedContextAttachedEvent,
+                TurnInterruptSettledEvent,
+                PendingActInterruptedEvent,
             ),
         ):
             persisted = event

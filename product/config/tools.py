@@ -7,7 +7,7 @@ from __future__ import annotations
 from pydantic import Field
 
 from mote.contracts.config.base import ConfigModel as YamlModel
-from mote.contracts.config.tool import LoopGuardConfig, ToolEffectStoreConfig, ToolResultLimitConfig, ToolSearchConfig
+from mote.contracts.config.tool import LoopGuardConfig, ToolResultLimitConfig, ToolSearchConfig
 from mote.product.config.web_search import WebSearchConfig
 from mote.runtime.config.device import DeviceConfig
 
@@ -19,7 +19,6 @@ class ToolsConfig(YamlModel):
     knobs above (proxy / browser fingerprint) plus the two cross-cutting policies
     the :class:`~mote.runtime.tools.tool_executor.ToolExecutor` owns —
     :class:`ToolResultLimitConfig` (large-result persistence),
-    :class:`ToolEffectStoreConfig` (durable Tool effect lifecycle), and
     Grouping them under ``tools`` keeps their single-owner discipline: the
     executor reads them from here, and the compaction spill reducer borrows
     ``result_limit`` off the built executor (never a second instance), so there
@@ -50,8 +49,6 @@ class ToolsConfig(YamlModel):
     # resume after a mid-call crash heals a dangling call from the recorded result
     # instead of re-running its side effect. ``enabled=False`` reproduces the
     # prior no-ledger behavior (every call simply runs).
-    effect_store: ToolEffectStoreConfig = Field(default_factory=ToolEffectStoreConfig)
-
     # Tool Search master switch (deferred-tool discovery). Per-role
     # ``RoleSchema.deferred_tools`` declares WHICH tools are hidden-until-searched;
     # this ``enabled`` flag is the global OVERRIDE gating whether that declaration

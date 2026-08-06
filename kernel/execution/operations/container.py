@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
+from mote.contracts.execution.restore import ExecutionRestorePort
 from mote.contracts.ports.conversation.message_activity import MessageActivity
 from mote.contracts.ports.execution.model_turn_completion import ModelTurnCompletionPolicy
 from mote.contracts.ports.task.operations import BackgroundTaskService
@@ -30,6 +31,7 @@ class GraphAssemblyInputs(Generic[OutputT]):
     inference: InferenceService
     actions: ActionExecutionService
     outputs: OutputOperation[OutputT]
+    restore: ExecutionRestorePort[OutputT]
     context_provider: BaseContextProvider
     completion_policy: ModelTurnCompletionPolicy
     current_channel: Callable[[], CommandChannel]

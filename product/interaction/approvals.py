@@ -46,12 +46,12 @@ def parse_approval_response(response: str) -> ApprovalChoice:
     """Interpret a free-text approval reply. Unknown replies fail closed (deny)."""
     text = (response or "").strip().lower()
     if not text:
-        return "deny"
+        return ApprovalChoice.reject()
     # "always"/"session"/"all" -> persist for the session (check before plain allow).
     if any(k in text for k in ("always", "session", "allow all", "all of them")):
-        return "allow_session"
+        return ApprovalChoice.allow_session()
     if any(text.startswith(k) for k in ("y", "allow", "approve", "ok", "sure", "yes")):
-        return "allow_once"
+        return ApprovalChoice.allow_once()
     if "yes" in text:
-        return "allow_once"
-    return "deny"
+        return ApprovalChoice.allow_once()
+    return ApprovalChoice.reject()

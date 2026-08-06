@@ -8,6 +8,9 @@ from typing import Generic, Protocol, TypeVar
 
 from mote.contracts.artifact import ArtifactRef
 from mote.contracts.events.envelope import JsonValue, freeze_json
+from mote.contracts.interaction.approval_identity import ApprovalRequestId
+from mote.contracts.ports.tool.approval import ToolApprovalCoordinator
+from mote.contracts.tool.identity import ToolInvocationIdentity
 from mote.contracts.tool.result import FileChange, ToolMedia, ToolPayload
 
 DispatchValueT = TypeVar("DispatchValueT", covariant=True)
@@ -75,6 +78,7 @@ class ToolDispatchResult(Generic[DispatchValueT]):
     success: bool
     value: DispatchValueT | None = None
     conflict: str = ""
+    approval_request_id: ApprovalRequestId | None = None
 
 
 class ToolExecutionOutcome(Protocol):
@@ -91,9 +95,17 @@ class ToolExecutionOutcome(Protocol):
 
 
 class ToolExecutionPort(Protocol[DispatchValueT]):
+    async def authorize(self, request: ToolDispatchRequest) -> ToolDispatchResult[None]: ...
+
     async def dispatch(self, request: ToolDispatchRequest) -> ToolDispatchResult[DispatchValueT]: ...
 
     def release(self, snapshot: ToolBindingSnapshot) -> bool: ...
+
+    def invocation_identity(self, request: ToolDispatchRequest) -> ToolInvocationIdentity: ...
+
+    def bind_approval_coordinator(self, coordinator: ToolApprovalCoordinator | None) -> None: ...
+
+    def bind_fileops_transaction(self, request: ToolDispatchRequest, transaction_id: str | None) -> None: ...
 
 
 __all__ = [

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Iterator, Mapping, Optional, cast
 
 from mote.contracts.events.envelope import EventEnvelope, JsonValue, StreamId, thaw_json
-from mote.contracts.ports.events.journal import AppendResult
+from mote.contracts.ports.events.journal import AppendResult, GuardedAppendAuthority, JournalCommitGuard
 from mote.runtime.events.journal import LocalEventJournal, decode_event_record
 from mote.runtime.persistence import DiskWriter, disk_io
 from mote.runtime.persistence.async_io import run_disk_io
@@ -31,6 +31,7 @@ from mote.runtime.session.codec import decode_session_event, encode_session_even
 from mote.runtime.session.events import SessionEvent, SessionMetaEvent
 from mote.runtime.session.layout import SessionLayout
 from mote.runtime.session.stream_ownership import SessionStreamOwnership
+from mote.runtime.session.writer_guard import SessionRunWriterGuard
 from mote.runtime.telemetry.logging import log_class
 
 #: Directory name under the workspace root holding all session logs.
@@ -53,6 +54,9 @@ class SessionLog:
         base_dir: Optional[str] = None,
         *,
         writer: DiskWriter | None = None,
+        commit_guard: JournalCommitGuard | None = None,
+        guarded_append_authority: GuardedAppendAuthority | None = None,
+        stream_ownership: SessionRunWriterGuard | None = None,
     ):
         self.session_id = session_id
         base = Path(base_dir) if base_dir is not None else _default_base_dir()
@@ -60,12 +64,13 @@ class SessionLog:
         self._dir = base / session_id
         self._path = self._dir / ROLLOUT_FILENAME
         self._stream_id = StreamId(session_stream_id(session_id))
-        self._stream_ownership = SessionStreamOwnership(self._runtime_root, session_id)
+        self._stream_ownership = stream_ownership or SessionStreamOwnership(self._runtime_root, session_id)
         self._journal = LocalEventJournal(
             self._path,
             self._stream_id,
             writer=writer,
-            commit_guard=self._stream_ownership,
+            commit_guard=commit_guard or self._stream_ownership,
+            guarded_append_authority=(guarded_append_authority or stream_ownership),
         )
         self._schema_checked = False
         self._version = 0

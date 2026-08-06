@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Generic, TypeAlias, TypeVar
 
 from mote.contracts.conversation import Message
+from mote.contracts.execution.pending_act import PendingActFrontier
 from mote.contracts.model.turn import ModelTurn
 from mote.contracts.output import CommittedOutput
 from mote.contracts.tool.actions import FinalCandidateAction
@@ -35,7 +36,12 @@ class PendingCandidate:
         return self.turn.final_candidates[self.candidate_index]
 
 
-ExecutionTurn: TypeAlias = NoModelTurn | ModelTurn | PendingCandidate
+@dataclass(frozen=True, slots=True)
+class RecoveredPendingAct:
+    frontier: PendingActFrontier
+
+
+ExecutionTurn: TypeAlias = NoModelTurn | ModelTurn | PendingCandidate | RecoveredPendingAct
 
 
 @dataclass
@@ -48,4 +54,4 @@ class ExecutionState(Generic[OutputT]):
     continue_inference: bool = False
 
 
-__all__ = ["ExecutionState", "ExecutionTurn", "NoModelTurn", "PendingCandidate"]
+__all__ = ["ExecutionState", "ExecutionTurn", "NoModelTurn", "PendingCandidate", "RecoveredPendingAct"]

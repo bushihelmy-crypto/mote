@@ -43,11 +43,16 @@ from mote.runtime.sandbox.runtime import SandboxRuntime
 from mote.runtime.secrets.store import SecretStore
 from mote.runtime.session import RuntimeCheckpointRecorder, SessionLog, SessionRuntimeProjectionJournal
 from mote.runtime.session.committer import SessionFactCommitter
+from mote.runtime.session.execution_reconciliation import RuntimeExecutionReconciler
+from mote.runtime.session.pending_act import RuntimePendingActService
+from mote.runtime.session.pending_act_claim import PendingActClaimService
 from mote.runtime.session.projection import SessionLiveProjection
+from mote.runtime.session.run_interrupt import RunInterruptService
 from mote.runtime.session.runtime_handoff import SessionRuntimeHandoffJournal
 from mote.runtime.session.runtime_operation import SessionRuntimeOperationJournal
 from mote.runtime.session.subscribers import CheckpointSubscriber, TitleSubscriber
 from mote.runtime.session.workspace import SessionWorkspace
+from mote.runtime.session.writer_guard import SessionRunWriterGuard
 from mote.runtime.tools.permission.engine import PermissionEngine
 from mote.runtime.tools.snapshots import RuntimeToolSnapshotManager
 from mote.runtime.tools.tool_executor import ToolExecutor
@@ -64,6 +69,11 @@ GRAPH_OUTPUT_SERVICE: ComponentKey[GraphOutputService] = ComponentKey("graph_out
 BROWSER_PROFILE_STORE: ComponentKey[BrowserProfileStore] = ComponentKey("browser_profile_store")
 ARTIFACT_RESOLVER: ComponentKey[ArtifactResolver] = ComponentKey("artifact_resolver")
 SESSION_FACT_COMMITTER: ComponentKey[SessionFactCommitter] = ComponentKey("session_fact_committer")
+SESSION_RUN_WRITER_GUARD: ComponentKey[SessionRunWriterGuard] = ComponentKey("session_run_writer_guard")
+PENDING_ACT_CLAIM_SERVICE: ComponentKey[PendingActClaimService] = ComponentKey("pending_act_claim_service")
+RUN_INTERRUPT_SERVICE: ComponentKey[RunInterruptService] = ComponentKey("run_interrupt_service")
+PENDING_ACT_SERVICE: ComponentKey[RuntimePendingActService] = ComponentKey("pending_act_service")
+EXECUTION_RECONCILER: ComponentKey[RuntimeExecutionReconciler] = ComponentKey("execution_reconciler")
 HOOK_MANAGER: ComponentKey[HookManager | None] = ComponentKey("hook_manager")
 SECRET_STORE: ComponentKey[SecretStore] = ComponentKey("secret_store")
 SKILL_MANAGER: ComponentKey[SkillService] = ComponentKey("skill_manager")
@@ -128,6 +138,7 @@ __all__ = [
     "CONTEXT_VISIBILITY",
     "DIAGNOSTICS_BUFFER",
     "EVENT_FABRIC",
+    "EXECUTION_RECONCILER",
     "EXECUTOR",
     "FILE_OPERATIONS",
     "FILE_WATCH_SERVICE",
@@ -139,10 +150,13 @@ __all__ = [
     "LSP_SERVICE",
     "PROMPT_POLICY",
     "PERMISSION_ENGINE",
+    "PENDING_ACT_SERVICE",
+    "PENDING_ACT_CLAIM_SERVICE",
     "REPO_INDEX",
     "RESOURCE_REGISTRY",
     "ROUTER",
     "RUN_COMPLETION_POLICY",
+    "RUN_INTERRUPT_SERVICE",
     "RUNTIME_CHECKPOINT_RECORDER",
     "RUNTIME_HANDOFF_JOURNAL",
     "RUNTIME_HOST",
@@ -153,6 +167,7 @@ __all__ = [
     "SANDBOX_RUNTIME",
     "SECRET_STORE",
     "SESSION_FACT_COMMITTER",
+    "SESSION_RUN_WRITER_GUARD",
     "SESSION_LOG",
     "SESSION_MANAGER",
     "SESSION_PROJECTION",

@@ -373,7 +373,7 @@ class EditPlanner:
         self.resolve_observed = resolve_observed
         self.mutation_factory = mutation_factory
 
-    def plan(self, request: EditPlanRequest) -> EditPlan:
+    def plan(self, request: EditPlanRequest, *, transaction_id: str | None = None) -> EditPlan:
         regex_preparation = None
         if isinstance(request, RegexEditPlanRequest):
             regex_preparation = self._prepare_regex(request)
@@ -396,10 +396,11 @@ class EditPlanner:
                     scope,
                     program=program,
                     discovery=discovery,
+                    transaction_id=transaction_id,
                 )
             if isinstance(request, LiteralEditPlanRequest):
-                return self._plan_literal(request, scope)
-            return self._plan_whole_file(request, scope)
+                return self._plan_literal(request, scope, transaction_id=transaction_id)
+            return self._plan_whole_file(request, scope, transaction_id=transaction_id)
 
     def _prepare_regex(
         self,
@@ -430,6 +431,7 @@ class EditPlanner:
         *,
         program: RegexProgram,
         discovery: CandidateDiscovery,
+        transaction_id: str | None,
     ) -> EditPlan:
         planned: list[tuple[ExistingEditPlanSource, bytes]] = []
         total = 0
@@ -485,12 +487,15 @@ class EditPlanner:
             sources=tuple(source for source, _ in planned),
             mutations=mutations,
             scope=scope,
+            transaction_id=transaction_id,
         )
 
     def _plan_literal(
         self,
         request: LiteralEditPlanRequest,
         scope: ArtifactWriteScope,
+        *,
+        transaction_id: str | None,
     ) -> EditPlan:
         snapshot, raw, editable = self._observed_editable(request.path)
         spans = _literal_spans(editable.text, request.old)
@@ -523,12 +528,15 @@ class EditPlanner:
             sources=(source,),
             mutations=(mutation,),
             scope=scope,
+            transaction_id=transaction_id,
         )
 
     def _plan_whole_file(
         self,
         request: WholeFileEditPlanRequest,
         scope: ArtifactWriteScope,
+        *,
+        transaction_id: str | None,
     ) -> EditPlan:
         snapshot = self.resolve_observed(request.path)
         if snapshot is not None:
@@ -539,6 +547,7 @@ class EditPlanner:
                 sources=(existing,),
                 mutations=(mutation,),
                 scope=scope,
+                transaction_id=transaction_id,
             )
         absent, mutation = self._whole_absent(request, scope)
         return self._persist(
@@ -547,6 +556,7 @@ class EditPlanner:
             sources=(absent,),
             mutations=(mutation,),
             scope=scope,
+            transaction_id=transaction_id,
         )
 
     def _whole_existing(
@@ -643,6 +653,7 @@ class EditPlanner:
         sources: tuple[EditPlanSource, ...],
         mutations: tuple[CreateMutation | ReplaceMutation, ...],
         scope: ArtifactWriteScope,
+        transaction_id: str | None,
     ) -> EditPlan:
         review_facts = tuple(
             self._review_fact(source, mutation, scope) for source, mutation in zip(sources, mutations, strict=True)
@@ -655,7 +666,7 @@ class EditPlanner:
             mutations,
         )
         plan_id = hashlib.sha256(b"mote-edit-plan\0" + identity).hexdigest()
-        transaction_id = hashlib.sha256(b"mote-edit-transaction\0" + identity).hexdigest()
+        transaction_id = transaction_id or hashlib.sha256(b"mote-edit-transaction\0" + identity).hexdigest()
         mutation_set = self.mutation_factory.mutation_set(
             transaction_id=transaction_id,
             source="EditPlanner",

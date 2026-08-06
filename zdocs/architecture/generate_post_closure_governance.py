@@ -779,32 +779,32 @@ _VERIFIED_REQUIREMENTS = {
     "R-W3-RUN-DOMAINS-001": {
         "owner": "runtime.run-domains",
         "paths": (
-            "runtime/tools/effect_store.py",
+            "runtime/session/pending_act.py",
             "runtime/models/session_projection.py",
             "runtime/session/timers.py",
             "ztest/architecture/test_run_domain_ownership.py",
         ),
         "recipe": "runtime-run-domain-owners-v1",
-        "command": "python -B -m pytest ztest/architecture/test_run_domain_ownership.py ztest/executor/test_tool_effect_store.py ztest/session/test_run_domain_migration.py -q --tb=short -p no:cacheprovider",
+        "command": "python -B -m pytest ztest/architecture/test_run_domain_ownership.py ztest/runtime/test_pending_act_transaction.py -q --tb=short -p no:cacheprovider",
     },
     "R-W3-TOOL-EFFECT-001": {
         "owner": "runtime.tools",
         "paths": (
-            "runtime/tools/effect_store.py",
+            "runtime/session/pending_act.py",
             "runtime/tools/tool_executor.py",
-            "ztest/executor/test_tool_effect_store.py",
+            "ztest/runtime/test_pending_act_transaction.py",
         ),
         "recipe": "runtime-tool-effect-v1",
-        "command": "python -B -m pytest ztest/executor/test_tool_effect_store.py -q --tb=short -p no:cacheprovider",
+        "command": "python -B -m pytest ztest/runtime/test_pending_act_transaction.py -q --tb=short -p no:cacheprovider",
     },
     "R-W3-MODEL-PROJECTION-001": {
         "owner": "runtime.models",
         "paths": (
             "runtime/models/session_projection.py",
-            "ztest/session/test_run_domain_migration.py",
+            "ztest/inference/test_model_session_projection.py",
         ),
         "recipe": "model-session-projection-v1",
-        "command": "python -B -m pytest ztest/session/test_run_domain_migration.py -q --tb=short -p no:cacheprovider",
+        "command": "python -B -m pytest ztest/inference/test_model_session_projection.py -q --tb=short -p no:cacheprovider",
     },
     "R-W3-MODEL-CHECKPOINT-001": {
         "owner": "runtime.models",
@@ -857,29 +857,10 @@ _VERIFIED_REQUIREMENTS = {
         "owner": "runtime.session",
         "paths": (
             "runtime/session/timers.py",
-            "ztest/session/test_run_domain_migration.py",
+            "ztest/architecture/test_run_domain_ownership.py",
         ),
         "recipe": "session-timer-v1",
-        "command": "python -B -m pytest ztest/session/test_run_domain_migration.py -q --tb=short -p no:cacheprovider",
-    },
-    "R-W3-RUNJOURNAL-MIGRATION-001": {
-        "owner": "product.migrations.run_domains",
-        "paths": (
-            "product/migrations/run_domains.py",
-            "ztest/session/test_run_domain_migration.py",
-        ),
-        "recipe": "run-journal-inventory-v1",
-        "command": "python -B -m pytest ztest/session/test_run_domain_migration.py -q --tb=short -p no:cacheprovider",
-    },
-    "R-W3-RUNJOURNAL-MIGRATION-002": {
-        "owner": "product.migrations.run_domains",
-        "paths": (
-            "product/migrations/run_domains.py",
-            "runtime/session/run_domain_activation.py",
-            "ztest/session/test_run_domain_migration.py",
-        ),
-        "recipe": "run-domain-candidate-cutover-v1",
-        "command": "python -B -m pytest ztest/session/test_run_domain_migration.py -q --tb=short -p no:cacheprovider",
+        "command": "python -B -m pytest ztest/architecture/test_run_domain_ownership.py -q --tb=short -p no:cacheprovider",
     },
     "R-W3-RUNJOURNAL-CONSUMERS-001": {
         "owner": "product.composition",

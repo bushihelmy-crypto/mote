@@ -29,7 +29,6 @@ from mote.runtime.session.attribution import HunkAttribution
 from mote.runtime.session.fork import fork
 from mote.runtime.session.hunk_ops import HunkOps
 from mote.runtime.session.log import SessionLog
-from mote.runtime.session.reconcile import reconcile_tool_calls
 from mote.runtime.session.replay import replay
 from mote.runtime.tools.provider import toolset_manifest
 
@@ -98,7 +97,7 @@ class RoleSessionManager:
 
         result = replay(log)  # replay scans via iter_raw, whose drain flushes queued writes first
         self.validate_identity(result.meta or {})
-        messages = self._reconcile_dangling_calls(result.model_context_messages)
+        messages = result.model_context_messages
         # Reap think records that need no reinstatement (their assistant message
         # is already durable, or the round never completed), leaving at most the
         # single completed think the flow will reinstate on its first think node
@@ -179,26 +178,6 @@ class RoleSessionManager:
                 f"recorded={actual!r}, current={expected!r}. Bump Toolset versions "
                 "when behavior changes and resume with the original manifest."
             )
-
-    def _reconcile_dangling_calls(self, messages):
-        """Heal tool calls left dangling by a mid-turn crash, using the ledger.
-
-        A crash between an assistant ``tool_calls`` message being flushed and its
-        results being recorded leaves a dangling call that would 400 the next
-        provider request. :func:`reconcile_tool_calls` splices a synthetic result
-        after each such call — healing it verbatim from the ledger when the effect
-        actually completed, or flagging ``<unknown-after-crash>`` when an EXTERNAL
-        effect's outcome was lost. Reconciliation never deletes effect facts;
-        retention remains owned by the Tool effect store lifecycle.
-
-        A no-op when the executor has no ledger (feature disabled) — the replayed
-        history is returned unchanged.
-        """
-        effect_store = self._role._executor.effect_store
-        if effect_store is None or not self._role._executor.effect_store_config.enabled:
-            return messages
-        outcome = reconcile_tool_calls(messages, effect_store)
-        return outcome.messages
 
     def reconcile_resources(self, messages) -> None:
         """Rebuild the resource side-store to match a freshly-rebuilt history.

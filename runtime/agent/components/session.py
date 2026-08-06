@@ -36,9 +36,13 @@ from mote.runtime.agent.component_keys import (
     CHECKPOINT_PAYLOAD_STORE,
     CHECKPOINT_SUBSCRIBER,
     EVENT_FABRIC,
+    EXECUTION_RECONCILER,
     FILE_OPERATIONS,
     LSP_SERVICE,
+    PENDING_ACT_CLAIM_SERVICE,
+    PENDING_ACT_SERVICE,
     ROUTER,
+    RUN_INTERRUPT_SERVICE,
     RUNTIME_CHECKPOINT_RECORDER,
     RUNTIME_HANDOFF_JOURNAL,
     RUNTIME_OPERATION_JOURNAL,
@@ -48,6 +52,7 @@ from mote.runtime.agent.component_keys import (
     SESSION_FACT_COMMITTER,
     SESSION_LOG,
     SESSION_PROJECTION,
+    SESSION_RUN_WRITER_GUARD,
     SUBSCRIPTION_STATE_STORE,
     TELEMETRY,
     TITLE_SUBSCRIBER,
@@ -61,6 +66,7 @@ from mote.runtime.artifacts import (
     ReliableArtifactPublisher,
     StoreArtifactResolver,
 )
+from mote.runtime.control.leases import FileLeaseCoordinator
 from mote.runtime.events.backends import SQLiteSubscriptionStateStore
 from mote.runtime.events.dispatcher import SubscriptionBinding, SubscriptionManifest
 from mote.runtime.events.fabric import EventFabric
@@ -85,14 +91,20 @@ from mote.runtime.session import (
 from mote.runtime.session.artifact_roots import SessionFileOpsArtifactRoots
 from mote.runtime.session.checkpoint import checkpoint_supported
 from mote.runtime.session.codec import iter_file_operations_events, stable_event_type
+from mote.runtime.session.execution_reconciliation import RuntimeExecutionReconciler
+from mote.runtime.session.pending_act import RuntimePendingActService
+from mote.runtime.session.pending_act_claim import PendingActClaimService
+from mote.runtime.session.run_interrupt import RunInterruptService
 from mote.runtime.session.runtime_handoff import SessionRuntimeHandoffJournal
 from mote.runtime.session.runtime_operation import SessionRuntimeOperationJournal
 from mote.runtime.session.subscribers import CheckpointSubscriber, TitleSubscriber
+from mote.runtime.session.writer_guard import SessionRunWriterGuard
 
 _SESSION_PROJECTION_MAILBOX_CAPACITY = 1024
 _LSP_SUBSCRIPTION = SubscriptionIdentity("mote.lsp.confirmed-file-versions.v1")
 
 if TYPE_CHECKING:
+    from mote.contracts.ports.execution.reconciliation import ExternalEffectResultQuery
     from mote.contracts.ports.output.publication import OutputPublisherFactory
 
 
@@ -100,15 +112,23 @@ if TYPE_CHECKING:
 class SessionComponentInputs:
     secrets_root: Path | None
     output_publisher_factory: "OutputPublisherFactory | None" = None
+    external_effect_results: "ExternalEffectResultQuery | None" = None
 
 
-def session_component_specs(inputs: SessionComponentInputs = SessionComponentInputs(None)) -> list[ComponentSpec]:
+def session_component_specs(
+    inputs: SessionComponentInputs = SessionComponentInputs(None),
+) -> list[ComponentSpec]:
     """Return the complete session-owned portion of the Role component graph."""
     return [
+        ComponentSpec(SESSION_RUN_WRITER_GUARD, _build_session_run_writer_guard),
         ComponentSpec(SESSION_LOG, _build_session_log),
         ComponentSpec(SESSION_PROJECTION, _build_session_projection),
         ComponentSpec(SUBSCRIPTION_STATE_STORE, _build_subscription_state_store),
         ComponentSpec(SESSION_FACT_COMMITTER, _build_session_fact_committer),
+        ComponentSpec(PENDING_ACT_SERVICE, _build_pending_act_service),
+        ComponentSpec(EXECUTION_RECONCILER, _build_execution_reconciler),
+        ComponentSpec(PENDING_ACT_CLAIM_SERVICE, _build_pending_act_claim_service),
+        ComponentSpec(RUN_INTERRUPT_SERVICE, _build_run_interrupt_service),
         ComponentSpec(FILE_OPERATIONS, _build_file_operations),
         ComponentSpec(
             ARTIFACT_REPOSITORY_BUNDLE,
@@ -118,7 +138,10 @@ def session_component_specs(inputs: SessionComponentInputs = SessionComponentInp
         ComponentSpec(ARTIFACT_STORE, _build_artifact_store),
         ComponentSpec(ARTIFACT_RESOLVER, _build_artifact_resolver),
         ComponentSpec(ARTIFACT_PUBLISHER, _build_artifact_publisher),
-        ComponentSpec(CHECKPOINT_PAYLOAD_STORE, lambda ctx: _build_checkpoint_payload_store(ctx, inputs)),
+        ComponentSpec(
+            CHECKPOINT_PAYLOAD_STORE,
+            lambda ctx: _build_checkpoint_payload_store(ctx, inputs),
+        ),
         ComponentSpec(
             RUNTIME_PROJECTION_JOURNAL,
             _build_runtime_projection_journal,
@@ -168,11 +191,43 @@ def _build_session_log(ctx) -> SessionLog:
         ctx.role.state.session_id,
         base_dir=str(workspace.sessions_root),
         writer=ctx.role._context.disk_writer,
+        stream_ownership=ctx.dep(SESSION_RUN_WRITER_GUARD),
+    )
+
+
+def _build_session_run_writer_guard(ctx) -> SessionRunWriterGuard:
+    workspace = ctx.dep(WORKSPACE_STORE)
+    services = ctx.role._wiring.services
+    coordinator = services.runtime_lease_coordinator if services is not None else None
+    if coordinator is None:
+        coordinator = FileLeaseCoordinator(workspace.sessions_root / ".runtime" / "runtime-leases.json")
+    return SessionRunWriterGuard(
+        coordinator,
+        session_id=ctx.role.state.session_id,
+        owner_id=ctx.state.worker_id,
+        incarnation_id=ctx.role.incarnation_id,
     )
 
 
 def _build_session_projection(ctx) -> SessionLiveProjection:
     return SessionLiveProjection(ctx.dep(SESSION_LOG).stream_id)
+
+
+def _build_pending_act_claim_service(ctx) -> PendingActClaimService:
+    return PendingActClaimService(ctx.dep(SESSION_PROJECTION), ctx.dep(SESSION_FACT_COMMITTER))
+
+
+def _build_execution_reconciler(ctx) -> RuntimeExecutionReconciler:
+    inputs = ctx.role._component_projection().session()
+    return RuntimeExecutionReconciler(
+        ctx.dep(SESSION_PROJECTION),
+        ctx.dep(PENDING_ACT_SERVICE),
+        inputs.external_effect_results,
+    )
+
+
+def _build_run_interrupt_service(ctx) -> RunInterruptService:
+    return RunInterruptService(ctx.dep(SESSION_PROJECTION), ctx.dep(SESSION_FACT_COMMITTER))
 
 
 def _build_subscription_state_store(ctx) -> SQLiteSubscriptionStateStore:
@@ -231,6 +286,13 @@ def _build_session_fact_committer(ctx) -> SessionFactCommitter:
     return SessionFactCommitter(
         ctx.dep(SESSION_LOG),
         ctx.dep(EVENT_FABRIC),
+    )
+
+
+def _build_pending_act_service(ctx) -> RuntimePendingActService:
+    return RuntimePendingActService(
+        ctx.dep(SESSION_PROJECTION),
+        ctx.dep(SESSION_FACT_COMMITTER),
     )
 
 

@@ -7,6 +7,18 @@ from typing import Generic, TypeVar
 
 from mote.contracts.conversation import AIMessage, CauseBy, MessagePriority
 from mote.contracts.execution.models import InferenceCompleted
+from mote.contracts.execution.restore import (
+    CommittedExecution,
+    ExecutionRestorePort,
+    ExternalEffectReconciliationRequired,
+    InDoubtExecution,
+    InterruptedExecution,
+    InterruptedExecutionNeedsSettlement,
+    NoPendingExecution,
+    ObserveExecution,
+    PendingActExecution,
+    UnrecoverablePreV1Execution,
+)
 from mote.contracts.model.turn import ModelTurn
 from mote.contracts.output.errors import OutputCorrectionExhaustedError
 from mote.contracts.ports.conversation.message_activity import MessageActivity
@@ -20,7 +32,7 @@ from mote.kernel.execution.operations.inference import InferenceService
 from mote.kernel.execution.operations.observation import ObservationService
 from mote.kernel.execution.operations.output import OutputOperation
 from mote.kernel.execution.result import ExecutionResult
-from mote.kernel.execution.state import ExecutionState, NoModelTurn, PendingCandidate
+from mote.kernel.execution.state import ExecutionState, NoModelTurn, PendingCandidate, RecoveredPendingAct
 from mote.kernel.inference.base import BaseInferenceEngine
 
 OutputT = TypeVar("OutputT")
@@ -34,17 +46,57 @@ class ExecutionNode:
 class RestoreNode(ExecutionNode, Generic[OutputT]):
     node_id = NodeId.RESTORE
     effect_kind = EffectKind.LEDGERED
-    allowed_targets = frozenset({NodeId.OBSERVE})
 
-    def __init__(self, outputs: OutputOperation[OutputT]) -> None:
-        self._outputs = outputs
+    def __init__(
+        self,
+        restore: ExecutionRestorePort[OutputT],
+        *,
+        allow_pending_act: bool,
+    ) -> None:
+        self._restore = restore
+        self.allowed_targets = (
+            frozenset({NodeId.ACT, NodeId.OBSERVE}) if allow_pending_act else frozenset({NodeId.OBSERVE})
+        )
+        self._allow_pending_act = allow_pending_act
 
     async def run(
         self,
         state: ExecutionState[OutputT],
     ) -> Transition | End[ExecutionResult[OutputT] | None]:
-        restored = await self._outputs.restore()
-        return End(restored) if restored is not None else Transition(NodeId.OBSERVE)
+        execution = self._restore.snapshot()
+        if isinstance(execution, CommittedExecution):
+            return End(
+                ExecutionResult(
+                    presentation=execution.presentation,
+                    committed_output=execution.result,
+                )
+            )
+        if isinstance(execution, PendingActExecution):
+            if not self._allow_pending_act:
+                raise RuntimeError("execution topology cannot recover a PendingAct frontier")
+            state.turn = RecoveredPendingAct(execution.frontier)
+            return Transition(NodeId.ACT)
+        if isinstance(execution, InDoubtExecution):
+            identities = ", ".join(item.value for item in execution.invocation_ids)
+            raise RuntimeError(f"external effect outcome requires reconciliation before resume: {identities}")
+        if isinstance(execution, ExternalEffectReconciliationRequired):
+            identities = ", ".join(item.value for item in execution.invocation_ids)
+            raise RuntimeError(
+                "started external effect requires receipt-only reconciliation " f"before resume: {identities}"
+            )
+        if isinstance(execution, InterruptedExecution):
+            return End(None)
+        if isinstance(execution, InterruptedExecutionNeedsSettlement):
+            raise RuntimeError(f"interrupted run requires receipt-only settlement before resume: {execution.run_id}")
+        if isinstance(execution, UnrecoverablePreV1Execution):
+            raise RuntimeError(execution.code)
+        if isinstance(execution, ObserveExecution):
+            state.initial_observe_complete = True
+            state.continue_inference = execution.cursor.continue_inference
+            return Transition(NodeId.OBSERVE)
+        if isinstance(execution, NoPendingExecution):
+            return Transition(NodeId.OBSERVE)
+        raise TypeError("unknown execution restore disposition")
 
 
 class ObserveNode(ExecutionNode, Generic[OutputT]):
@@ -162,9 +214,12 @@ class ActNode(ExecutionNode, Generic[OutputT]):
         self,
         state: ExecutionState[OutputT],
     ) -> Transition | End[ExecutionResult[OutputT] | None]:
-        if not isinstance(state.turn, ModelTurn):
-            raise RuntimeError("action phase requires a model turn")
-        state.response = await self._actions.execute(state.turn)
+        if isinstance(state.turn, RecoveredPendingAct):
+            state.response = await self._actions.resume(state.turn.frontier)
+        elif isinstance(state.turn, ModelTurn):
+            state.response = await self._actions.execute(state.turn)
+        else:
+            raise RuntimeError("action phase requires a model turn or recovered PendingAct")
         state.turn = NoModelTurn()
         state.continue_inference = True
         return Transition(NodeId.OBSERVE)

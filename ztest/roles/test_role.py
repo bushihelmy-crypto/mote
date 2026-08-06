@@ -1974,8 +1974,7 @@ class TestFullResolutionSmoke:
 
 
 # =============================================================================
-# Tool-execution-scope config wiring (tools.result_limit / tools.effect_store
-# reach the executor; disabling the ledger yields no ledger)
+# Tool-execution-scope result-limit config wiring.
 # =============================================================================
 class TestToolExecConfigWiring:
     """The ``tools`` config group is the single source for the two tool-exec
@@ -1984,41 +1983,39 @@ class TestToolExecConfigWiring:
     live executor (and the spill reducer borrows the same ``result_limit``
     instance back off the executor — proven here by identity)."""
 
-    def test_result_limit_and_ledger_config_reach_executor(self, context):
-        role = Role(
+    def test_result_limit_config_reaches_executor(self, context):
+        role = build_test_role(
             name="X",
-            wiring=AgentWiring.for_context(context),
             role_schema=RoleSchema(tools=["Read"]),
+            services=AgentWiring.for_context(context).services,
         )
         # Override before the (lazy) executor is built.
-        role.config.tools.result_limit.default_max_result_size_chars = 12345
-        role.config.tools.effect_store.enabled = True
+        role.config = role.config.model_copy(
+            update={
+                "tools": role.config.tools.model_copy(
+                    update={
+                        "result_limit": role.config.tools.result_limit.model_copy(
+                            update={"default_max_result_size_chars": 12345}
+                        )
+                    }
+                )
+            }
+        )
 
-        ex = role.executor
+        ex = role._executor
         # The executor exposes the two configs it owns; both are the very
         # instances configured under ``tools`` (identity, not just value).
         assert ex.limit_config is role.config.tools.result_limit
         assert ex.limit_config.default_max_result_size_chars == 12345
-        assert ex.effect_store_config is role.config.tools.effect_store
-        assert ex.journal is not None
-
-    def test_ledger_disabled_yields_no_ledger(self, context):
-        role = Role(
-            name="X",
-            wiring=AgentWiring.for_context(context),
-            role_schema=RoleSchema(tools=["Read"]),
-        )
-        role.config.tools.effect_store.enabled = False
-        assert role.executor.effect_store_config.enabled is False
 
     def test_spill_reducer_borrows_the_executor_result_limit(self, context):
         # Zero-drift proof: the compaction spill reducer does not build its own
         # ToolResultLimitConfig — it reuses the one the executor owns, which is
         # the one configured under ``tools``.
-        role = Role(
+        role = build_test_role(
             name="X",
-            wiring=AgentWiring.for_context(context),
             role_schema=RoleSchema(tools=["Read"]),
+            services=AgentWiring.for_context(context).services,
         )
         bind_fake_runtime(role, FakeLLM())
         cm = role._components._graph.get(CONTEXT_MANAGER)

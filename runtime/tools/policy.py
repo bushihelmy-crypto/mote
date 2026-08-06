@@ -390,6 +390,22 @@ class DefaultToolCallPolicy:
                 intent.identity.with_arguments(arguments), arguments, reason, trace=tuple(trace)
             )
 
+        if decision.behavior == "ask":
+            trace.append(
+                ToolPolicyTraceEntry(
+                    step="permission",
+                    disposition="enrich",
+                    detail=decision.reason.type,
+                )
+            )
+            return ToolCallDecision.require_approval(
+                intent.identity.with_arguments(arguments),
+                arguments,
+                reason=decision.message or decision.reason.detail,
+                permission_targets=facts.targets,
+                mutates_fs=facts.mutates_fs,
+                trace=tuple(trace),
+            )
         if decision.behavior == "deny":
             reason = decision.message or decision.reason.detail or "blocked before tool use"
             terminate = decision.reason.type == "user"
@@ -412,8 +428,8 @@ class DefaultToolCallPolicy:
 
     @staticmethod
     def _validate_permission_decision(decision: PermissionDecision) -> None:
-        if decision.behavior not in ("allow", "deny"):
-            raise ValueError(f"permission engine returned non-terminal behavior: {decision.behavior}")
+        if decision.behavior not in ("allow", "deny", "ask"):
+            raise ValueError(f"permission engine returned unknown behavior: {decision.behavior}")
         if decision.updated_args is not None and not isinstance(decision.updated_args, dict):
             raise TypeError("permission updated_args must be a dict")
 
@@ -712,17 +728,14 @@ def build_permission_engine(
     if permission_config is None and not require_permission:
         return None
     config = permission_config or PermissionConfig(mode="bypass")
-    ask_user = None
     get_cwd: Optional[Callable[[], str]] = None
     if role is not None:
         capabilities = role.tool_capabilities()
-        ask_user = capabilities.get("request_approval")
         get_cwd = capabilities.get("get_cwd")
     sandbox = SandboxGuard(config.sandbox, get_cwd=get_cwd) if config.sandbox is not None else None
     return PermissionEngine(
         mode=config.mode,
         store=RuleStore.from_config(config),
-        ask_user=ask_user,
         sandbox=sandbox,
     )
 

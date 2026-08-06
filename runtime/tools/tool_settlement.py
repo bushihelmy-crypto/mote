@@ -20,10 +20,8 @@ from mote.runtime.resources import spill as tool_result_limit
 from mote.runtime.session.workspace import SessionWorkspace
 from mote.runtime.telemetry.logging import logger
 from mote.runtime.tools.compress.tool_output import compress_tool_result
-from mote.runtime.tools.effect_store import ToolEffectStore
 from mote.runtime.tools.tool_binding import ExecutableToolBinding
 from mote.runtime.tools.tool_result import ToolResult
-from mote.runtime.tools.tool_result_receipt import encode_tool_result_receipt
 
 ToolObservationEvent = FileMutatedEvent | ToolCallFinishedEvent | ToolInvocationStartedEvent | ToolsChangedEvent
 
@@ -37,7 +35,6 @@ class ToolSettlement:
         session_id: str,
         telemetry: TelemetryEmitter[ToolObservationEvent],
         get_tool: Callable[[str], ExecutableToolBinding | None],
-        effect_store: ToolEffectStore | None,
         limit_config: ToolResultLimitConfig,
         workspace_store: SessionWorkspace,
         policy: ToolResultPolicy,
@@ -45,7 +42,6 @@ class ToolSettlement:
         self._session_id = session_id
         self._telemetry = telemetry
         self._get_tool = get_tool
-        self._effect_store = effect_store
         self._limit_config = limit_config
         self._workspace_store = workspace_store
         self._policy = policy
@@ -131,7 +127,6 @@ class ToolSettlement:
         args: dict[str, Any],
         result: ToolResult,
         identity: ToolInvocationIdentity,
-        ledgered: bool,
     ) -> ToolResult:
         execution_success = result.success
         result = await self._present(
@@ -166,13 +161,6 @@ class ToolSettlement:
             config=self._limit_config,
         )
         result = self._limit_result(result, name, str(identity.invocation_id))
-        if ledgered and self._effect_store is not None:
-            receipt = encode_tool_result_receipt(result)
-            self._effect_store.settle(
-                str(identity.invocation_id),
-                succeeded=execution_success,
-                receipt=receipt,
-            )
         return result
 
     async def _present(

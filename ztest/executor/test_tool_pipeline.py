@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mote.runtime.tools.tool_pipeline import InvokeStage, LedgerStage, ToolExecution, ToolExecutionPipeline
+from mote.runtime.tools.tool_pipeline import InvokeStage, ToolExecution, ToolExecutionPipeline
 from mote.runtime.tools.tool_result import ToolResult
 
 
@@ -42,11 +42,10 @@ class _Settlement:
         return args[2]
 
 
-def _pipeline(events, *, authorize=None, ledger=None):
+def _pipeline(events, *, authorize=None):
     pipeline = ToolExecutionPipeline.__new__(ToolExecutionPipeline)
     pipeline._resolve = _Stage(events, "resolve")
     pipeline._authorize = _Stage(events, "authorize", authorize, async_run=True)
-    pipeline._ledger = _Stage(events, "ledger", ledger)
     pipeline._invoke = _Stage(events, "invoke", ToolResult(output="ok"), async_run=True)
     pipeline._settlement = _Settlement(events)
     return pipeline
@@ -60,7 +59,6 @@ async def test_success_order_reaches_start_only_at_invocation_boundary():
     assert events == [
         "resolve",
         "authorize",
-        "ledger",
         "start",
         "invoke",
         "settle",
@@ -68,7 +66,7 @@ async def test_success_order_reaches_start_only_at_invocation_boundary():
 
 
 @pytest.mark.asyncio
-async def test_authorize_rejection_cannot_reach_ledger_or_invoke():
+async def test_authorize_rejection_cannot_reach_invoke():
     events: list[str] = []
     denied = ToolResult(output="denied", success=False)
     result = await _pipeline(events, authorize=denied).run("Echo", {}, "call-1")
@@ -77,66 +75,37 @@ async def test_authorize_rejection_cannot_reach_ledger_or_invoke():
 
 
 @pytest.mark.asyncio
-async def test_ledger_short_circuit_cannot_invoke_or_settle_as_ran():
-    events: list[str] = []
-    replay = ToolResult(output="replayed")
-    result = await _pipeline(events, ledger=replay).run("Echo", {}, "call-1")
-    assert result is replay
-    assert events == ["resolve", "authorize", "ledger", "reject"]
-
-
 @pytest.mark.asyncio
 async def test_invoke_binds_and_restores_ambient_tool_call_id():
+    from mote.contracts.tool import ToolAttemptOrdinal, ToolInvocationId, ToolInvocationIdentity
     from mote.runtime.resilience.recovery import RecoveryRunner
     from mote.runtime.tools.execution_context import current_tool_call_id
 
     seen = []
 
     class Tool:
+        from types import SimpleNamespace
+
+        definition = SimpleNamespace(execution_kind="atomic")
+
         async def call(self):
             seen.append(current_tool_call_id())
             return "ok"
 
     stage = InvokeStage(RecoveryRunner({}), None)
-    result = await stage.run(ToolExecution(name="Probe", args={}, result_id="stable-call", tool=Tool()))
+    identity = ToolInvocationIdentity(
+        ToolInvocationId("stable-call"),
+        ToolAttemptOrdinal(1),
+        "probe/v1",
+        1,
+        "sha256-arguments",
+        "agent-1",
+        "run-1",
+    )
+    result = await stage.run(
+        ToolExecution(name="Probe", args={}, identity=identity, tool=Tool(), authorization_generation=1)
+    )
 
     assert result.output == "ok"
     assert seen == ["stable-call"]
     assert current_tool_call_id() is None
-
-
-def test_started_external_call_reenters_only_for_explicit_reconciliation():
-    from types import SimpleNamespace
-
-    from mote.contracts.tool.effects import ToolEffect
-
-    class Ledger:
-        def __init__(self):
-            self.started = 0
-
-        def status(self, _call_id):
-            return SimpleNamespace(status="started", effect="external")
-
-        def mark_started(self, *_args, **_kwargs):
-            self.started += 1
-
-    class Tool:
-        @classmethod
-        def resolve_effect(cls):
-            return ToolEffect.EXTERNAL
-
-        def resolve_effect_for(self, args):
-            return self.resolve_effect()
-
-        def can_resume_started_call(self, call_id):
-            return call_id == "recoverable"
-
-    ledger = Ledger()
-    stage = LedgerStage(ledger)
-
-    recoverable = ToolExecution(name="RunGraph", args={}, result_id="recoverable", tool=Tool())
-    blocked = ToolExecution(name="External", args={}, result_id="unknown", tool=Tool())
-
-    assert stage.run(recoverable) is None
-    assert stage.run(blocked).success is False
-    assert ledger.started == 0

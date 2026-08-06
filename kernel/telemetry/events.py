@@ -12,25 +12,20 @@ from mote.kernel.telemetry.context import current_trace_id
 
 KernelTelemetryEvent = SpanStartEvent | SpanEndEvent
 AsyncTelemetryObserver = Callable[[KernelTelemetryEvent], Awaitable[None]]
-SyncTelemetryObserver = Callable[[KernelTelemetryEvent], None]
 
 _async_observer: ContextVar[AsyncTelemetryObserver | None] = ContextVar("mote_kernel_async_observer", default=None)
-_sync_observer: ContextVar[SyncTelemetryObserver | None] = ContextVar("mote_kernel_sync_observer", default=None)
 _current_span: ContextVar[str | None] = ContextVar("mote_kernel_span", default=None)
 
 
 @contextmanager
 def bind_observers(
     async_observer: AsyncTelemetryObserver | None,
-    sync_observer: SyncTelemetryObserver | None,
 ) -> Iterator[None]:
     """Bind Runtime-provided observation capabilities for this execution scope."""
     async_token = _async_observer.set(async_observer)
-    sync_token = _sync_observer.set(sync_observer)
     try:
         yield
     finally:
-        _sync_observer.reset(sync_token)
         _async_observer.reset(async_token)
 
 
@@ -38,12 +33,6 @@ async def emit_event(event: KernelTelemetryEvent) -> None:
     observer = _async_observer.get()
     if observer is not None:
         await observer(event)
-
-
-def emit_event_sync(event: KernelTelemetryEvent) -> None:
-    observer = _sync_observer.get()
-    if observer is not None:
-        observer(event)
 
 
 def current_span_id() -> str | None:
@@ -80,10 +69,8 @@ async def span(label: str, *, attributes: dict | None = None) -> AsyncIterator[s
 __all__ = [
     "AsyncTelemetryObserver",
     "KernelTelemetryEvent",
-    "SyncTelemetryObserver",
     "bind_observers",
     "current_span_id",
     "emit_event",
-    "emit_event_sync",
     "span",
 ]

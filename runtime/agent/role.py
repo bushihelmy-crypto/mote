@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 from dataclasses import asdict
+from datetime import datetime, timezone
 from functools import partial
 from typing import TYPE_CHECKING, Any, Generic, Optional, Protocol, Set, TypeVar, cast, runtime_checkable
 from uuid import uuid4
@@ -22,9 +23,12 @@ from mote.contracts.content import ContentDigest
 from mote.contracts.conversation import AIMessage, CauseBy, Message, MessageQueue
 from mote.contracts.conversation.fields import MESSAGE_ROUTE_TO_SELF
 from mote.contracts.conversation.prompt_policy import PromptIntent
-from mote.contracts.events.conversation import PromptRejectedEvent, UserPromptSubmitEvent
+from mote.contracts.events.conversation import MessageAppendedEvent, PromptRejectedEvent, UserPromptSubmitEvent
 from mote.contracts.events.envelope import JsonValue, thaw_json
+from mote.contracts.events.pending_act import PendingActionResultCommittedEvent
 from mote.contracts.events.session import SessionStartEvent, TurnEndEvent
+from mote.contracts.execution.interrupt import RunInterruptPermit
+from mote.contracts.execution.restore import InterruptedExecutionNeedsSettlement, PendingActExecution
 from mote.contracts.file import RewindResult
 from mote.contracts.output import (
     CommittedOutput,
@@ -40,6 +44,7 @@ from mote.contracts.output.publication import OutputPublicationRequest
 from mote.contracts.ports.agent.hosting import ResidentAgentHostingSnapshot
 from mote.contracts.ports.agent.routing import AgentRoutingPort
 from mote.contracts.ports.events.telemetry import TelemetryRuntimePort
+from mote.contracts.ports.execution.reconciliation import ReceiptQueryState
 from mote.contracts.ports.interaction.role import RoleHumanInteractionPort
 from mote.contracts.ports.skill.registry import SkillCatalog, SkillService
 from mote.contracts.ports.task.operations import BackgroundTaskService
@@ -52,8 +57,10 @@ from mote.contracts.service import (
     route_for_payload,
 )
 from mote.contracts.task.lifecycle import BackgroundTaskPinSnapshot
+from mote.contracts.tool.effects import ToolEffect
 from mote.contracts.tool.errors import ToolNotConfiguredError
 from mote.kernel.commands import CommandChannel
+from mote.kernel.commands.contracts import ExecutedCommand
 from mote.kernel.execution.run_context import RunContext
 from mote.kernel.telemetry.events import span
 from mote.runtime.agent.base import BaseRole
@@ -355,6 +362,7 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                     service_gateway=parent_context.service_gateway,
                 ),
                 run_lease_coordinator=services.run_lease_coordinator,
+                runtime_lease_coordinator=services.runtime_lease_coordinator,
                 application_composition=services.application_composition,
                 workflow_governance=services.workflow_governance,
                 workflow_delivery=services.workflow_delivery,
@@ -1405,6 +1413,25 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                 while True:
                     lease = await self._components.begin_output_lease()
                     try:
+                        restored = await self._components.execution_reconciler.reconcile_started_external_effects(
+                            lease.run_id,
+                            writer=self._components.session_run_writer_guard.writer_for(
+                                lease.run_id, lease.fencing_token
+                            ),
+                        )
+                        if isinstance(restored, InterruptedExecutionNeedsSettlement):
+                            interrupted = self._components.session_projection.snapshot().interrupted_run_by_id[
+                                lease.run_id
+                            ]
+                            await self.settle_interrupted_run(
+                                RunInterruptPermit(
+                                    lease.run_id,
+                                    self._components.session_run_writer_guard.owner_id,
+                                    self._components.session_run_writer_guard.incarnation_id,
+                                    lease.fencing_token,
+                                    interrupted.interrupted_at,
+                                )
+                            )
                         run_context = RunContext(
                             deps=self.deps,
                             session_id=self.session_id,
@@ -1414,6 +1441,13 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                             await self._executor.start_run(run_context)
                             try:
                                 flow_engine = self._components.make_flow_engine()
+                                current_restore = self._components.execution_reconciler.snapshot(lease.run_id)
+                                if isinstance(current_restore, PendingActExecution):
+                                    flow_engine.restore_tool_snapshot(
+                                        await self._components.context_provider.restore_tool_snapshot(
+                                            current_restore.frontier.definition_ref
+                                        )
+                                    )
                                 try:
                                     flow_result = await flow_engine.run()
                                 finally:
@@ -1460,6 +1494,114 @@ class Role(BaseRole, Generic[DepsT, OutputT]):
                     )
                 self.publish_message(rsp)
                 return None
+
+    async def interrupt_active_run(self) -> RunInterruptPermit | None:
+        """Durably record a user interrupt before process-local cancellation."""
+
+        try:
+            lease = self._components.current_output_lease()
+        except RuntimeError:
+            return None
+        projection = self._components.session_projection.snapshot()
+        frontier_id = projection.active_pending_act_by_run.get(lease.run_id)
+        model_call_id = projection.pending_act_by_id[frontier_id].model_call_id if frontier_id is not None else None
+        writer = self._components.session_run_writer_guard.writer_for(lease.run_id, lease.fencing_token)
+        return await self._components.run_interrupt_service.interrupt_run(
+            lease.run_id,
+            model_call_id=model_call_id,
+            interrupted_at=datetime.now(timezone.utc),
+            expected_stream_version=projection.through_sequence,
+            writer=writer,
+        )
+
+    async def settle_interrupted_run(self, permit: RunInterruptPermit) -> None:
+        """Attach the deterministic marker and close a cancelled run."""
+
+        projection = self._components.session_projection.snapshot()
+        if permit.run_id in projection.settled_interrupt_runs:
+            return
+        frontier_id = projection.active_pending_act_by_run.get(permit.run_id)
+        result_events = ()
+        action_results = ()
+        effect_receipts = ()
+        in_doubt_external_invocations = ()
+        if frontier_id is not None:
+            frontier = projection.pending_act_by_id[frontier_id]
+            incomplete = {
+                action.invocation_id
+                for action in frontier.actions
+                if action.invocation_id not in projection.pending_action_result_by_invocation
+                and action.invocation_id not in projection.skipped_pending_actions
+            }
+            if incomplete:
+                external_started = {
+                    invocation
+                    for invocation in incomplete
+                    if (effect := projection.external_effect_by_invocation.get(invocation)) is not None
+                    and effect.state.value == "started"
+                }
+                in_doubt_external_invocations = tuple(external_started)
+                local_receipts = {
+                    action.invocation_id: self._components.file_operations.query_file_transaction(
+                        action.fileops_transaction_id
+                    )
+                    for action in frontier.actions
+                    if action.invocation_id in incomplete
+                    and action.effect is ToolEffect.LOCAL
+                    and action.fileops_transaction_id is not None
+                }
+                pending = [
+                    ExecutedCommand(
+                        action_id=action.action_id,
+                        name=action.tool_name,
+                        arguments=projection.pending_action_arguments_by_invocation[action.invocation_id][-1].arguments,
+                        output=(
+                            "[FILEOPS_COMMITTED] The managed file transaction committed before interruption."
+                            if action.invocation_id in local_receipts
+                            and local_receipts[action.invocation_id].state is ReceiptQueryState.COMMITTED
+                            else (
+                                "[IN_DOUBT] The external or managed-file effect cannot be safely inferred after interruption."
+                                if action.invocation_id in external_started
+                                or (
+                                    action.invocation_id in local_receipts
+                                    and local_receipts[action.invocation_id].state is ReceiptQueryState.IN_DOUBT
+                                )
+                                else "[CANCELLED_BY_USER] Tool execution was interrupted before a durable result was committed."
+                            )
+                        ),
+                        success=(
+                            action.invocation_id in local_receipts
+                            and local_receipts[action.invocation_id].state is ReceiptQueryState.COMMITTED
+                        ),
+                        settled=True,
+                    )
+                    for action in frontier.actions
+                    if action.invocation_id in incomplete
+                ]
+                projected = await self._components.command_channel.project_results(pending)
+                messages_by_action = {message.metadata.get("tool_call_id"): message for message in projected.messages}
+                result_events = tuple(MessageAppendedEvent(message) for message in projected.messages)
+                action_results = tuple(
+                    PendingActionResultCommittedEvent(
+                        frontier.frontier_id,
+                        action.invocation_id,
+                        messages_by_action[action.action_id].id,
+                    )
+                    for action in frontier.actions
+                    if action.invocation_id in incomplete
+                )
+        if not projection.transcript_messages:
+            raise RuntimeError("interrupted run has no protocol-complete context anchor")
+        await self._components.run_interrupt_service.settle(
+            permit,
+            anchor_message_id=projection.transcript_messages[-1].id,
+            expected_stream_version=projection.through_sequence,
+            writer=self._components.session_run_writer_guard.writer_for(permit.run_id, permit.fencing_token),
+            result_events=result_events,
+            action_results=action_results,
+            effect_receipts=effect_receipts,
+            in_doubt_external_invocations=in_doubt_external_invocations,
+        )
 
     @staticmethod
     def list_sessions(base_dir: str | None = None, *, cwd: str | None = None) -> list:

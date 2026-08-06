@@ -39,7 +39,6 @@ from mote.runtime.session.projection import (
     reduce_session_envelope,
 )
 from mote.runtime.session.recall import body_for_tool_call
-from mote.runtime.session.reconcile import ReconcileResult, reconcile_tool_calls
 from mote.runtime.session.run_lease import RunLeaseHandle, RunLeaseStore
 from mote.runtime.session.runtime_checkpoint import RuntimeCheckpointRecorder
 from mote.runtime.session.runtime_projection import SessionRuntimeProjectionJournal
@@ -70,8 +69,6 @@ __all__ = [
     "RuntimeProjectionAcknowledgedEvent",
     "RuntimeCheckpointRecorder",
     "SessionRuntimeProjectionJournal",
-    "ReconcileResult",
-    "reconcile_tool_calls",
     "SessionInfo",
     "list_sessions",
     "new_session_id",

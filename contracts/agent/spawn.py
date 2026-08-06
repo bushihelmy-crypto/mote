@@ -7,6 +7,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Generic, Optional, Protocol, TypeVar, runtime_checkable
 
 from mote.contracts.conversation import Message
+from mote.contracts.execution.interrupt import RunInterruptPermit
 from mote.contracts.output import RunOutcome
 
 if TYPE_CHECKING:
@@ -70,6 +71,10 @@ class RunnableAgent(Protocol[OutputT]):
     def session_id(self) -> str: ...
 
     async def run(self, with_message: Message | None = None) -> RunOutcome[OutputT] | None: ...
+
+    async def interrupt_active_run(self) -> RunInterruptPermit | None: ...
+
+    async def settle_interrupted_run(self, permit: RunInterruptPermit) -> None: ...
 
     async def cleanup(self) -> None: ...
 

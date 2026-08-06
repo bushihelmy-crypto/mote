@@ -57,7 +57,7 @@ def build_react_graph(
     nodes = {
         node.node_id: node
         for node in (
-            RestoreNode(inputs.outputs),
+            RestoreNode(inputs.restore, allow_pending_act=True),
             ObserveNode(inputs.observation, inputs.set_active),
             BudgetNode(inputs.context_provider, inputs.context, inputs.advance_turn),
             InferenceNode(inputs.inference, inputs.current_channel, inputs.inference_engine),

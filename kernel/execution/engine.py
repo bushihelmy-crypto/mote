@@ -20,10 +20,12 @@ from typing import TYPE_CHECKING, Callable, Generic, Optional, TypeVar
 from uuid import uuid4
 
 from mote.contracts.conversation import AIMessage, CauseBy, Message
+from mote.contracts.execution.restore import ExecutionRestorePort
 from mote.contracts.model.inference import InferenceResult
 from mote.contracts.ports.conversation.message_activity import MessageActivity
 from mote.contracts.ports.conversation.turn_context_bus import TurnContextCollector
 from mote.contracts.ports.execution.model_turn_completion import ModelTurnCompletionPolicy
+from mote.contracts.ports.execution.pending_act import PendingActAcceptancePort
 from mote.contracts.ports.execution.transaction import ExecutionOutputTransactionPort
 from mote.contracts.ports.output.evaluation import OutputEngine
 from mote.contracts.ports.task.operations import BackgroundTaskService
@@ -120,6 +122,8 @@ class ExecutionEngine(Generic[OutputT]):
         report_inference_result: Callable[[InferenceResult], None],
         inference_checkpoint: "InferenceCheckpointPort",
         execution_transaction: ExecutionOutputTransactionPort[OutputT],
+        pending_act_acceptance: PendingActAcceptancePort,
+        execution_restore: ExecutionRestorePort[OutputT],
         turn_context_bus: TurnContextCollector | None = None,
         get_cwd: Optional[Callable[[], str]] = None,
         advance_turn: Optional[Callable[[], int]] = None,
@@ -191,6 +195,7 @@ class ExecutionEngine(Generic[OutputT]):
             tool_execution_port=self._tool_execution_port,
             tool_snapshot=lambda: self._tool_snapshot,
             transaction=execution_transaction,
+            pending_act_acceptance=pending_act_acceptance,
             report_inference_result=self._report_think_result,
             set_active=self._set_active,
             dispatcher=self._action_dispatcher,
@@ -209,6 +214,7 @@ class ExecutionEngine(Generic[OutputT]):
             inference=self._inference,
             actions=self._actions,
             outputs=self._outputs,
+            restore=execution_restore,
             context_provider=self._context_provider,
             completion_policy=self._completion_policy,
             current_channel=lambda: self._turn_channel,
@@ -256,6 +262,11 @@ class ExecutionEngine(Generic[OutputT]):
             self._tool_execution_port.release(self._tool_snapshot)
         self._tool_snapshot = snapshot
 
+    def restore_tool_snapshot(self, snapshot: ToolBindingSnapshot) -> None:
+        """Install the exact live snapshot used to validate a recovered ACT."""
+
+        self._set_tool_snapshot(snapshot)
+
     async def _emit_run_event(self, event: RunEvent) -> None:
         for queue in tuple(self._event_queues):
             await queue.put(event)
@@ -294,8 +305,8 @@ class ExecutionEngine(Generic[OutputT]):
                     run_id,
                     RunCompletionSummary(
                         committed=committed is not None,
-                        candidate_id=committed.candidate_id if committed is not None else None,
-                        contract_id=committed.contract_id if committed is not None else None,
+                        candidate_id=(committed.candidate_id if committed is not None else None),
+                        contract_id=(committed.contract_id if committed is not None else None),
                         presentation_kind=(type(result.presentation).__name__ if result is not None else None),
                     ),
                 )

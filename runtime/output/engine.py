@@ -16,6 +16,7 @@ from mote.contracts.events.output import (
     OutputCandidateReceivedEvent,
     OutputValidationRejectedEvent,
 )
+from mote.contracts.execution.restore import CommittedExecution
 from mote.contracts.foundation.errors.base import MoteError
 from mote.contracts.output import (
     Accept,
@@ -168,6 +169,16 @@ class OutputEngine(Generic[OutputT]):
     def has_restored_terminal_output(self) -> bool:
         """Whether resume can finish this lifecycle without another model call."""
         return self.restored and self.committed_output is not None
+
+    def restored_committed_execution(self) -> CommittedExecution[OutputT] | None:
+        """Return the immutable terminal fact, or fail closed on partial restore."""
+        if not self.has_restored_terminal_output:
+            return None
+        committed = self.committed_output
+        presentation = self.restored_message
+        if committed is None or presentation is None:
+            raise OutputResumeContractMismatchError("restored output omitted its terminal value")
+        return CommittedExecution(committed, presentation)
 
     async def evaluate(self, candidate) -> OutputEvaluation[OutputT]:
         if self.validated:
