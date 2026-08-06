@@ -200,3 +200,14 @@ def test_concurrent_call_ids_use_distinct_files(tmp_path: Path) -> None:
     assert journal.path_for("call-a") != journal.path_for("call-b")
     assert [record.model_call_id for record in journal.records("call-a")] == ["call-a"]
     assert [record.model_call_id for record in journal.records("call-b")] == ["call-b"]
+
+
+def test_journal_reuses_runtime_append_primitive() -> None:
+    source = (Path(__file__).resolve().parents[3] / "runtime/models/failover/model_journal.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "disk_io.append_line(" in source
+    assert "os.open(" not in source
+    assert "os.write(" not in source
+    assert "os.fsync(" not in source

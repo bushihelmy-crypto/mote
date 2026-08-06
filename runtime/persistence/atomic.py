@@ -82,34 +82,56 @@ def read_tail(path: PathLike, max_bytes: int) -> bytes:
     return read_range(path, offset, size - offset)
 
 
-def write_bytes(path: PathLike, data: bytes, *, append: bool = True, fsync: bool = False) -> int:
+def write_bytes(
+    path: PathLike,
+    data: bytes,
+    *,
+    append: bool = True,
+    fsync: bool = False,
+    mode: int | None = None,
+) -> int:
     """Write *data* to *path*. Returns the number of bytes written.
 
     ``append=True`` appends to (or creates) the file; ``append=False``
     truncates first. ``fsync=True`` forces the bytes to durable storage before
     returning (the append/journal path uses this; bulk callers leave it off).
     """
-    mode = "ab" if append else "wb"
-    with open(path, mode) as f:
+    p = Path(path)
+    existed = p.exists()
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+    descriptor = os.open(p, flags, mode if mode is not None else 0o666)
+    with os.fdopen(descriptor, "ab" if append else "wb") as f:
         f.write(data)
         f.flush()
         if fsync:
             os.fsync(f.fileno())
+    if mode is not None:
+        os.chmod(p, mode)
+    if fsync and not existed:
+        fsync_directory(p.parent)
     return len(data)
 
 
-def append_line(path: PathLike, line: str, *, fsync: bool = True) -> None:
+def append_line(
+    path: PathLike,
+    line: str,
+    *,
+    fsync: bool = True,
+    mode: int | None = None,
+) -> None:
     """Append a single text *line* (a trailing newline is added) to *path*.
 
     The append-only journal primitive: ``O_APPEND`` keeps concurrent appends
     atomic at the line level and leaves earlier lines intact on crash, and
     ``fsync`` (on by default here) makes the line durable before returning.
     """
-    p = Path(path)
-    existed = p.exists()
-    write_bytes(p, (line + "\n").encode("utf-8"), append=True, fsync=fsync)
-    if fsync and not existed:
-        fsync_directory(p.parent)
+    write_bytes(
+        path,
+        (line + "\n").encode("utf-8"),
+        append=True,
+        fsync=fsync,
+        mode=mode,
+    )
 
 
 def fsync_directory(path: PathLike) -> None:

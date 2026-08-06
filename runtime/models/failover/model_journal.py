@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 import threading
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from mote.contracts.model.model_journal import (
     ModelWireAuthorizedRecord,
 )
 from mote.contracts.model.topology_codec import decode_route_id
+from mote.runtime.persistence import disk_io
 from mote.runtime.persistence.async_io import run_disk_io
 from mote.runtime.telemetry.logging import log_class
 
@@ -77,36 +77,18 @@ class LocalModelCallJournal:
 
     def append_committed(self, record: ModelCallJournalRecord) -> None:
         path = self.path_for(record.model_call_id)
-        payload = record.model_dump_json().encode("utf-8") + b"\n"
         with self._lock:
             existing = self._read_path(path, expected_call_id=record.model_call_id)
             if not existing and isinstance(record, ModelCallPlannedRecord):
                 self._validate_global_admission()
             self._validate_append(existing, record)
             try:
-                existed = path.exists()
                 path.parent.mkdir(parents=True, exist_ok=True)
-                descriptor = os.open(
+                disk_io.append_line(
                     path,
-                    os.O_APPEND | os.O_CREAT | os.O_WRONLY,
-                    0o600,
+                    record.model_dump_json(),
+                    mode=0o600,
                 )
-                try:
-                    written = 0
-                    while written < len(payload):
-                        count = os.write(descriptor, payload[written:])
-                        if count <= 0:
-                            raise OSError("model-call journal append made no progress")
-                        written += count
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
-                if not existed:
-                    directory = os.open(path.parent, os.O_RDONLY)
-                    try:
-                        os.fsync(directory)
-                    finally:
-                        os.close(directory)
             except OSError as exc:
                 raise ModelCallJournalUnavailableError("model-call journal cannot be appended") from exc
 
