@@ -29,6 +29,7 @@ from mote.runtime.persistence.atomic import (
 )
 from mote.runtime.persistence.execution_transaction import RuntimeExecutionTransaction
 from mote.runtime.persistence.journal_writer import Journal
+from mote.runtime.persistence.transaction_gate import SerialTransactionGate
 from mote.runtime.persistence.writer import DiskWriter
 
 __all__ = [
@@ -48,5 +49,6 @@ __all__ = [
     "remove_tree",
     "DiskWriter",
     "Journal",
+    "SerialTransactionGate",
     "RuntimeExecutionTransaction",
 ]

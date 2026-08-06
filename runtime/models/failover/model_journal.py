@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import threading
 from pathlib import Path
 
 from pydantic import TypeAdapter, ValidationError
@@ -24,13 +23,16 @@ from mote.contracts.model.model_journal import (
 from mote.contracts.model.topology_codec import decode_route_id
 from mote.runtime.persistence import disk_io
 from mote.runtime.persistence.async_io import run_disk_io
+from mote.runtime.persistence.transaction_gate import SerialTransactionGate
 from mote.runtime.telemetry.logging import log_class
 
 MODEL_CALL_JOURNAL_DIRNAME = "model-calls"
 _RECORD_ADAPTER = TypeAdapter(ModelCallJournalRecord)
 
 
-def validate_model_call_record_stream(records: tuple[ModelCallJournalRecord, ...]) -> None:
+def validate_model_call_record_stream(
+    records: tuple[ModelCallJournalRecord, ...],
+) -> None:
     """Validate one decoded stream without acquiring store or writer authority."""
 
     LocalModelCallJournal._validate_stream(records)
@@ -59,7 +61,7 @@ class LocalModelCallJournal:
     def __init__(self, root: str | Path, *, policy: ModelCheckpointPolicy) -> None:
         self._root = Path(root)
         self._policy = policy
-        self._lock = threading.Lock()
+        self._transactions = SerialTransactionGate()
 
     def path_for(self, model_call_id: str) -> Path:
         if type(model_call_id) is not str or not model_call_id:
@@ -77,7 +79,7 @@ class LocalModelCallJournal:
 
     def append_committed(self, record: ModelCallJournalRecord) -> None:
         path = self.path_for(record.model_call_id)
-        with self._lock:
+        with self._transactions.transaction():
             existing = self._read_path(path, expected_call_id=record.model_call_id)
             if not existing and isinstance(record, ModelCallPlannedRecord):
                 self._validate_global_admission()
@@ -94,7 +96,7 @@ class LocalModelCallJournal:
 
     def records(self, model_call_id: str) -> tuple[ModelCallJournalRecord, ...]:
         path = self.path_for(model_call_id)
-        with self._lock:
+        with self._transactions.transaction():
             return self._read_path(path, expected_call_id=model_call_id)
 
     def recover(self, model_call_id: str) -> ModelCallRecovery:
@@ -105,7 +107,7 @@ class LocalModelCallJournal:
         if not self._root.exists():
             return ()
         recoveries: list[ModelCallRecovery] = []
-        with self._lock:
+        with self._transactions.transaction():
             paths = tuple(sorted(self._root.glob("*.jsonl")))
             record_sets = tuple(self._read_path(path, expected_call_id=None) for path in paths)
         for records in record_sets:
@@ -123,7 +125,11 @@ class LocalModelCallJournal:
             if not records:
                 continue
             recovery = self._recover_records(records)
-            if recovery.state in {ModelCallState.PLANNED, ModelCallState.RUNNING, ModelCallState.IN_DOUBT}:
+            if recovery.state in {
+                ModelCallState.PLANNED,
+                ModelCallState.RUNNING,
+                ModelCallState.IN_DOUBT,
+            }:
                 active += 1
                 if active >= self._policy.active_global:
                     raise ModelCallCapacityError("ModelCall global active capacity is exhausted")

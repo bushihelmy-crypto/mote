@@ -211,3 +211,5 @@ def test_journal_reuses_runtime_append_primitive() -> None:
     assert "os.open(" not in source
     assert "os.write(" not in source
     assert "os.fsync(" not in source
+    assert "SerialTransactionGate" in source
+    assert "threading.Lock(" not in source
